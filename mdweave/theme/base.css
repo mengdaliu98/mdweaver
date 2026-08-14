@@ -1,0 +1,221 @@
+/* ==========================================================================
+   mdweave -- base document theme
+   Typography, layout, and the two-column page/gutter grid.
+   Annotation styling lives in annotations.css.
+   ========================================================================== */
+
+:root {
+  --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", system-ui, sans-serif;
+  --font-mono: "SF Mono", "JetBrains Mono", "Fira Code", ui-monospace, Menlo, monospace;
+
+  --ink:          rgb( 24,  27,  33);
+  --ink-muted:    rgb( 99, 108, 124);
+  --ink-faint:    rgb(148, 157, 172);
+  --rule:         rgb(226, 230, 237);
+  --rule-strong:  rgb(203, 209, 219);
+  --surface:      rgb(255, 255, 255);
+  --surface-sunk: rgb(247, 248, 251);
+  --accent:       rgb( 34,  99, 219);
+
+  --measure: 46rem;      /* body text column */
+  --gutter-w: 19rem;     /* comment column   */
+  --gutter-gap: 2rem;
+
+  --radius: 10px;
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.10);
+  --shadow-md: 0 4px 8px rgba(16, 24, 40, 0.08), 0 12px 28px rgba(16, 24, 40, 0.14);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink:          rgb(226, 230, 238);
+    --ink-muted:    rgb(150, 159, 175);
+    --ink-faint:    rgb(108, 117, 133);
+    --rule:         rgb( 44,  49,  60);
+    --rule-strong:  rgb( 62,  68,  82);
+    --surface:      rgb( 20,  22,  28);
+    --surface-sunk: rgb( 27,  30,  38);
+    --accent:       rgb(120, 168, 255);
+  }
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* --- page grid ---------------------------------------------------------- */
+
+.page {
+  display: grid;
+  grid-template-columns: minmax(0, var(--measure)) var(--gutter-w);
+  gap: var(--gutter-gap);
+  justify-content: center;
+  align-items: start;
+  padding: 4rem 2rem 8rem;
+}
+
+.doc { min-width: 0; }
+
+/* The gutter is a positioning context; notes.js sets each note's `top`. */
+.gutter {
+  position: relative;
+  min-height: 1px;
+}
+
+@media (max-width: 68rem) {
+  .page { grid-template-columns: minmax(0, 1fr); }
+  .gutter { display: none; }
+}
+
+/* --- headings ----------------------------------------------------------- */
+
+.doc h1, .doc h2, .doc h3, .doc h4, .doc h5, .doc h6 {
+  line-height: 1.25;
+  font-weight: 650;
+  letter-spacing: -0.011em;
+  margin: 2.4em 0 0.7em;
+  scroll-margin-top: 2rem;
+}
+
+.doc > :first-child { margin-top: 0; }
+
+.doc h1 { font-size: 2.05rem; letter-spacing: -0.021em; margin-top: 0; }
+.doc h2 {
+  font-size: 1.45rem;
+  padding-bottom: 0.34em;
+  border-bottom: 1px solid var(--rule);
+}
+.doc h3 { font-size: 1.14rem; }
+.doc h4 { font-size: 1rem; color: var(--ink-muted); }
+
+/* --- prose -------------------------------------------------------------- */
+
+.doc p { margin: 0 0 1.1em; }
+
+.doc a {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+}
+.doc a:hover { border-bottom-color: var(--accent); }
+
+.doc strong { font-weight: 640; }
+
+.doc ul, .doc ol { margin: 0 0 1.1em; padding-left: 1.4em; }
+.doc li { margin: 0.28em 0; }
+.doc li > ul, .doc li > ol { margin-bottom: 0.2em; }
+
+.doc li.task-list-item { list-style: none; margin-left: -1.2em; }
+.doc li.task-list-item input { margin-right: 0.5em; }
+
+.doc blockquote {
+  margin: 1.3em 0;
+  padding: 0.1em 0 0.1em 1.1em;
+  border-left: 3px solid var(--rule-strong);
+  color: var(--ink-muted);
+}
+
+.doc hr {
+  border: 0;
+  border-top: 1px solid var(--rule);
+  margin: 2.6em 0;
+}
+
+/* --- code --------------------------------------------------------------- */
+
+.doc code {
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+  background: var(--surface-sunk);
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  padding: 0.12em 0.36em;
+}
+
+.doc pre {
+  margin: 1.3em 0;
+  padding: 1rem 1.1rem;
+  background: var(--surface-sunk);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  overflow-x: auto;
+  line-height: 1.55;
+}
+
+.doc pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: 0.855em;
+}
+
+/* --- tables ------------------------------------------------------------- */
+
+/* Wrapper added by notes.js so wide tables scroll instead of breaking layout. */
+.table-scroll {
+  margin: 1.5em 0;
+  overflow-x: auto;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+}
+
+.doc table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.doc th, .doc td {
+  text-align: left;
+  vertical-align: top;
+  padding: 0.6em 0.85em;
+  border-bottom: 1px solid var(--rule);
+}
+
+.doc thead th {
+  position: sticky;
+  top: 0;
+  background: var(--surface-sunk);
+  font-weight: 620;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.045em;
+  color: var(--ink-muted);
+  border-bottom: 1px solid var(--rule-strong);
+}
+
+.doc tbody tr:last-child td { border-bottom: 0; }
+.doc tbody tr:hover { background: color-mix(in srgb, var(--accent) 4%, transparent); }
+
+/* --- footnotes ---------------------------------------------------------- */
+
+.doc .footnotes {
+  margin-top: 3rem;
+  padding-top: 1.2rem;
+  border-top: 1px solid var(--rule);
+  font-size: 0.9rem;
+  color: var(--ink-muted);
+}
+
+.doc .footnote-backref { border-bottom: 0; }

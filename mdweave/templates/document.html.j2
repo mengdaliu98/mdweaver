@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ title }}</title>
+{% for href in css_hrefs %}
+<link rel="stylesheet" href="{{ href }}">
+{% endfor %}
+</head>
+<body data-document="{{ doc_id }}">
+<div class="page">
+  <article class="doc" id="doc">
+{{ body | safe }}
+  </article>
+
+  <aside class="gutter" id="gutter" aria-label="Comments">
+{% for note in notes %}
+    {# `status` is a data attribute, not a class: `note--open` is reserved for
+       the expanded/collapsed UI state that notes.js toggles. #}
+    <div class="note note--{{ note.color_token }}"
+         id="note-{{ note.dom_id }}"
+         data-ann="{{ note.id }}"
+         data-status="{{ note.status }}"
+         {% if note.custom_color %}style="--note-custom: {{ note.custom_color }};"{% endif %}>
+      <button class="note__pin" type="button"
+              aria-expanded="false"
+              aria-controls="note-body-{{ note.dom_id }}"
+              title="{{ note.quote }}">
+        <span class="note__initial" aria-hidden="true">{{ note.initial }}</span>
+        <span class="sr-only">Comment on “{{ note.quote }}”</span>
+      </button>
+      <div class="note__body" id="note-body-{{ note.dom_id }}" role="region">
+        <blockquote class="note__quote">{{ note.quote }}</blockquote>
+{% for entry in note.thread %}
+        <div class="note__entry">
+          <div class="note__meta">
+            <span class="note__author">{{ entry.author }}</span>
+            {% if entry.at %}<time class="note__date">{{ entry.at }}</time>{% endif %}
+          </div>
+          <p class="note__text">{{ entry.body }}</p>
+        </div>
+{% endfor %}
+{% if note.tags %}
+        <div class="note__tags">
+{% for tag in note.tags %}
+          <span class="note__tag">{{ tag }}</span>
+{% endfor %}
+        </div>
+{% endif %}
+      </div>
+    </div>
+{% endfor %}
+  </aside>
+</div>
+{% for src in js_srcs %}
+<script src="{{ src }}" defer></script>
+{% endfor %}
+</body>
+</html>

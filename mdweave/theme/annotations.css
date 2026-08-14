@@ -1,0 +1,253 @@
+/* ==========================================================================
+   mdweave -- highlights and sticky-note comment cards
+
+   ┌─ COLOUR TOKENS ─────────────────────────────────────────────────────────┐
+   │ Every annotation colour is defined once, right below. To restyle a      │
+   │ colour everywhere it is used, edit its four values here -- nothing else │
+   │ in this file or in the HTML needs to change.                            │
+   │                                                                          │
+   │   --hl-X-bg     fill painted behind the highlighted text                │
+   │   --hl-X-edge   underline under the highlight, and the note's pin       │
+   │   --note-X-bg   card background                                          │
+   │   --note-X-ink  card text colour                                         │
+   │                                                                          │
+   │ A single annotation can also override its colour without a token: set   │
+   │ "color": "rgb(255 0 128)" in the .ann.json and it is emitted inline.    │
+   └──────────────────────────────────────────────────────────────────────────┘
+   ========================================================================== */
+
+:root {
+  /* amber -- the default */
+  --hl-amber-bg:     rgb(255 214  92 / 0.45);
+  --hl-amber-edge:   rgb(202 138  4);
+  --note-amber-bg:   rgb(255 250 231);
+  --note-amber-ink:  rgb( 66  47  6);
+
+  /* rose */
+  --hl-rose-bg:      rgb(255 138 168 / 0.38);
+  --hl-rose-edge:    rgb(219  39  93);
+  --note-rose-bg:    rgb(255 241 245);
+  --note-rose-ink:   rgb( 76  10  32);
+
+  /* mint */
+  --hl-mint-bg:      rgb(110 231 183 / 0.40);
+  --hl-mint-edge:    rgb( 13 148 106);
+  --note-mint-bg:    rgb(236 253 245);
+  --note-mint-ink:   rgb(  5  62  46);
+
+  /* sky */
+  --hl-sky-bg:       rgb(125 200 255 / 0.40);
+  --hl-sky-edge:     rgb( 14 116 200);
+  --note-sky-bg:     rgb(239 249 255);
+  --note-sky-ink:    rgb(  8  47  73);
+
+  /* violet */
+  --hl-violet-bg:    rgb(196 168 255 / 0.42);
+  --hl-violet-edge:  rgb(124  58 237);
+  --note-violet-bg:  rgb(248 245 255);
+  --note-violet-ink: rgb( 46  16  101);
+
+  /* slate -- neutral, for resolved or low-priority notes */
+  --hl-slate-bg:     rgb(148 163 184 / 0.34);
+  --hl-slate-edge:   rgb( 71  85 105);
+  --note-slate-bg:   rgb(248 250 252);
+  --note-slate-ink:  rgb( 30  41  59);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --note-amber-bg:   rgb( 48  38  10);  --note-amber-ink:  rgb(253 230 138);
+    --note-rose-bg:    rgb( 52  16  27);  --note-rose-ink:   rgb(254 205 216);
+    --note-mint-bg:    rgb(  9  47  36);  --note-mint-ink:   rgb(167 243 208);
+    --note-sky-bg:     rgb( 11  41  62);  --note-sky-ink:    rgb(186 230 253);
+    --note-violet-bg:  rgb( 36  22  66);  --note-violet-ink: rgb(221 214 254);
+    --note-slate-bg:   rgb( 30  35  45);  --note-slate-ink:  rgb(203 213 225);
+  }
+}
+
+/* Map each token onto the generic vars the components actually read. */
+.hl--amber,  .note--amber  { --hl-bg: var(--hl-amber-bg);  --hl-edge: var(--hl-amber-edge);  --note-bg: var(--note-amber-bg);  --note-ink: var(--note-amber-ink); }
+.hl--rose,   .note--rose   { --hl-bg: var(--hl-rose-bg);   --hl-edge: var(--hl-rose-edge);   --note-bg: var(--note-rose-bg);   --note-ink: var(--note-rose-ink); }
+.hl--mint,   .note--mint   { --hl-bg: var(--hl-mint-bg);   --hl-edge: var(--hl-mint-edge);   --note-bg: var(--note-mint-bg);   --note-ink: var(--note-mint-ink); }
+.hl--sky,    .note--sky    { --hl-bg: var(--hl-sky-bg);    --hl-edge: var(--hl-sky-edge);    --note-bg: var(--note-sky-bg);    --note-ink: var(--note-sky-ink); }
+.hl--violet, .note--violet { --hl-bg: var(--hl-violet-bg); --hl-edge: var(--hl-violet-edge); --note-bg: var(--note-violet-bg); --note-ink: var(--note-violet-ink); }
+.hl--slate,  .note--slate  { --hl-bg: var(--hl-slate-bg);  --hl-edge: var(--hl-slate-edge);  --note-bg: var(--note-slate-bg);  --note-ink: var(--note-slate-ink); }
+
+/* Per-annotation colour, derived from one raw CSS colour. */
+.hl--custom {
+  --hl-bg:   color-mix(in srgb, var(--hl-custom) 40%, transparent);
+  --hl-edge: var(--hl-custom);
+}
+.note--custom {
+  --hl-edge: var(--note-custom);
+  --note-bg: color-mix(in srgb, var(--note-custom) 12%, white);
+  --note-ink: color-mix(in srgb, var(--note-custom) 70%, black);
+}
+
+/* --- the highlight ------------------------------------------------------ */
+
+mark.hl {
+  background: var(--hl-bg);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0.06em 0.1em;
+  margin: 0 -0.1em;
+  box-shadow: inset 0 -2px 0 var(--hl-edge);
+  transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+
+mark.hl--has-note { cursor: pointer; }
+
+/* Applied by notes.js while the matching note is open or hovered. */
+mark.hl--active {
+  background: color-mix(in srgb, var(--hl-edge) 34%, transparent);
+  box-shadow: inset 0 -2px 0 var(--hl-edge),
+              0 0 0 2px color-mix(in srgb, var(--hl-edge) 30%, transparent);
+}
+
+mark.hl--resolved {
+  background: none;
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--hl-edge) 45%, transparent);
+}
+
+/* --- the sticky note ---------------------------------------------------- */
+
+.note {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 26px;
+  border-radius: 9px;
+  transition: width 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+}
+
+.note--open {
+  width: 100%;
+  z-index: 10;
+  background: var(--note-bg);
+  color: var(--note-ink);
+  border: 1px solid color-mix(in srgb, var(--hl-edge) 40%, transparent);
+  box-shadow: var(--shadow-md);
+  padding: 0.6rem 0.7rem 0.7rem;
+}
+
+.note[data-status="resolved"]:not(.note--open) { opacity: 0.5; }
+
+/* the collapsed square / toggle */
+.note__pin {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: var(--hl-edge);
+  color: white;
+  font: 600 11px/1 var(--font-body);
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  transition: transform 0.14s ease, filter 0.14s ease;
+}
+
+.note__pin:hover  { transform: scale(1.12); filter: brightness(1.08); }
+.note__pin:active { transform: scale(0.96); }
+
+.note__pin:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.note--open .note__pin {
+  border-radius: 7px;
+  box-shadow: none;
+  margin-bottom: 0.5rem;
+}
+
+/* the expandable card body */
+.note__body {
+  max-height: 0;
+  overflow: hidden;
+  opacity: 0;
+  transition: max-height 0.22s ease, opacity 0.16s ease;
+}
+
+.note--open .note__body {
+  max-height: 62vh;
+  overflow-y: auto;
+  opacity: 1;
+}
+
+.note__quote {
+  margin: 0 0 0.6rem;
+  padding: 0 0 0 0.55rem;
+  border-left: 2px solid var(--hl-edge);
+  font-size: 0.78rem;
+  font-style: italic;
+  line-height: 1.45;
+  opacity: 0.78;
+}
+
+.note__entry + .note__entry {
+  margin-top: 0.7rem;
+  padding-top: 0.7rem;
+  border-top: 1px solid color-mix(in srgb, var(--hl-edge) 20%, transparent);
+}
+
+.note__meta {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  margin-bottom: 0.22rem;
+  font-size: 0.72rem;
+}
+
+.note__author { font-weight: 640; }
+.note__date { opacity: 0.6; font-variant-numeric: tabular-nums; }
+
+.note__text {
+  margin: 0;
+  font-size: 0.815rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.note__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.6rem;
+}
+
+.note__tag {
+  padding: 0.1rem 0.42rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--hl-edge) 18%, transparent);
+  font-size: 0.68rem;
+  font-weight: 560;
+}
+
+/* --- print -------------------------------------------------------------- */
+
+@media print {
+  .page { display: block; padding: 0; }
+  .gutter { display: block; position: static; margin-top: 2rem; }
+  .note {
+    position: static !important;
+    width: 100% !important;
+    margin-bottom: 0.75rem;
+    break-inside: avoid;
+    background: var(--note-bg);
+    border: 1px solid var(--hl-edge);
+    padding: 0.6rem 0.7rem;
+  }
+  .note__body { max-height: none; opacity: 1; overflow: visible; }
+  .note__pin { display: none; }
+  mark.hl { box-shadow: none; text-decoration: underline; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .note, .note__body, .note__pin, mark.hl { transition: none; }
+}

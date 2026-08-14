@@ -1,0 +1,22 @@
+[project]
+name = "mdweave"
+version = "0.1.0"
+description = "Render annotated markdown to rich HTML + CSS with highlights and sticky-note comments."
+requires-python = ">=3.10"
+dependencies = [
+    "markdown-it-py>=3.0",
+    "mdit-py-plugins>=0.4",
+    "beautifulsoup4>=4.12",
+    "Jinja2>=3.1",
+    "Pygments>=2.17",
+]
+
+[project.scripts]
+mdweave = "mdweave.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["mdweave"]
