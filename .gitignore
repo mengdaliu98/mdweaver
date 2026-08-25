@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Local environment -- recreate with:
+#   uv venv .venv && uv pip install --python .venv/bin/python -e .
+.venv/
+
+# macOS
+.DS_Store

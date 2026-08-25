@@ -4,6 +4,7 @@
     mdweave build    <doc.md> -o <dir>   render annotated HTML + CSS
     mdweave build    <dir>    -o <dir>   render every .md in a directory
     mdweave serve    [--port N]          serve the output and accept new comments
+    mdweave fingerprint                  hash of the installed source, for staleness checks
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from pathlib import Path
 
 from .render import render_document, write_assets
 from .sources import obsidian_inline, sidecar
+from .tree import build_tree, document_ids, humanize
 
 DEFAULT_INDIR = Path("contents/markdown_inputs")
 DEFAULT_OUTDIR = Path("contents/html_outputs")
@@ -70,8 +72,18 @@ def main(argv: list[str] | None = None) -> int:
         help="serve what is already on disk instead of rebuilding first",
     )
 
+    sub.add_parser(
+        "fingerprint",
+        help="print a hash of the installed source (used to spot a stale server)",
+    )
+
     args = parser.parse_args(argv)
 
+    if args.command == "fingerprint":
+        from .serve import source_fingerprint
+
+        print(source_fingerprint())
+        return 0
     if args.command == "extract":
         return cmd_extract(args)
     if args.command == "serve":
@@ -110,17 +122,32 @@ def cmd_extract(args) -> int:
 
 
 def cmd_build(args) -> int:
-    inputs = _collect(args.input)
-    if not inputs:
-        print(f"error: no markdown found at {args.input}", file=sys.stderr)
+    target: Path = args.input
+    if not target.exists():
+        print(f"error: no markdown found at {target}", file=sys.stderr)
         return 1
+
+    # The markdown root defines every document id and the sidebar tree, even
+    # when only one file is being rebuilt.
+    root = target if target.is_dir() else target.parent
+    documents = document_ids(root)
+    if not documents:
+        print(f"error: no markdown found under {root}", file=sys.stderr)
+        return 1
+
+    tree = build_tree(list(documents))
+    selected = (
+        documents
+        if target.is_dir()
+        else {k: v for k, v in documents.items() if v.resolve() == target.resolve()}
+    )
 
     outdir: Path = args.outdir or DEFAULT_OUTDIR
     outdir.mkdir(parents=True, exist_ok=True)
     write_assets(outdir)
 
     failures = 0
-    for path in inputs:
+    for doc_id, path in selected.items():
         markdown = path.read_text(encoding="utf-8")
         annotations = sidecar.load(sidecar.sidecar_path(path))
 
@@ -131,13 +158,18 @@ def cmd_build(args) -> int:
         annotations.extend(a for a in inline if a.id not in known)
 
         result = render_document(
-            cleaned, annotations, title=path.stem, doc_id=path.stem
+            cleaned,
+            annotations,
+            title=humanize(path.stem),
+            doc_id=doc_id,
+            tree=tree,
         )
-        target = outdir / f"{path.stem}.html"
-        target.write_text(result.html, encoding="utf-8")
+        out = outdir / f"{doc_id}.html"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(result.html, encoding="utf-8")
 
         placed = len(annotations) - len(result.unresolved)
-        print(f"{path.name} -> {target}  ({placed}/{len(annotations)} annotations)")
+        print(f"{doc_id} -> {out}  ({placed}/{len(annotations)} annotations)")
 
         for miss in result.unresolved:
             failures += 1
@@ -159,12 +191,6 @@ def cmd_serve(args) -> int:
             return 1
 
     return serve(args.indir, args.outdir, host=args.host, port=args.port)
-
-
-def _collect(target: Path) -> list[Path]:
-    if target.is_dir():
-        return sorted(target.glob("*.md"))
-    return [target] if target.exists() else []
 
 
 if __name__ == "__main__":

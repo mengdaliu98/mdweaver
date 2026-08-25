@@ -20,13 +20,34 @@ _mdweave_up() {
   curl -fsS -m 1 "http://127.0.0.1:${MDWEAVE_PORT}/api/health" >/dev/null 2>&1
 }
 
+# A running server keeps serving the code it imported at startup, so an edit to
+# the source has no effect until it restarts. Compare the fingerprint it reports
+# against the one on disk and treat any difference as stale.
+_mdweave_stale() {
+  local bin="$MDWEAVE_HOME/toolings/.venv/bin/mdweave"
+  local running current
+
+  running=$(curl -fsS -m 1 "http://127.0.0.1:${MDWEAVE_PORT}/api/health" 2>/dev/null \
+    | sed -n 's/.*"fingerprint": *"\([^"]*\)".*/\1/p')
+  current=$("$bin" fingerprint 2>/dev/null)
+
+  # No fingerprint at all means a server older than the field itself.
+  [ -z "$running" ] && return 0
+  [ -n "$current" ] && [ "$running" != "$current" ]
+}
+
 mdweave_serve() {
   local bin="$MDWEAVE_HOME/toolings/.venv/bin/mdweave"
   local inputs="$MDWEAVE_HOME/contents/markdown_inputs"
   local outputs="$MDWEAVE_HOME/contents/html_outputs"
   local log="${TMPDIR:-/tmp}/mdweave-serve.log"
 
-  _mdweave_up && return 0
+  if _mdweave_up; then
+    _mdweave_stale || return 0
+    echo "mdweave: server is running older code, restarting it" >&2
+    mdweave_stop >/dev/null
+    sleep 0.4
+  fi
 
   ( nohup "$bin" serve -i "$inputs" -o "$outputs" --port "$MDWEAVE_PORT" \
       >"$log" 2>&1 & ) >/dev/null 2>&1

@@ -112,24 +112,18 @@ mark.hl--resolved {
 
 /* --- the sticky note ---------------------------------------------------- */
 
+/* The note is just the pin: a small square parked at the upper-right corner of
+   its highlight. notes.js sets left/top. The card is a popover hanging off it,
+   so opening a note never moves the pin. */
 .note {
   position: absolute;
   left: 0;
   top: 0;
-  width: 26px;
-  border-radius: 9px;
-  transition: width 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+  width: var(--pin);
+  height: var(--pin);
 }
 
-.note--open {
-  width: 100%;
-  z-index: 10;
-  background: var(--note-bg);
-  color: var(--note-ink);
-  border: 1px solid color-mix(in srgb, var(--hl-edge) 40%, transparent);
-  box-shadow: var(--shadow-md);
-  padding: 0.6rem 0.7rem 0.7rem;
-}
+.note--open { z-index: 30; }
 
 .note[data-status="resolved"]:not(.note--open) { opacity: 0.5; }
 
@@ -138,21 +132,57 @@ mark.hl--resolved {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  width: var(--pin);
+  height: var(--pin);
   padding: 0;
   border: 0;
-  border-radius: 8px;
+  border-radius: 6px;
   background: var(--hl-edge);
   color: white;
-  font: 600 11px/1 var(--font-body);
+  font: 600 10px/1 var(--font-body);
   cursor: pointer;
   box-shadow: var(--shadow-sm);
   transition: transform 0.14s ease, filter 0.14s ease;
 }
 
-.note__pin:hover  { transform: scale(1.12); filter: brightness(1.08); }
+.note__pin:hover  { transform: scale(1.15); filter: brightness(1.08); }
 .note__pin:active { transform: scale(0.96); }
+
+/* Drag to reposition. `touch-action: none` hands the gesture to the pointer
+   handlers instead of letting the browser scroll the page. */
+.note__pin {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.note--dragging { z-index: 40; }
+.note--dragging .note__pin {
+  cursor: grabbing;
+  transform: scale(1.15);
+  box-shadow: var(--shadow-md);
+}
+
+/* Leader line back to the text, drawn only for notes that were dragged. */
+.notes-links {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.notes-links line {
+  stroke-width: 1.5;
+  stroke-dasharray: 3 3;
+  opacity: 0.45;
+}
+
+/* The svg sits before the notes in the DOM, so a sibling selector cannot
+   reach it -- notes.js sets this class on the layer while a drag is live. */
+.notes-layer--dragging .notes-links line { opacity: 0.9; stroke-dasharray: none; }
 
 .note__pin:focus-visible {
   outline: 2px solid var(--accent);
@@ -160,24 +190,54 @@ mark.hl--resolved {
 }
 
 .note--open .note__pin {
-  border-radius: 7px;
-  box-shadow: none;
-  margin-bottom: 0.5rem;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--hl-edge) 26%, transparent);
 }
 
-/* the expandable card body */
+/* the card, as a popover beside the pin */
 .note__body {
-  max-height: 0;
-  overflow: hidden;
+  position: absolute;
+  top: calc(-1 * var(--card-gap));
+  left: calc(var(--pin) + var(--card-gap));
+  width: var(--note-w);
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 0.6rem 0.7rem 0.7rem;
+  border-radius: 10px;
+  background: var(--note-bg);
+  color: var(--note-ink);
+  border: 1px solid color-mix(in srgb, var(--hl-edge) 40%, transparent);
+  box-shadow: var(--shadow-md);
+
+  /* visibility rather than display, so the card can still be measured while
+     closed -- notes.js needs its size to decide which way to open it. */
   opacity: 0;
-  transition: max-height 0.22s ease, opacity 0.16s ease;
+  visibility: hidden;
+  transform: translateY(-4px) scale(0.98);
+  transform-origin: top left;
+  transition: opacity 0.14s ease, transform 0.14s ease, visibility 0s linear 0.14s;
 }
 
 .note--open .note__body {
-  max-height: 62vh;
-  overflow-y: auto;
   opacity: 1;
+  visibility: visible;
+  transform: none;
+  transition: opacity 0.14s ease, transform 0.14s ease;
 }
+
+/* Flipped when the card would run off the right edge, or off the bottom. */
+.note--flip .note__body {
+  left: auto;
+  right: calc(var(--pin) + var(--card-gap));
+  transform-origin: top right;
+}
+
+.note--up .note__body {
+  top: auto;
+  bottom: calc(-1 * var(--card-gap));
+  transform-origin: bottom left;
+}
+
+.note--flip.note--up .note__body { transform-origin: bottom right; }
 
 .note__quote {
   margin: 0 0 0.6rem;
@@ -231,19 +291,32 @@ mark.hl--resolved {
 
 /* --- print -------------------------------------------------------------- */
 
+/* Floating popovers cannot print. Fall back to a list of notes after the text. */
 @media print {
   .page { display: block; padding: 0; }
-  .gutter { display: block; position: static; margin-top: 2rem; }
+  .notes-layer {
+    position: static;
+    margin-top: 2rem;
+    border-top: 1px solid var(--rule);
+    padding-top: 1rem;
+  }
   .note {
     position: static !important;
     width: 100% !important;
+    height: auto !important;
     margin-bottom: 0.75rem;
     break-inside: avoid;
-    background: var(--note-bg);
-    border: 1px solid var(--hl-edge);
-    padding: 0.6rem 0.7rem;
   }
-  .note__body { max-height: none; opacity: 1; overflow: visible; }
+  .note__body {
+    position: static !important;
+    width: 100% !important;
+    max-height: none;
+    opacity: 1;
+    visibility: visible;
+    transform: none;
+    overflow: visible;
+    box-shadow: none;
+  }
   .note__pin { display: none; }
   mark.hl { box-shadow: none; text-decoration: underline; }
 }

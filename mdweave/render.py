@@ -18,6 +18,7 @@ from pygments.util import ClassNotFound
 
 from .inject import Placement, inject
 from .model import Annotation, safe_id
+from .tree import Node, humanize, relative_prefix
 
 HERE = Path(__file__).parent
 TEMPLATES = HERE / "templates"
@@ -71,8 +72,14 @@ def render_document(
     *,
     title: str | None = None,
     doc_id: str | None = None,
+    tree: list[Node] | None = None,
     css_hrefs: tuple[str, ...] = ("assets/mdweave.css", "assets/pygments.css"),
-    js_srcs: tuple[str, ...] = ("assets/notes.js", "assets/annotate.js"),
+    js_srcs: tuple[str, ...] = (
+        "assets/ui.js",
+        "assets/sidebar.js",
+        "assets/notes.js",
+        "assets/annotate.js",
+    ),
 ) -> RenderResult:
     """Render markdown to a full HTML page with highlights and note cards."""
     body_html = render_markdown(markdown)
@@ -94,14 +101,20 @@ def render_document(
         trim_blocks=True,
         lstrip_blocks=True,
     )
+    # A page nested under a folder has to climb back out to reach the shared
+    # assets and its siblings' pages.
+    prefix = relative_prefix(doc_id or "")
+
     template = env.get_template("document.html.j2")
     html = template.render(
         title=title or _infer_title(soup) or "Document",
         doc_id=doc_id or "",
         body=str(soup),
         notes=notes,
-        css_hrefs=css_hrefs,
-        js_srcs=js_srcs,
+        tree=tree or [],
+        prefix=prefix,
+        css_hrefs=[prefix + href for href in css_hrefs],
+        js_srcs=[prefix + src for src in js_srcs],
     )
     return RenderResult(html=html, placements=placements)
 
@@ -114,6 +127,7 @@ def _note_context(ann: Annotation) -> dict:
         "custom_color": ann.custom_color,
         "status": ann.status,
         "tags": ann.tags,
+        "offset": ann.offset.to_dict() if ann.offset else None,
         "quote": ann.target.quote,
         "author": ann.thread[0].author if ann.thread else "",
         "initial": (ann.thread[0].author[:1].upper() if ann.thread else "•"),
@@ -161,7 +175,7 @@ def write_assets(outdir: Path) -> None:
 
     css = "\n".join(
         (THEME / name).read_text(encoding="utf-8")
-        for name in ("base.css", "annotations.css", "editor.css")
+        for name in ("base.css", "sidebar.css", "annotations.css", "editor.css")
     )
     (assets / "mdweave.css").write_text(css, encoding="utf-8")
 
@@ -171,7 +185,7 @@ def write_assets(outdir: Path) -> None:
         encoding="utf-8",
     )
 
-    for script in ("notes.js", "annotate.js"):
+    for script in ("ui.js", "sidebar.js", "notes.js", "annotate.js"):
         (assets / script).write_text(
             (ASSETS / script).read_text(encoding="utf-8"), encoding="utf-8"
         )

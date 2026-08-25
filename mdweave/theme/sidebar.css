@@ -1,0 +1,277 @@
+/* ==========================================================================
+   mdweave -- the document sidebar.
+   A VS Code style explorer over contents/markdown_inputs.
+   ========================================================================== */
+
+:root {
+  --sidebar-w: 16rem;
+  --tree-indent: 0.85rem;
+  --tree-row-h: 1.65rem;
+}
+
+.shell {
+  display: grid;
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+  align-items: start;
+  min-height: 100vh;
+}
+
+body[data-sidebar="hidden"] .shell { grid-template-columns: minmax(0, 1fr); }
+body[data-sidebar="hidden"] .sidebar { display: none; }
+
+.main { min-width: 0; }
+
+/* --- the panel ----------------------------------------------------------- */
+
+.sidebar {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 0 2rem;
+  background: var(--surface-sunk);
+  border-right: 1px solid var(--rule);
+  font-size: 0.82rem;
+  line-height: 1.4;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.sidebar__head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.85rem 0.5rem 0.6rem 0.9rem;
+  background: var(--surface-sunk);
+}
+
+.sidebar__title {
+  font-size: 0.68rem;
+  font-weight: 650;
+  letter-spacing: 0.075em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.sidebar__collapse,
+.sidebar-show {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+
+.sidebar__collapse:hover,
+.sidebar-show:hover {
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+  color: var(--ink);
+}
+
+.sidebar__collapse svg,
+.sidebar-show svg { width: 14px; height: 14px; }
+
+/* Floating re-open control, shown only while the panel is hidden. */
+.sidebar-show {
+  position: fixed;
+  top: 0.75rem;
+  left: 0.75rem;
+  z-index: 60;
+  width: 1.8rem;
+  height: 1.8rem;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  box-shadow: var(--shadow-sm);
+}
+
+.sidebar-show[hidden] { display: none; }
+
+.sidebar__empty {
+  margin: 0;
+  padding: 0.5rem 0.9rem;
+  color: var(--ink-faint);
+  font-style: italic;
+}
+
+/* --- the tree ------------------------------------------------------------ */
+
+.tree {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tree__item { margin: 0; }
+
+/* Every row is indented by its depth, so nesting reads at a glance. */
+.tree__row {
+  display: flex;
+  align-items: center;
+  gap: 0.32rem;
+  min-height: var(--tree-row-h);
+  padding: 0.1rem 0.6rem 0.1rem calc(0.55rem + var(--depth, 0) * var(--tree-indent));
+  color: var(--ink-muted);
+  text-decoration: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.tree__row:hover {
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+  color: var(--ink);
+}
+
+.tree__row--active {
+  background: color-mix(in srgb, var(--accent) 13%, transparent);
+  color: var(--accent);
+  font-weight: 600;
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.tree__row--active:hover {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+}
+
+.tree__row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.tree__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree__icon {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  opacity: 0.65;
+}
+
+/* --- folders ------------------------------------------------------------- */
+
+/* `<details>` gives open/closed and keyboard support with no JavaScript;
+   sidebar.js only remembers the state between page loads. */
+.tree__folder > summary { list-style: none; }
+.tree__folder > summary::-webkit-details-marker { display: none; }
+.tree__folder > summary::marker { content: ""; }
+
+.tree__row--folder {
+  font-weight: 560;
+  color: var(--ink);
+}
+
+.tree__chevron {
+  flex: none;
+  width: 11px;
+  height: 11px;
+  opacity: 0.7;
+  transition: transform 0.13s ease;
+}
+
+.tree__folder[open] > summary .tree__chevron { transform: rotate(90deg); }
+
+/* --- narrow screens ------------------------------------------------------ */
+
+/* Below this the sidebar would eat the text column, so it starts hidden and
+   the floating control brings it back. */
+@media (max-width: 60rem) {
+  .shell { grid-template-columns: minmax(0, 1fr); }
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 70;
+    width: var(--sidebar-w);
+    box-shadow: var(--shadow-md);
+  }
+  body:not([data-sidebar="shown"]) .sidebar { display: none; }
+  body:not([data-sidebar="shown"]) .sidebar-show { display: flex; }
+}
+
+@media print {
+  .shell { display: block; }
+  .sidebar, .sidebar-show { display: none !important; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tree__chevron { transition: none; }
+}
+
+/* --- importing ----------------------------------------------------------- */
+
+.sidebar__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.1rem;
+}
+
+.sidebar__import {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+
+.sidebar__import[hidden] { display: none; }
+
+.sidebar__import:hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+
+.sidebar__import svg { width: 14px; height: 14px; }
+
+/* Covers the panel while a drag is over it. Fixed rather than absolute: the
+   panel scrolls, and an absolutely positioned overlay would scroll away with
+   its content. The panel is a fixed-width strip down the left edge, so these
+   coordinates track it exactly in both the docked and the narrow-screen mode. */
+.sidebar__dropzone {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: var(--sidebar-w);
+  height: 100vh;
+  z-index: 3;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  text-align: center;
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface-sunk));
+  border: 2px dashed var(--accent);
+  border-radius: 8px;
+  color: var(--accent);
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.sidebar--drop .sidebar__dropzone { display: flex; }
+
+.sidebar--busy { cursor: progress; }
+.sidebar--busy .tree { opacity: 0.5; pointer-events: none; }
+
+@media print {
+  .sidebar__dropzone { display: none !important; }
+}

@@ -16,10 +16,15 @@
   "use strict";
 
   var mdw = window.mdweave;
-  if (!mdw) return;
+  var ui = window.mdweaveUI;
+  if (!mdw || !ui) return;
+
+  var toast = ui.toast;
+  var reject = ui.reject;
 
   var doc = mdw.doc;
-  var gutter = mdw.gutter;
+  var layer = mdw.layer;
+  var PENDING = "__pending__";
   var DOC_ID = document.body.dataset.document || "";
   var API = "/api/annotations";
   var CONTEXT = 48; // keep in step with anchors.CONTEXT_CHARS
@@ -200,36 +205,33 @@
     toolbar.style.left = Math.max(4, left) + "px";
   }
 
-  function toast(message, kind) {
-    var el = document.createElement("div");
-    el.className = "mdweave-toast" + (kind ? " mdweave-toast--" + kind : "");
-    el.textContent = message;
-    document.body.appendChild(el);
-    setTimeout(function () {
-      el.classList.add("mdweave-toast--out");
-      setTimeout(function () {
-        el.remove();
-      }, 300);
-    }, 3600);
-  }
-
   /* --- composer ---------------------------------------------------------- */
 
-  function closeComposer() {
+  /* Drop the panel but leave the document alone. */
+  function removeComposer() {
     if (composer) {
       composer.remove();
       composer = null;
     }
+  }
+
+  /* Abandon the whole editing session: panel and provisional highlight. */
+  function closeComposer() {
+    removeComposer();
     unwrap("mark.hl--pending");
     mdw.layout();
   }
 
-  function openComposer(selector, anchorTop) {
-    closeComposer();
+  function openComposer(selector) {
+    // Deliberately NOT closeComposer(): the pending highlight has already been
+    // put in place by the caller and is what the composer anchors to. Unwrapping
+    // it here left the panel with no anchor, so it fell back to the top-left
+    // corner of the page.
+    removeComposer();
 
     composer = document.createElement("div");
     composer.className = "composer";
-    composer.dataset.anchorTop = String(anchorTop);
+    composer.dataset.ann = PENDING;
     composer.innerHTML =
       '<blockquote class="composer__quote"></blockquote>' +
       '<textarea class="composer__input" rows="4" placeholder="Add a comment…"></textarea>' +
@@ -238,7 +240,7 @@
       '<button type="button" class="composer__button" data-act="save">Comment</button>' +
       "</div>";
     composer.querySelector(".composer__quote").textContent = selector.quote;
-    gutter.appendChild(composer);
+    layer.appendChild(composer);
     mdw.layout();
 
     var input = composer.querySelector(".composer__input");
@@ -285,8 +287,8 @@
       }),
     })
       .then(function (response) {
+        if (!response.ok) return reject(response);
         return response.json().then(function (payload) {
-          if (!response.ok) throw new Error(payload.error || response.statusText);
           return payload.annotation;
         });
       })
@@ -308,7 +310,7 @@
       .catch(function (error) {
         saveButton.disabled = false;
         saveButton.textContent = "Comment";
-        toast(error.message || "Could not save the comment.", "error");
+        toast("Not saved: " + (error.message || "unknown error"), "error");
       });
   }
 
@@ -398,49 +400,85 @@
     body.id = "note-body-" + annotation.id;
     body.appendChild(quote);
     body.appendChild(item);
-    if (writable) body.appendChild(deleteButton(annotation.id));
+    if (writable) body.appendChild(noteActions(annotation.id));
 
     note.appendChild(pin);
     note.appendChild(body);
-    gutter.appendChild(note);
+    layer.appendChild(note);
 
     mdw.register(note);
     mdw.setOpen(note, true);
     return note;
   }
 
-  function deleteButton(annId) {
-    var row = document.createElement("div");
-    row.className = "note__footer";
+  /* Persist a dragged note's position. Registered with notes.js only when the
+   * server is reachable, so dragging over file:// simply is not saved. */
+  function persistMove(annId, dx, dy) {
+    fetch(API + "/" + encodeURIComponent(annId), {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        document: DOC_ID,
+        offset: dx || dy ? { dx: dx, dy: dy } : null,
+      }),
+    })
+      .then(function (response) {
+        if (!response.ok) return reject(response);
+      })
+      .catch(function (error) {
+        toast("Position not saved: " + error.message, "error");
+      });
+  }
+
+  function actionButton(className, label, onClick) {
     var button = document.createElement("button");
     button.type = "button";
-    button.className = "note__delete";
-    button.textContent = "Delete";
+    button.className = className;
+    button.textContent = label;
     button.addEventListener("click", function (event) {
       event.stopPropagation();
-      button.disabled = true;
-      fetch(API + "/" + encodeURIComponent(annId) + "?document=" + encodeURIComponent(DOC_ID), {
-        method: "DELETE",
-      })
-        .then(function (response) {
-          if (!response.ok) throw new Error("delete failed");
-          mdw.remove(annId);
-        })
-        .catch(function () {
-          button.disabled = false;
-          toast("Could not delete that comment.", "error");
-        });
+      onClick(button);
     });
-    row.appendChild(button);
+    return button;
+  }
+
+  function noteActions(annId) {
+    var row = document.createElement("div");
+    row.className = "note__footer";
+
+    row.appendChild(
+      actionButton("note__reset", "Reset position", function () {
+        mdw.resetPosition(annId);
+      })
+    );
+
+    row.appendChild(
+      actionButton("note__delete", "Delete", function (button) {
+        button.disabled = true;
+        fetch(
+          API + "/" + encodeURIComponent(annId) + "?document=" + encodeURIComponent(DOC_ID),
+          { method: "DELETE" }
+        )
+          .then(function (response) {
+            if (!response.ok) return reject(response);
+            mdw.remove(annId);
+          })
+          .catch(function (error) {
+            button.disabled = false;
+            toast("Not deleted: " + error.message, "error");
+          });
+      })
+    );
+
     return row;
   }
 
-  /* Give every note rendered into the page a Delete button too. */
-  function addDeleteButtons() {
-    gutter.querySelectorAll(".note").forEach(function (note) {
+  /* Give every note rendered into the page the same actions. */
+  function addNoteActions() {
+    layer.querySelectorAll(".note").forEach(function (note) {
       var body = note.querySelector(".note__body");
-      if (body && !body.querySelector(".note__delete")) {
-        body.appendChild(deleteButton(note.dataset.ann));
+      if (body && !body.querySelector(".note__footer")) {
+        body.appendChild(noteActions(note.dataset.ann));
       }
     });
   }
@@ -501,14 +539,15 @@
       return;
     }
 
-    // Provisional highlight, so the target stays visible while typing.
-    var marks = wrapSpan(index, span[0], span[1], "hl hl--amber hl--pending", null);
-    selection.removeAllRanges();
+    // Clear any previous session first, so its stale pending highlight cannot
+    // be mistaken for this one's anchor.
+    closeComposer();
 
-    var top = marks.length
-      ? marks[0].getBoundingClientRect().top - gutter.getBoundingClientRect().top
-      : 0;
-    openComposer(selector, top);
+    // Provisional highlight, so the target stays visible while typing -- and so
+    // the composer has something to position itself against.
+    wrapSpan(index, span[0], span[1], "hl hl--amber hl--pending", PENDING);
+    selection.removeAllRanges();
+    openComposer(selector);
   });
 
   document.addEventListener("mousedown", function (event) {
@@ -520,20 +559,13 @@
 
   /* Decide read-only vs editable by asking the server. Over file:// this
    * rejects immediately and the page simply stays readable. */
-  if (DOC_ID && location.protocol.indexOf("http") === 0) {
-    fetch("/api/health")
-      .then(function (response) {
-        return response.ok ? response.json() : null;
-      })
-      .then(function (payload) {
-        if (payload && payload.ok) {
-          writable = true;
-          document.body.classList.add("mdweave-editable");
-          addDeleteButtons();
-        }
-      })
-      .catch(function () {
-        /* stays read-only */
-      });
+  if (DOC_ID) {
+    ui.api().then(function (health) {
+      if (!health || !health.ok) return;
+      writable = true;
+      document.body.classList.add("mdweave-editable");
+      addNoteActions();
+      mdw.setMoveHandler(persistMove);
+    });
   }
 })();

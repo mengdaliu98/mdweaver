@@ -55,8 +55,8 @@ mark.hl--pending {
   position: absolute;
   left: 0;
   top: 0;
-  z-index: 20;
-  width: 100%;
+  z-index: 40;
+  width: var(--note-w);
   padding: 0.7rem;
   border-radius: 10px;
   background: var(--note-amber-bg);
@@ -127,9 +127,15 @@ mark.hl--pending {
 .note__footer {
   display: flex;
   justify-content: flex-end;
+  gap: 0.25rem;
   margin-top: 0.55rem;
 }
 
+/* Only offer to reset a note that has actually been dragged. */
+.note__reset { display: none; }
+.note--moved .note__reset { display: inline-block; }
+
+.note__reset,
 .note__delete {
   padding: 0.16rem 0.45rem;
   border: 0;
@@ -141,12 +147,18 @@ mark.hl--pending {
   cursor: pointer;
 }
 
+.note__reset:hover:not(:disabled) {
+  opacity: 1;
+  background: color-mix(in srgb, var(--hl-edge) 16%, transparent);
+}
+
 .note__delete:hover:not(:disabled) {
   opacity: 1;
   background: color-mix(in srgb, var(--hl-rose-edge) 16%, transparent);
   color: var(--hl-rose-edge);
 }
 
+.note__reset:disabled,
 .note__delete:disabled { opacity: 0.35; cursor: default; }
 
 /* --- toasts -------------------------------------------------------------- */

@@ -71,6 +71,28 @@ class TextTarget:
 
 
 @dataclass
+class Offset:
+    """Where a note sits relative to its anchor, in CSS pixels.
+
+    Stored as a displacement rather than an absolute position so a dragged note
+    still travels with its highlight when the surrounding text reflows.
+    """
+
+    dx: float = 0.0
+    dy: float = 0.0
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> Offset:
+        return cls(dx=float(d.get("dx", 0)), dy=float(d.get("dy", 0)))
+
+    def to_dict(self) -> dict[str, float]:
+        return {"dx": self.dx, "dy": self.dy}
+
+    def __bool__(self) -> bool:
+        return bool(self.dx or self.dy)
+
+
+@dataclass
 class Annotation:
     """A highlight, optionally carrying a comment thread."""
 
@@ -81,12 +103,16 @@ class Annotation:
     status: str = "open"  # "open" | "resolved"
     thread: list[Comment] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
+    # None means "wherever the anchor puts it" -- the default placement.
+    offset: Offset | None = None
     # Free-form escape hatch so new features do not require a schema change.
     extra: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Annotation:
-        known = {"id", "target", "kind", "color", "status", "thread", "tags"}
+        known = {"id", "target", "kind", "color", "status", "thread", "tags", "offset"}
+        raw_offset = d.get("offset")
+        offset = Offset.from_dict(raw_offset) if isinstance(raw_offset, dict) else None
         return cls(
             id=d["id"],
             target=TextTarget.from_dict(d["target"]),
@@ -95,6 +121,7 @@ class Annotation:
             status=d.get("status", "open"),
             thread=[Comment.from_dict(c) for c in d.get("thread", [])],
             tags=list(d.get("tags", [])),
+            offset=offset or None,
             extra={k: v for k, v in d.items() if k not in known},
         )
 
@@ -110,6 +137,8 @@ class Annotation:
             d["thread"] = [c.to_dict() for c in self.thread]
         if self.tags:
             d["tags"] = self.tags
+        if self.offset:
+            d["offset"] = self.offset.to_dict()
         d.update(self.extra)
         return d
 

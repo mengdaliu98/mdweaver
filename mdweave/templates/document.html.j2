@@ -1,3 +1,31 @@
+{#- Recursive: a folder renders its children through the same macro. -#}
+{% macro tree_list(nodes, prefix, active, depth) %}
+      <ul class="tree" role="group">
+{% for node in nodes %}
+{% if node.is_dir %}
+        <li class="tree__item">
+          <details class="tree__folder" data-folder="{{ node.name }}" open>
+            <summary class="tree__row tree__row--folder" style="--depth: {{ depth }}">
+              <svg class="tree__chevron" viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2.5 8 6l-4 3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <span class="tree__label">{{ node.label }}</span>
+            </summary>
+            {{ tree_list(node.children, prefix, active, depth + 1) }}
+          </details>
+        </li>
+{% else %}
+        <li class="tree__item">
+          <a class="tree__row tree__row--file{% if node.doc_id == active %} tree__row--active{% endif %}"
+             style="--depth: {{ depth }}"
+             href="{{ prefix }}{{ node.doc_id }}.html"
+             {% if node.doc_id == active %}aria-current="page"{% endif %}>
+            <svg class="tree__icon" viewBox="0 0 14 14" aria-hidden="true"><path d="M3.5 1.5h4.2L11 4.8v7.7H3.5z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M7.6 1.7v3.2h3.2" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
+            <span class="tree__label">{{ node.label }}</span>
+          </a>
+        </li>
+{% endif %}
+{% endfor %}
+      </ul>
+{% endmacro %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -8,50 +36,87 @@
 <link rel="stylesheet" href="{{ href }}">
 {% endfor %}
 </head>
-<body data-document="{{ doc_id }}">
-<div class="page">
-  <article class="doc" id="doc">
-{{ body | safe }}
-  </article>
+<body data-document="{{ doc_id }}" data-prefix="{{ prefix }}">
+<div class="shell">
 
-  <aside class="gutter" id="gutter" aria-label="Comments">
+  <nav class="sidebar" id="sidebar" aria-label="Documents">
+    <div class="sidebar__head">
+      <span class="sidebar__title">Documents</span>
+      <span class="sidebar__actions">
+        <button class="sidebar__import" type="button" id="sidebar-import"
+                title="Import .md files" aria-label="Import markdown files" hidden>
+          <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M7 2.5v9M2.5 7h9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+        </button>
+        <input type="file" id="sidebar-file" accept=".md,text/markdown" multiple hidden>
+        <button class="sidebar__collapse" type="button" id="sidebar-collapse"
+                title="Hide sidebar" aria-label="Hide sidebar" aria-expanded="true">
+          <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M9 3 5 7l4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </span>
+    </div>
+    <div class="sidebar__dropzone" aria-hidden="true"><span>Drop .md files to import</span></div>
+{% if tree %}
+    {{ tree_list(tree, prefix, doc_id, 0) }}
+{% else %}
+    <p class="sidebar__empty">No documents found.</p>
+{% endif %}
+  </nav>
+
+  <button class="sidebar-show" type="button" id="sidebar-show"
+          title="Show sidebar" aria-label="Show sidebar" hidden>
+    <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M5 3l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </button>
+
+  <main class="main">
+    <div class="page">
+      <article class="doc" id="doc">
+{{ body | safe }}
+      </article>
+
+      <aside class="notes-layer" id="notes-layer" aria-label="Comments">
 {% for note in notes %}
-    {# `status` is a data attribute, not a class: `note--open` is reserved for
-       the expanded/collapsed UI state that notes.js toggles. #}
-    <div class="note note--{{ note.color_token }}"
-         id="note-{{ note.dom_id }}"
-         data-ann="{{ note.id }}"
-         data-status="{{ note.status }}"
-         {% if note.custom_color %}style="--note-custom: {{ note.custom_color }};"{% endif %}>
-      <button class="note__pin" type="button"
-              aria-expanded="false"
-              aria-controls="note-body-{{ note.dom_id }}"
-              title="{{ note.quote }}">
-        <span class="note__initial" aria-hidden="true">{{ note.initial }}</span>
-        <span class="sr-only">Comment on “{{ note.quote }}”</span>
-      </button>
-      <div class="note__body" id="note-body-{{ note.dom_id }}" role="region">
-        <blockquote class="note__quote">{{ note.quote }}</blockquote>
+        {# `status` is a data attribute, not a class: `note--open` is reserved
+           for the expanded/collapsed UI state that notes.js toggles. #}
+        <div class="note note--{{ note.color_token }}"
+             id="note-{{ note.dom_id }}"
+             data-ann="{{ note.id }}"
+             data-status="{{ note.status }}"
+{% if note.offset %}
+             data-dx="{{ note.offset.dx }}" data-dy="{{ note.offset.dy }}"
+{% endif %}
+             {% if note.custom_color %}style="--note-custom: {{ note.custom_color }};"{% endif %}>
+          <button class="note__pin" type="button"
+                  aria-expanded="false"
+                  aria-controls="note-body-{{ note.dom_id }}"
+                  title="{{ note.quote }}">
+            <span class="note__initial" aria-hidden="true">{{ note.initial }}</span>
+            <span class="sr-only">Comment on “{{ note.quote }}”</span>
+          </button>
+          <div class="note__body" id="note-body-{{ note.dom_id }}" role="region">
+            <blockquote class="note__quote">{{ note.quote }}</blockquote>
 {% for entry in note.thread %}
-        <div class="note__entry">
-          <div class="note__meta">
-            <span class="note__author">{{ entry.author }}</span>
-            {% if entry.at %}<time class="note__date">{{ entry.at }}</time>{% endif %}
-          </div>
-          <p class="note__text">{{ entry.body }}</p>
-        </div>
+            <div class="note__entry">
+              <div class="note__meta">
+                <span class="note__author">{{ entry.author }}</span>
+                {% if entry.at %}<time class="note__date">{{ entry.at }}</time>{% endif %}
+              </div>
+              <p class="note__text">{{ entry.body }}</p>
+            </div>
 {% endfor %}
 {% if note.tags %}
-        <div class="note__tags">
+            <div class="note__tags">
 {% for tag in note.tags %}
-          <span class="note__tag">{{ tag }}</span>
+              <span class="note__tag">{{ tag }}</span>
 {% endfor %}
-        </div>
+            </div>
 {% endif %}
-      </div>
-    </div>
+          </div>
+        </div>
 {% endfor %}
-  </aside>
+      </aside>
+    </div>
+  </main>
+
 </div>
 {% for src in js_srcs %}
 <script src="{{ src }}" defer></script>

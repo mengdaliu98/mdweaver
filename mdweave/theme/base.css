@@ -1,6 +1,6 @@
 /* ==========================================================================
    mdweave -- base document theme
-   Typography, layout, and the two-column page/gutter grid.
+   Typography, layout, and the centred single-column page grid.
    Annotation styling lives in annotations.css.
    ========================================================================== */
 
@@ -17,9 +17,10 @@
   --surface-sunk: rgb(247, 248, 251);
   --accent:       rgb( 34,  99, 219);
 
-  --measure: 46rem;      /* body text column */
-  --gutter-w: 19rem;     /* comment column   */
-  --gutter-gap: 2rem;
+  --measure: 46rem;      /* body text column        */
+  --note-w: 20rem;       /* expanded comment card   */
+  --pin: 22px;           /* collapsed sticky note   */
+  --card-gap: 6px;       /* pin-to-card gap; mirrored as CARD_GAP in notes.js */
 
   --radius: 10px;
   --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.10);
@@ -65,27 +66,31 @@ body {
 
 /* --- page grid ---------------------------------------------------------- */
 
+/* One centred text column inside the main area. Notes are not a second column
+   -- they float above the page, pinned to the text they annotate, so on a wide
+   screen they land in the margin without the layout reserving space for them.
+
+   `.page` is the positioning context the notes layer measures against, so it
+   must stay `relative`. */
 .page {
+  position: relative;
   display: grid;
-  grid-template-columns: minmax(0, var(--measure)) var(--gutter-w);
-  gap: var(--gutter-gap);
+  grid-template-columns: minmax(0, var(--measure));
   justify-content: center;
-  align-items: start;
   padding: 4rem 2rem 8rem;
 }
 
 .doc { min-width: 0; }
 
-/* The gutter is a positioning context; notes.js sets each note's `top`. */
-.gutter {
-  position: relative;
-  min-height: 1px;
+/* Transparent overlay spanning the whole page. notes.js positions each note
+   inside it; the layer itself must not swallow clicks on the text beneath. */
+.notes-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
 }
 
-@media (max-width: 68rem) {
-  .page { grid-template-columns: minmax(0, 1fr); }
-  .gutter { display: none; }
-}
+.notes-layer > * { pointer-events: auto; }
 
 /* --- headings ----------------------------------------------------------- */
 
