@@ -1,6 +1,6 @@
 /* ==========================================================================
    mdweave -- the document sidebar.
-   A VS Code style explorer over contents/markdown_inputs.
+   A VS Code style explorer over knowledge_base/markdown_inputs.
    ========================================================================== */
 
 :root {
@@ -20,6 +20,49 @@ body[data-sidebar="hidden"] .shell { grid-template-columns: minmax(0, 1fr); }
 body[data-sidebar="hidden"] .sidebar { display: none; }
 
 .main { min-width: 0; }
+
+/* --- the resize handle --------------------------------------------------- */
+
+/* A grab strip straddling the panel's right border. Wider than the line it
+   sits on, because a 1px target is not a target. */
+.sidebar-resize {
+  position: fixed;
+  top: 0;
+  left: var(--sidebar-w);
+  z-index: 65;
+  width: 9px;
+  height: 100vh;
+  margin-left: -5px;
+  cursor: col-resize;
+  background: transparent;
+}
+
+.sidebar-resize::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 4px;
+  width: 1px;
+  height: 100%;
+  background: var(--accent);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.sidebar-resize:hover::after,
+.sidebar-resize:focus-visible::after,
+body.sidebar-resizing .sidebar-resize::after { opacity: 1; }
+
+.sidebar-resize:focus-visible { outline: none; }
+
+body[data-sidebar="hidden"] .sidebar-resize { display: none; }
+
+/* Dragging over prose would otherwise select it the whole way across. */
+body.sidebar-resizing {
+  cursor: col-resize;
+  user-select: none;
+  -webkit-user-select: none;
+}
 
 /* --- the panel ----------------------------------------------------------- */
 
@@ -201,11 +244,14 @@ body[data-sidebar="hidden"] .sidebar { display: none; }
   }
   body:not([data-sidebar="shown"]) .sidebar { display: none; }
   body:not([data-sidebar="shown"]) .sidebar-show { display: flex; }
+  /* The panel is an overlay here, not a column; there is nothing to resize
+     against, and the handle would sit on top of the prose. */
+  .sidebar-resize { display: none; }
 }
 
 @media print {
   .shell { display: block; }
-  .sidebar, .sidebar-show { display: none !important; }
+  .sidebar, .sidebar-show, .sidebar-resize { display: none !important; }
 }
 
 @media (prefers-reduced-motion: reduce) {

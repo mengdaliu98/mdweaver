@@ -16,14 +16,18 @@ from pathlib import Path
 def humanize(name: str) -> str:
     """Turn a file or folder name into a readable label.
 
-    Underscores become spaces and the first letter is capitalised; nothing else
-    is touched, so deliberate capitals and hyphenated terms survive:
+    Sentence case: both separators become spaces, the first letter is
+    capitalised, and the rest is lowered.
 
         system_for_bio_literature_research -> System for bio literature research
-        OME-Zarr_notes                     -> OME-Zarr notes
+        ome-zarr-layout-planner            -> Ome zarr layout planner
+
+    Hyphens read as word separators here, not as part of a term, so `OME-Zarr`
+    in a filename comes out as "Ome zarr". Acronyms lose their capitals with
+    it; a label is a label, and the document keeps its own title.
     """
-    text = " ".join(name.replace("_", " ").split())
-    return text[:1].upper() + text[1:] if text else name
+    text = " ".join(name.replace("_", " ").replace("-", " ").split())
+    return text[:1].upper() + text[1:].lower() if text else name
 
 
 # Characters that are unsafe in a filename, a URL, or both.

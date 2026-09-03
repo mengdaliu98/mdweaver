@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from mdweave.cli import main
@@ -22,19 +24,31 @@ from mdweave.tree import build_tree, document_ids, humanize, relative_prefix
         ("trailing_underscore_", "Trailing underscore"),
         ("double__underscore", "Double underscore"),
         ("2026_review", "2026 review"),
-        # Only the first letter is touched; existing capitals survive.
-        ("OME_Zarr_notes", "OME Zarr notes"),
-        ("iPhone_notes", "IPhone notes"),
-        # Hyphens are left alone -- they are not underscores.
-        ("ome-zarr-layout-planner", "Ome-zarr-layout-planner"),
+        # Sentence case: the first letter up, everything after it down.
+        ("OME_Zarr_notes", "Ome zarr notes"),
+        ("iPhone_notes", "Iphone notes"),
+        # Hyphens separate words, exactly as underscores do.
+        ("ome-zarr-layout-planner", "Ome zarr layout planner"),
+        ("metabridge-design-review-1", "Metabridge design review 1"),
+        ("-leading-hyphen", "Leading hyphen"),
+        ("mixed-separators_here", "Mixed separators here"),
+        ("double--hyphen", "Double hyphen"),
     ],
 )
 def test_humanize(name, expected):
     assert humanize(name) == expected
 
 
-def test_humanize_does_not_lowercase_the_rest_of_the_label():
-    assert humanize("notes_about_CRAM_and_BAM") == "Notes about CRAM and BAM"
+def test_humanize_lowercases_the_rest_of_the_label():
+    """Sentence case throughout, acronyms included."""
+    assert humanize("notes_about_CRAM_and_BAM") == "Notes about cram and bam"
+
+
+def test_no_label_keeps_a_separator():
+    """The whole point: nothing in the tree should read as a filename."""
+    for name in ("ome-zarr-what-it-is", "plug_and_play-backend", "a-b_c"):
+        label = humanize(name)
+        assert "-" not in label and "_" not in label
 
 
 # --- discovery ------------------------------------------------------------
@@ -192,3 +206,79 @@ def test_no_markdown_anywhere_is_an_error(tmp_path):
     empty = tmp_path / "empty"
     empty.mkdir()
     assert main(["build", str(empty), "-o", str(tmp_path / "out")]) == 1
+
+
+# --- resizing the panel ----------------------------------------------------
+
+ASSETS = Path(__file__).resolve().parents[1] / "mdweave" / "assets"
+THEME = Path(__file__).resolve().parents[1] / "mdweave" / "theme"
+TEMPLATES = Path(__file__).resolve().parents[1] / "mdweave" / "templates"
+
+
+def test_the_handle_is_in_every_page():
+    template = (TEMPLATES / "document.html.j2").read_text(encoding="utf-8")
+    assert 'id="sidebar-resize"' in template
+    assert 'role="separator"' in template
+    assert 'aria-orientation="vertical"' in template
+    assert 'tabindex="0"' in template, "keyboard users need to reach it"
+
+
+def test_the_handle_sits_on_the_panel_edge_and_tracks_it():
+    """One custom property drives the column and the handle's position."""
+    css = (THEME / "sidebar.css").read_text(encoding="utf-8")
+    block = css.split(".sidebar-resize {")[1].split("}")[0]
+    assert "position: fixed" in block
+    assert "left: var(--sidebar-w)" in block
+    assert "cursor: col-resize" in block
+
+
+def test_the_handle_is_wider_than_the_border_it_sits_on():
+    css = (THEME / "sidebar.css").read_text(encoding="utf-8")
+    block = css.split(".sidebar-resize {")[1].split("}")[0]
+    width = int(block.split("width:")[1].split("px")[0].strip())
+    assert width >= 6, "a 1px grab target is not a target"
+
+
+def test_the_handle_goes_away_when_it_would_make_no_sense():
+    css = (THEME / "sidebar.css").read_text(encoding="utf-8")
+    assert 'body[data-sidebar="hidden"] .sidebar-resize { display: none; }' in css
+    assert ".sidebar, .sidebar-show, .sidebar-resize { display: none !important; }" in css
+
+
+def test_dragging_does_not_select_the_prose():
+    css = (THEME / "sidebar.css").read_text(encoding="utf-8")
+    block = css.split("body.sidebar-resizing {")[1].split("}")[0]
+    assert "user-select: none" in block
+
+
+def test_the_width_survives_a_navigation():
+    """Opening a document is a full page load; the panel must not snap back."""
+    source = (ASSETS / "sidebar.js").read_text(encoding="utf-8")
+    assert 'WIDTH_KEY = "mdweave.sidebar.width"' in source
+    assert "read(WIDTH_KEY" in source
+    assert "write(WIDTH_KEY" in source
+
+
+def test_the_width_is_clamped():
+    source = (ASSETS / "sidebar.js").read_text(encoding="utf-8")
+    assert "MIN_WIDTH" in source and "MAX_WIDTH" in source
+    assert "Math.max(MIN_WIDTH" in source and "Math.min(MAX_WIDTH" in source
+
+
+def test_dragging_uses_pointer_capture():
+    """Otherwise the drag is lost the moment the cursor outruns the handle."""
+    source = (ASSETS / "sidebar.js").read_text(encoding="utf-8")
+    assert "setPointerCapture" in source
+    assert 'addEventListener("pointermove"' in source
+    assert 'addEventListener("pointercancel"' in source, "a cancelled drag must clean up"
+
+
+def test_the_handle_takes_the_arrow_keys():
+    source = (ASSETS / "sidebar.js").read_text(encoding="utf-8")
+    assert '"ArrowLeft"' in source and '"ArrowRight"' in source
+
+
+def test_double_click_restores_the_stylesheet_width():
+    source = (ASSETS / "sidebar.js").read_text(encoding="utf-8")
+    block = source.split('addEventListener("dblclick"')[1].split("});")[0]
+    assert "removeProperty" in block
