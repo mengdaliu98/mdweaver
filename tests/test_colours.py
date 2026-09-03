@@ -524,3 +524,22 @@ def test_the_swatches_are_one_tab_stop_the_arrow_keys_move_within(tmp_path):
     }
     assert result["clicked"] == {"checked": ["yellow"], "stops": ["yellow"]}
     assert result["picked"] == ["pink", "yellow"]
+
+
+def test_note_actions_survive_an_in_place_swap():
+    """Regression: a save replaced the notes layer and the footers vanished.
+
+    `ui.adopt` swaps `#notes-layer` wholesale after an edit or a refresh, so
+    every card annotate.js had decorated is discarded along with its Reset,
+    Delete and colour swatches. They stayed gone until a full reload.
+    """
+    notes = (ASSETS / "notes.js").read_text(encoding="utf-8")
+    annotate = (ASSETS / "annotate.js").read_text(encoding="utf-8")
+
+    assert "setRefreshHandler" in notes and "setRefreshHandler" in annotate
+    assert "mdw.setRefreshHandler(addNoteActions)" in annotate
+
+    body = notes.split("function refresh()")[1].split("}")[0]
+    assert "refreshHandler()" in body
+    assert body.index("refreshHandler()") < body.index("layout()"), \
+        "a card measured without its footer is placed as though it were shorter"

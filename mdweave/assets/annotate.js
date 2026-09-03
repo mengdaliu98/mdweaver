@@ -713,6 +713,9 @@
       document.body.classList.add("mdweave-editable");
       addNoteActions();
       mdw.setMoveHandler(persistMove);
+      // Saving an edit or refreshing replaces the notes layer, which throws
+      // away every footer along with the cards that carried them.
+      mdw.setRefreshHandler(addNoteActions);
     });
   }
 })();

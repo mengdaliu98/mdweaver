@@ -196,6 +196,10 @@
    * in which case dragging still works but only for the session. */
   var moveHandler = null;
 
+  /* What to re-run after the notes layer has been replaced wholesale, so that
+   * whatever annotate.js added to each card survives an in-place edit. */
+  var refreshHandler = null;
+
   /* A drag ends with a click event the browser fires anyway; this stops that
    * click from also toggling the card open. */
   var swallowClick = false;
@@ -352,6 +356,10 @@
     notes = Array.prototype.slice.call(layer.querySelectorAll(".note"));
     notes.forEach(register);
     wrapTables();
+    // Before layout, not after: annotate.js appends a footer of actions to
+    // each card, which changes its height, and a card measured without one
+    // is placed as though it were shorter than it is.
+    if (refreshHandler) refreshHandler();
     layout();
   }
 
@@ -374,6 +382,9 @@
     resetPosition: resetPosition,
     setMoveHandler: function (fn) {
       moveHandler = fn;
+    },
+    setRefreshHandler: function (fn) {
+      refreshHandler = fn;
     },
     marksFor: marksFor,
     noteFor: noteFor,
