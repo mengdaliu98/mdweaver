@@ -19,7 +19,7 @@ from __future__ import annotations
 import re
 
 from ..anchors import normalize, occurrence_index
-from ..model import Annotation, Comment, TextTarget
+from ..model import DEFAULT_COLOR, Annotation, Comment, TextTarget
 
 # <!--c:ID-->highlighted text<!--/c:ID-->
 INLINE_RE = re.compile(
@@ -63,7 +63,7 @@ def extract(markdown: str) -> tuple[str, list[Annotation]]:
                 id=ann_id,
                 target=_target_from_context(cleaned, quote, position),
                 kind="comment" if meta.get("thread") else "highlight",
-                color=meta.get("color", "amber"),
+                color=meta.get("color", DEFAULT_COLOR),
                 status=meta.get("status", "open"),
                 thread=meta.get("thread", []),
             )
@@ -80,7 +80,7 @@ def extract(markdown: str) -> tuple[str, list[Annotation]]:
                 id=ann_id,
                 target=TextTarget(quote=meta["quote"]),
                 kind="comment" if meta.get("thread") else "highlight",
-                color=meta.get("color", "amber"),
+                color=meta.get("color", DEFAULT_COLOR),
                 status=meta.get("status", "open"),
                 thread=meta.get("thread", []),
             )
@@ -125,7 +125,7 @@ def _extract_blocks(markdown: str) -> dict[str, dict]:
             "thread": thread,
             "quote": attrs.get("quote", ""),
             "status": attrs.get("status", "open"),
-            "color": attrs.get("color", "amber"),
+            "color": attrs.get("color", DEFAULT_COLOR),
         }
     return threads
 

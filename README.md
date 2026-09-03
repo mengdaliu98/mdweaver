@@ -196,6 +196,9 @@ Select any text and a **Comment** pill appears; click it, type, and press
 document's `.ann.json` sidecar and the HTML is regenerated, so a reload shows
 exactly what you just made. Open a note and `Delete` removes it again.
 
+Five swatches beside the buttons choose the colour, before or after the fact —
+see [Colours](#colours).
+
 This needs the page to be served, because a `file://` page has no API to write
 to. `mdweave start` handles that.
 
@@ -230,7 +233,7 @@ Annotation `TextQuoteSelector`:
 {
   "id": "kxejp",
   "kind": "comment",
-  "color": "amber",
+  "color": "yellow",
   "status": "open",
   "target": {
     "quote": "CRAM/BAM",
@@ -262,28 +265,63 @@ block.
 Unrecognised fields are preserved verbatim through a load/save round trip, so
 new features do not need a schema migration.
 
-## Changing colours
+## Colours
 
-Six tokens — `amber`, `rose`, `mint`, `sky`, `violet`, `slate` — are defined in
-one block at the top of `mdweave/theme/annotations.css`. Each has four values:
+Five: **yellow**, **orange**, **green**, **pink**, **purple**. Pick one while
+writing a comment — the swatches sit in the composer, next to `Comment` — and
+the highlight and the card take it straight away. Open an existing note and the
+same five are in its card; clicking one recolours it and saves. The swatches are
+a radio group, so `Tab` reaches them as one stop and the arrow keys move
+between them.
+
+Each token is defined in one block at the top of
+`mdweave/theme/annotations.css`, as four values:
 
 ```css
---hl-amber-bg:     rgb(255 214  92 / 0.45);   /* fill behind the text   */
---hl-amber-edge:   rgb(202 138  4);           /* underline and note pin */
---note-amber-bg:   rgb(255 250 231);          /* card background        */
---note-amber-ink:  rgb( 66  47  6);           /* card text              */
+--hl-yellow-bg:     rgb(255 224 102 / 0.40);   /* fill behind the text   */
+--hl-yellow-edge:   rgb(150 105   4);          /* underline and note pin */
+--note-yellow-bg:   rgb(255 250 231);          /* card background        */
+--note-yellow-ink:  rgb( 66  47   6);          /* card text              */
 ```
 
-Edit those and rebuild — every amber annotation follows. To recolour a single
-annotation instead, put a raw colour in its sidecar entry; the fill, underline,
-pin, and card tint are all derived from it with `color-mix()`:
+Edit those and rebuild — every yellow annotation follows. The four have to stay
+legible together; `tests/test_colours.py` computes the contrast of each pair and
+fails below WCAG AA, so a change that looks nice and reads badly does not get
+through.
+
+To recolour a single annotation instead, put a raw colour in its sidecar entry;
+the fill, underline, pin, and card tint are all derived from it with
+`color-mix()`:
 
 ```json
 { "color": "rgb(255 61 148)" }
 ```
 
-`knowledge_base/markdown_inputs/mdweave_style_reference.md` renders all six tokens
-plus a custom colour, and is the fastest way to preview a change.
+That only works in a file you edit by hand. The API takes the five token names
+and nothing else, because a raw colour reaches the page inside a `style`
+attribute and is not something to accept from a browser.
+
+**The palette before this one.** Sidecars written earlier say `amber`, `rose`,
+`mint`, `sky`, `violet` or `slate`. Those files are left exactly as they are;
+the names are resolved to the five when the page is built:
+
+| was      | renders as |
+| -------- | ---------- |
+| `amber`  | yellow     |
+| `rose`   | pink       |
+| `mint`   | green      |
+| `violet` | purple     |
+| `sky`    | purple     |
+| `slate`  | yellow     |
+
+The last two lose something: `sky` and `violet` now look the same, and so do
+`slate` and `amber`. Recolouring those notes in the browser is what gets the
+distinction back — and writes a current token into the sidecar while it is
+there. `LEGACY_COLOR_ALIASES` in `mdweave/model.py` is the map.
+
+`knowledge_base/markdown_inputs/mdweave_style_reference.md` previews the tokens,
+and still names the old six — it is a document in the contents repo, so edit it
+there.
 
 ## Reading the output
 
@@ -300,10 +338,9 @@ document, since popovers cannot print.
 
 **Drag a pin to move it.** The position is saved as a displacement from the
 anchor, not an absolute coordinate, so a moved note still travels with its
-highlight when the text around it changes. A moved note draws a faint dashed
-line back to the text it belongs to, and gets a `Reset position` action in its
-card. Dragging needs the server, same as commenting; over `file://` a drag
-lasts only for the session.
+highlight when the text around it changes. A moved note gets a `Reset position`
+action in its card. Dragging needs the server, same as commenting; over
+`file://` a drag lasts only for the session.
 
 ## Commands
 

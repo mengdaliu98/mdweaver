@@ -178,7 +178,7 @@ def test_render_emits_highlight_and_matching_note_card():
 
     assert 'data-ann="kxejp"' in result.html
     assert 'id="note-kxejp"' in result.html
-    assert "note--amber" in result.html
+    assert "note--yellow" in result.html
     assert result.unresolved == []
 
 
@@ -256,7 +256,7 @@ def test_sidecar_survives_a_save_load_round_trip(tmp_path):
         Annotation(
             id="kxejp",
             target=TextTarget(quote="CRAM/BAM", prefix="over", occurrence=2),
-            color="mint",
+            color="green",
             status="resolved",
             tags=["genomics"],
             thread=[Comment(body="hi", author="ana", at="2026-08-14T00:00:00Z")],
