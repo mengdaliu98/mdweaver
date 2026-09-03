@@ -1,15 +1,23 @@
 """mdweave command line interface.
 
+The two commands for everyday use:
+
+    mdweave start                        render everything, serve it, open it
+    mdweave stop                         shut the server down
+
+The rest are the pieces those are built from, useful on their own:
+
     mdweave extract  <doc.md>            pull Obsidian inline comments -> sidecar JSON
     mdweave build    <doc.md> -o <dir>   render annotated HTML + CSS
     mdweave build    <dir>    -o <dir>   render every .md in a directory
-    mdweave serve    [--port N]          serve the output and accept new comments
+    mdweave serve    [--port N]          serve in the foreground, no browser
     mdweave fingerprint                  hash of the installed source, for staleness checks
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -17,8 +25,31 @@ from .render import render_document, write_assets
 from .sources import obsidian_inline, sidecar
 from .tree import build_tree, document_ids, humanize
 
-DEFAULT_INDIR = Path("contents/markdown_inputs")
-DEFAULT_OUTDIR = Path("contents/html_outputs")
+
+def contents_root() -> Path:
+    """Where the documents live.
+
+    The tool and the contents are two independent checkouts sitting side by
+    side, so the default is a sibling of this repo. Resolving it from the
+    installed package rather than the working directory is what lets
+    `mdweave start` be typed from anywhere.
+    """
+    override = os.environ.get("MDWEAVE_CONTENTS")
+    if override:
+        return Path(override).expanduser()
+
+    sibling = Path(__file__).resolve().parents[2] / "knowledge_base"
+    if sibling.is_dir():
+        return sibling
+    return Path("knowledge_base")
+
+
+def default_indir() -> Path:
+    return contents_root() / "markdown_inputs"
+
+
+def default_outdir() -> Path:
+    return contents_root() / "html_outputs"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -27,6 +58,31 @@ def main(argv: list[str] | None = None) -> int:
         description="Render annotated markdown to HTML + CSS.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
+
+    p_start = sub.add_parser(
+        "start",
+        help="render every document, serve them, and open the knowledge base",
+    )
+    p_start.add_argument(
+        "-i", "--indir", type=Path, default=default_indir(), help="markdown directory"
+    )
+    p_start.add_argument(
+        "-o", "--outdir", type=Path, default=default_outdir(), help="output directory"
+    )
+    p_start.add_argument("--port", type=int, default=8765)
+    p_start.add_argument("--host", default="127.0.0.1")
+    p_start.add_argument(
+        "--no-build",
+        action="store_true",
+        help="serve what is already on disk instead of rendering first",
+    )
+    p_start.add_argument(
+        "--no-open", action="store_true", help="print the URL without opening a browser"
+    )
+
+    p_stop = sub.add_parser("stop", help="shut the background server down")
+    p_stop.add_argument("--port", type=int, default=8765)
+    p_stop.add_argument("--host", default="127.0.0.1")
 
     p_extract = sub.add_parser(
         "extract",
@@ -59,10 +115,10 @@ def main(argv: list[str] | None = None) -> int:
         "serve", help="serve the rendered HTML and accept comments from the browser"
     )
     p_serve.add_argument(
-        "-i", "--indir", type=Path, default=DEFAULT_INDIR, help="markdown directory"
+        "-i", "--indir", type=Path, default=default_indir(), help="markdown directory"
     )
     p_serve.add_argument(
-        "-o", "--outdir", type=Path, default=DEFAULT_OUTDIR, help="output directory"
+        "-o", "--outdir", type=Path, default=default_outdir(), help="output directory"
     )
     p_serve.add_argument("--port", type=int, default=8765)
     p_serve.add_argument("--host", default="127.0.0.1")
@@ -84,6 +140,10 @@ def main(argv: list[str] | None = None) -> int:
 
         print(source_fingerprint())
         return 0
+    if args.command == "start":
+        return cmd_start(args)
+    if args.command == "stop":
+        return cmd_stop(args)
     if args.command == "extract":
         return cmd_extract(args)
     if args.command == "serve":
@@ -142,7 +202,7 @@ def cmd_build(args) -> int:
         else {k: v for k, v in documents.items() if v.resolve() == target.resolve()}
     )
 
-    outdir: Path = args.outdir or DEFAULT_OUTDIR
+    outdir: Path = args.outdir or default_outdir()
     outdir.mkdir(parents=True, exist_ok=True)
     write_assets(outdir)
 
@@ -178,8 +238,74 @@ def cmd_build(args) -> int:
     return 1 if (failures and args.strict) else 0
 
 
+def cmd_start(args) -> int:
+    from . import daemon
+    from .serve import refuse_insecure_bind
+
+    # The child would refuse anyway; catching it here gives the reason rather
+    # than "the server did not come up".
+    refusal = refuse_insecure_bind(args.host)
+    if refusal:
+        print(f"error: {refusal}", file=sys.stderr)
+        return 1
+
+    if not args.indir.is_dir():
+        print(f"error: no markdown directory at {args.indir}", file=sys.stderr)
+        print("  pass -i, or set MDWEAVE_CONTENTS to the knowledge_base checkout",
+              file=sys.stderr)
+        return 1
+
+    # Render before touching the server. The pages are plain files on disk, so
+    # this picks up anything added by hand since the last run whether or not a
+    # server is already up.
+    if not args.no_build:
+        build = argparse.Namespace(input=args.indir, outdir=args.outdir, strict=False)
+        if cmd_build(build) != 0:
+            return 1
+
+    running = daemon.health(args.host, args.port)
+    if running and daemon.is_stale(running):
+        print("mdweave: the running server is older than the code on disk, restarting")
+        daemon.stop(args.port, host=args.host)
+        running = None
+
+    if running:
+        print(f"mdweave: already serving on port {args.port}")
+    else:
+        process = daemon.spawn(args.indir, args.outdir, args.host, args.port)
+        if daemon.wait_until_up(process, args.host, args.port) is None:
+            print(f"error: the server did not come up on port {args.port}",
+                  file=sys.stderr)
+            print(f"  log: {daemon.logfile(args.port)}", file=sys.stderr)
+            return 1
+
+    url = f"http://{args.host}:{args.port}/"
+    print(url)
+    if args.no_open or not daemon.open_page(url):
+        print(f"  no browser here -- forward port {args.port} and open that URL")
+    return 0
+
+
+def cmd_stop(args) -> int:
+    from . import daemon
+
+    pid = daemon.stop(args.port, host=args.host)
+    if pid is None:
+        print(f"mdweave: nothing running on port {args.port}")
+    else:
+        print(f"mdweave: stopped the server on port {args.port} (pid {pid})")
+    return 0
+
+
 def cmd_serve(args) -> int:
-    from .serve import serve
+    from .serve import refuse_insecure_bind, serve
+
+    # Before anything else, including the build: if this bind is not going to
+    # be allowed, say so now rather than after rendering the whole set.
+    refusal = refuse_insecure_bind(args.host)
+    if refusal:
+        print(f"error: {refusal}", file=sys.stderr)
+        return 1
 
     if not args.indir.is_dir():
         print(f"error: {args.indir} is not a directory", file=sys.stderr)
