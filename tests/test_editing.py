@@ -504,8 +504,9 @@ def test_health_reports_a_fingerprint(server):
 def test_the_fingerprint_changes_when_source_changes(tmp_path, monkeypatch):
     """A server running old code must be distinguishable from a current one.
 
-    Regression: `mdweave_serve` reused a long-lived process, so a newly added
-    endpoint answered 501 until someone thought to restart it by hand.
+    Regression: the launcher reused a long-lived process, so a newly added
+    endpoint answered 501 until someone thought to restart it by hand. This is
+    what `mdweave start` compares to decide whether to replace what is running.
     """
     fake = tmp_path / "pkg"
     (fake / "assets").mkdir(parents=True)

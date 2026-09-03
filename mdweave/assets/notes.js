@@ -366,13 +366,27 @@
 
   /* Tables are the one block that routinely exceeds the text column. Wrapping
    * them in a scroller keeps the measure intact without touching the renderer. */
-  doc.querySelectorAll("table").forEach(function (table) {
-    if (table.parentElement.classList.contains("table-scroll")) return;
-    var wrap = document.createElement("div");
-    wrap.className = "table-scroll";
-    table.parentNode.insertBefore(wrap, table);
-    wrap.appendChild(table);
-  });
+  function wrapTables() {
+    doc.querySelectorAll("table").forEach(function (table) {
+      if (table.parentElement.classList.contains("table-scroll")) return;
+      var wrap = document.createElement("div");
+      wrap.className = "table-scroll";
+      table.parentNode.insertBefore(wrap, table);
+      wrap.appendChild(table);
+    });
+  }
+
+  wrapTables();
+
+  /* Re-adopt the page after edit.js has swapped the prose underneath us. The
+   * old note elements are gone with the old markup, so the cached list has to
+   * be rebuilt; `register` is idempotent, so re-wiring costs nothing. */
+  function refresh() {
+    notes = Array.prototype.slice.call(layer.querySelectorAll(".note"));
+    notes.forEach(register);
+    wrapTables();
+    layout();
+  }
 
   /* --- keep in sync ----------------------------------------------------- */
 
@@ -387,6 +401,7 @@
     layer: layer,
     notes: notes,
     layout: layout,
+    refresh: refresh,
     register: register,
     setOpen: setOpen,
     resetPosition: resetPosition,

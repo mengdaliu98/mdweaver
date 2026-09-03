@@ -231,7 +231,8 @@ def test_comment_bodies_are_escaped():
 @pytest.mark.parametrize(
     "markdown, expected",
     [
-        ("| a | b |\n| - | - |\n| 1 | 2 |", "<table>"),
+        # "<table" not "<table>": every block now carries its source range.
+        ("| a | b |\n| - | - |\n| 1 | 2 |", "<table"),
         ("- [x] done\n- [ ] todo", "task-list-item"),
         ("Text.[^1]\n\n[^1]: A footnote.", "footnotes"),
         ("```python\nx = 1\n```", "codehilite"),

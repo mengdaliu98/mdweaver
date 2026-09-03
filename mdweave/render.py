@@ -9,6 +9,7 @@ from pathlib import Path
 from bs4 import BeautifulSoup
 from jinja2 import Environment, FileSystemLoader
 from markdown_it import MarkdownIt
+from markdown_it.renderer import RendererHTML
 from mdit_py_plugins.footnote import footnote_plugin
 from mdit_py_plugins.tasklists import tasklists_plugin
 from pygments import highlight as pygments_highlight
@@ -27,6 +28,50 @@ ASSETS = HERE / "assets"
 
 PYGMENTS_STYLE = "friendly"
 
+# Every top-level block carries the source lines it came from, as a half-open
+# [start, end) range. This is what makes editing in place possible: the browser
+# can say "the paragraph at lines 14-18" and the server knows exactly which
+# slice of the markdown to hand back, and where to put the edit.
+SRC_START = "data-src-start"
+SRC_END = "data-src-end"
+
+_FIRST_TAG = re.compile(r"<(\w+)")
+
+
+def _tag_first_tag(html: str, span: list[int]) -> str:
+    """Add the source range to the opening tag of an already-rendered block.
+
+    `fence` and friends build their own markup instead of going through
+    renderToken, so their attrs never reach the output; splice them in.
+    """
+    match = _FIRST_TAG.match(html.lstrip())
+    if not match:
+        return html
+    attrs = f' {SRC_START}="{span[0]}" {SRC_END}="{span[1]}"'
+    at = html.index(match.group(0)) + len(match.group(0))
+    return html[:at] + attrs + html[at:]
+
+
+class SourceMappedRenderer(RendererHTML):
+    """RendererHTML that records where each top-level block came from."""
+
+    def renderToken(self, tokens, idx, options, env):  # noqa: N802 -- upstream name
+        token = tokens[idx]
+        if token.level == 0 and token.nesting >= 0 and token.map:
+            token.attrSet(SRC_START, str(token.map[0]))
+            token.attrSet(SRC_END, str(token.map[1]))
+        return super().renderToken(tokens, idx, options, env)
+
+    def fence(self, tokens, idx, options, env):
+        html = super().fence(tokens, idx, options, env)
+        token = tokens[idx]
+        return _tag_first_tag(html, token.map) if token.level == 0 and token.map else html
+
+    def code_block(self, tokens, idx, options, env):
+        html = super().code_block(tokens, idx, options, env)
+        token = tokens[idx]
+        return _tag_first_tag(html, token.map) if token.level == 0 and token.map else html
+
 
 @dataclass
 class RenderResult:
@@ -40,7 +85,8 @@ class RenderResult:
 
 def build_parser() -> MarkdownIt:
     md = (
-        MarkdownIt("commonmark", {"html": True, "highlight": _highlight})
+        MarkdownIt("commonmark", {"html": True, "highlight": _highlight},
+                   renderer_cls=SourceMappedRenderer)
         .enable(["table", "strikethrough"])
         .use(footnote_plugin)
         .use(tasklists_plugin, enabled=True)
@@ -79,6 +125,9 @@ def render_document(
         "assets/sidebar.js",
         "assets/notes.js",
         "assets/annotate.js",
+        "assets/edit.js",
+        "assets/refresh.js",
+        "assets/checkpoint.js",
     ),
 ) -> RenderResult:
     """Render markdown to a full HTML page with highlights and note cards."""
@@ -185,7 +234,11 @@ def write_assets(outdir: Path) -> None:
         encoding="utf-8",
     )
 
-    for script in ("ui.js", "sidebar.js", "notes.js", "annotate.js"):
+    scripts = (
+        "ui.js", "sidebar.js", "notes.js", "annotate.js",
+        "edit.js", "refresh.js", "checkpoint.js",
+    )
+    for script in scripts:
         (assets / script).write_text(
             (ASSETS / script).read_text(encoding="utf-8"), encoding="utf-8"
         )
