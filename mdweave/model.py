@@ -12,9 +12,33 @@ from dataclasses import dataclass, field
 from typing import Any
 
 # Colour tokens defined in theme/annotations.css. A colour that is not one of
-# these is treated as a raw CSS colour and emitted as an inline custom property.
-COLOR_TOKENS = ("amber", "rose", "mint", "sky", "violet", "slate")
-DEFAULT_COLOR = "amber"
+# these, and not a legacy alias below, is treated as a raw CSS colour and
+# emitted as an inline custom property.
+COLOR_TOKENS = ("yellow", "orange", "green", "pink", "purple")
+DEFAULT_COLOR = "yellow"
+
+# The palette these five replaced. Sidecars written before the change still
+# carry the old names, and a render is no place to rewrite a user's .ann.json
+# -- so the old names are resolved on the way out and the files are left alone.
+#
+# `sky` and `slate` have no counterpart among the five and fold onto the
+# nearest survivor: two annotations that used to be told apart by colour now
+# look the same. Recolour them in the browser to get the distinction back.
+LEGACY_COLOR_ALIASES = {
+    "amber": "yellow",
+    "rose": "pink",
+    "mint": "green",
+    "violet": "purple",
+    "sky": "purple",
+    "slate": "yellow",
+}
+
+
+def resolve_color_token(color: str) -> str | None:
+    """The palette token `color` names, or None when it is a raw CSS colour."""
+    if color in COLOR_TOKENS:
+        return color
+    return LEGACY_COLOR_ALIASES.get(color)
 
 
 @dataclass
@@ -148,13 +172,17 @@ class Annotation:
 
     @property
     def color_token(self) -> str:
-        """Token name for the CSS class, or "custom" for a raw CSS colour."""
-        return self.color if self.color in COLOR_TOKENS else "custom"
+        """Token name for the CSS class, or "custom" for a raw CSS colour.
+
+        A legacy token resolves to its replacement here rather than in the
+        stored `color`, so `to_dict` still writes back what was read.
+        """
+        return resolve_color_token(self.color) or "custom"
 
     @property
     def custom_color(self) -> str | None:
         """The raw CSS colour, when `color` is not a known token."""
-        return None if self.color in COLOR_TOKENS else self.color
+        return None if resolve_color_token(self.color) else self.color
 
 
 _ID_SAFE = re.compile(r"[^A-Za-z0-9_-]")

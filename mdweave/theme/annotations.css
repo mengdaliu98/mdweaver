@@ -1,77 +1,81 @@
 /* ==========================================================================
    mdweave -- highlights and sticky-note comment cards
 
-   ┌─ COLOUR TOKENS ─────────────────────────────────────────────────────────┐
-   │ Every annotation colour is defined once, right below. To restyle a      │
-   │ colour everywhere it is used, edit its four values here -- nothing else │
-   │ in this file or in the HTML needs to change.                            │
+   ┌─ COLOUR TOKENS ──────────────────────────────────────────────────────────┐
+   │ Five colours -- yellow, orange, green, pink, purple -- each defined      │
+   │ once, right below, and each offered as a swatch in the browser. To       │
+   │ restyle a colour everywhere it is used, edit its four values here --     │
+   │ nothing else in this file or in the HTML needs to change.                │
    │                                                                          │
-   │   --hl-X-bg     fill painted behind the highlighted text                │
-   │   --hl-X-edge   underline under the highlight, and the note's pin       │
+   │   --hl-X-bg     fill painted behind the highlighted text                 │
+   │   --hl-X-edge   underline under the highlight, and the note's pin        │
    │   --note-X-bg   card background                                          │
    │   --note-X-ink  card text colour                                         │
    │                                                                          │
-   │ A single annotation can also override its colour without a token: set   │
-   │ "color": "rgb(255 0 128)" in the .ann.json and it is emitted inline.    │
+   │ The four have to stay legible together: the fill sits behind body        │
+   │ text, the edge carries white text as the pin, and the card's ink sits    │
+   │ on its background. Every pair here clears WCAG AA.                       │
+   │                                                                          │
+   │ An older palette -- amber, rose, mint, sky, violet, slate -- has no      │
+   │ styles here. model.py maps those names onto these five before the        │
+   │ class is written, so a sidecar that still says "amber" renders as        │
+   │ yellow without being rewritten.                                          │
+   │                                                                          │
+   │ A single annotation can also override its colour without a token: set    │
+   │ "color": "rgb(255 0 128)" in the .ann.json and it is emitted inline.     │
    └──────────────────────────────────────────────────────────────────────────┘
    ========================================================================== */
 
 :root {
-  /* amber -- the default */
-  --hl-amber-bg:     rgb(255 214  92 / 0.45);
-  --hl-amber-edge:   rgb(202 138  4);
-  --note-amber-bg:   rgb(255 250 231);
-  --note-amber-ink:  rgb( 66  47  6);
+  /* yellow -- the default */
+  --hl-yellow-bg:     rgb(255 224 102 / 0.40);
+  --hl-yellow-edge:   rgb(150 105   4);
+  --note-yellow-bg:   rgb(255 250 231);
+  --note-yellow-ink:  rgb( 66  47   6);
 
-  /* rose */
-  --hl-rose-bg:      rgb(255 138 168 / 0.38);
-  --hl-rose-edge:    rgb(219  39  93);
-  --note-rose-bg:    rgb(255 241 245);
-  --note-rose-ink:   rgb( 76  10  32);
+  /* orange */
+  --hl-orange-bg:     rgb(255 176 102 / 0.45);
+  --hl-orange-edge:   rgb(180  78  10);
+  --note-orange-bg:   rgb(255 244 235);
+  --note-orange-ink:  rgb( 76  32   5);
 
-  /* mint */
-  --hl-mint-bg:      rgb(110 231 183 / 0.40);
-  --hl-mint-edge:    rgb( 13 148 106);
-  --note-mint-bg:    rgb(236 253 245);
-  --note-mint-ink:   rgb(  5  62  46);
+  /* green */
+  --hl-green-bg:      rgb(134 231 160 / 0.42);
+  --hl-green-edge:    rgb( 21 128  61);
+  --note-green-bg:    rgb(240 253 244);
+  --note-green-ink:   rgb(  5  62  30);
 
-  /* sky */
-  --hl-sky-bg:       rgb(125 200 255 / 0.40);
-  --hl-sky-edge:     rgb( 14 116 200);
-  --note-sky-bg:     rgb(239 249 255);
-  --note-sky-ink:    rgb(  8  47  73);
+  /* pink */
+  --hl-pink-bg:       rgb(255 138 190 / 0.38);
+  --hl-pink-edge:     rgb(206  32 122);
+  --note-pink-bg:     rgb(255 241 248);
+  --note-pink-ink:    rgb( 76  10  45);
 
-  /* violet */
-  --hl-violet-bg:    rgb(196 168 255 / 0.42);
-  --hl-violet-edge:  rgb(124  58 237);
-  --note-violet-bg:  rgb(248 245 255);
-  --note-violet-ink: rgb( 46  16  101);
-
-  /* slate -- neutral, for resolved or low-priority notes */
-  --hl-slate-bg:     rgb(148 163 184 / 0.34);
-  --hl-slate-edge:   rgb( 71  85 105);
-  --note-slate-bg:   rgb(248 250 252);
-  --note-slate-ink:  rgb( 30  41  59);
+  /* purple */
+  --hl-purple-bg:     rgb(196 168 255 / 0.42);
+  --hl-purple-edge:   rgb(124  58 237);
+  --note-purple-bg:   rgb(248 245 255);
+  --note-purple-ink:  rgb( 46  16 101);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --note-amber-bg:   rgb( 48  38  10);  --note-amber-ink:  rgb(253 230 138);
-    --note-rose-bg:    rgb( 52  16  27);  --note-rose-ink:   rgb(254 205 216);
-    --note-mint-bg:    rgb(  9  47  36);  --note-mint-ink:   rgb(167 243 208);
-    --note-sky-bg:     rgb( 11  41  62);  --note-sky-ink:    rgb(186 230 253);
-    --note-violet-bg:  rgb( 36  22  66);  --note-violet-ink: rgb(221 214 254);
-    --note-slate-bg:   rgb( 30  35  45);  --note-slate-ink:  rgb(203 213 225);
+    --note-yellow-bg:  rgb( 48  38  10);  --note-yellow-ink: rgb(253 230 138);
+    --note-orange-bg:  rgb( 56  28  10);  --note-orange-ink: rgb(253 213 170);
+    --note-green-bg:   rgb(  9  47  30);  --note-green-ink:  rgb(167 243 200);
+    --note-pink-bg:    rgb( 52  16  34);  --note-pink-ink:   rgb(252 205 228);
+    --note-purple-bg:  rgb( 36  22  66);  --note-purple-ink: rgb(221 214 254);
   }
 }
 
-/* Map each token onto the generic vars the components actually read. */
-.hl--amber,  .note--amber  { --hl-bg: var(--hl-amber-bg);  --hl-edge: var(--hl-amber-edge);  --note-bg: var(--note-amber-bg);  --note-ink: var(--note-amber-ink); }
-.hl--rose,   .note--rose   { --hl-bg: var(--hl-rose-bg);   --hl-edge: var(--hl-rose-edge);   --note-bg: var(--note-rose-bg);   --note-ink: var(--note-rose-ink); }
-.hl--mint,   .note--mint   { --hl-bg: var(--hl-mint-bg);   --hl-edge: var(--hl-mint-edge);   --note-bg: var(--note-mint-bg);   --note-ink: var(--note-mint-ink); }
-.hl--sky,    .note--sky    { --hl-bg: var(--hl-sky-bg);    --hl-edge: var(--hl-sky-edge);    --note-bg: var(--note-sky-bg);    --note-ink: var(--note-sky-ink); }
-.hl--violet, .note--violet { --hl-bg: var(--hl-violet-bg); --hl-edge: var(--hl-violet-edge); --note-bg: var(--note-violet-bg); --note-ink: var(--note-violet-ink); }
-.hl--slate,  .note--slate  { --hl-bg: var(--hl-slate-bg);  --hl-edge: var(--hl-slate-edge);  --note-bg: var(--note-slate-bg);  --note-ink: var(--note-slate-ink); }
+/* Map each token onto the generic vars the components actually read. The
+   picker's swatches are on this list too, so a swatch cannot end up
+   advertising a colour the highlight it sets does not actually use. */
+.hl--yellow, .note--yellow, .swatch--yellow { --hl-bg: var(--hl-yellow-bg); --hl-edge: var(--hl-yellow-edge); --note-bg: var(--note-yellow-bg); --note-ink: var(--note-yellow-ink); }
+.hl--orange, .note--orange, .swatch--orange { --hl-bg: var(--hl-orange-bg); --hl-edge: var(--hl-orange-edge); --note-bg: var(--note-orange-bg); --note-ink: var(--note-orange-ink); }
+.hl--green,  .note--green,  .swatch--green  { --hl-bg: var(--hl-green-bg);  --hl-edge: var(--hl-green-edge);  --note-bg: var(--note-green-bg);  --note-ink: var(--note-green-ink); }
+.hl--pink,   .note--pink,   .swatch--pink   { --hl-bg: var(--hl-pink-bg);   --hl-edge: var(--hl-pink-edge);   --note-bg: var(--note-pink-bg);   --note-ink: var(--note-pink-ink); }
+.hl--purple, .note--purple, .swatch--purple { --hl-bg: var(--hl-purple-bg); --hl-edge: var(--hl-purple-edge); --note-bg: var(--note-purple-bg); --note-ink: var(--note-purple-ink); }
 
 /* Per-annotation colour, derived from one raw CSS colour. */
 .hl--custom {
@@ -163,26 +167,6 @@ mark.hl--resolved {
   transform: scale(1.15);
   box-shadow: var(--shadow-md);
 }
-
-/* Leader line back to the text, drawn only for notes that were dragged. */
-.notes-links {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  overflow: visible;
-  pointer-events: none;
-}
-
-.notes-links line {
-  stroke-width: 1.5;
-  stroke-dasharray: 3 3;
-  opacity: 0.45;
-}
-
-/* The svg sits before the notes in the DOM, so a sibling selector cannot
-   reach it -- notes.js sets this class on the layer while a drag is live. */
-.notes-layer--dragging .notes-links line { opacity: 0.9; stroke-dasharray: none; }
 
 .note__pin:focus-visible {
   outline: 2px solid var(--accent);

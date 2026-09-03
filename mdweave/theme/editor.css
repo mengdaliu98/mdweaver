@@ -37,10 +37,10 @@
   to   { opacity: 1; transform: none; }
 }
 
-/* The provisional highlight shown while a comment is being typed. */
+/* The provisional highlight shown while a comment is being typed. It carries
+   a colour token like any other highlight, so the swatch the writer picks
+   shows up in the text straight away. */
 mark.hl--pending {
-  --hl-bg: var(--hl-amber-bg);
-  --hl-edge: var(--hl-amber-edge);
   animation: mdweave-pulse 1.6s ease-in-out infinite;
 }
 
@@ -59,16 +59,16 @@ mark.hl--pending {
   width: var(--note-w);
   padding: 0.7rem;
   border-radius: 10px;
-  background: var(--note-amber-bg);
-  color: var(--note-amber-ink);
-  border: 1px solid var(--hl-amber-edge);
+  background: var(--note-bg);
+  color: var(--note-ink);
+  border: 1px solid var(--hl-edge);
   box-shadow: var(--shadow-md);
 }
 
 .composer__quote {
   margin: 0 0 0.55rem;
   padding: 0 0 0 0.55rem;
-  border-left: 2px solid var(--hl-amber-edge);
+  border-left: 2px solid var(--hl-edge);
   font-size: 0.76rem;
   font-style: italic;
   line-height: 1.45;
@@ -81,7 +81,7 @@ mark.hl--pending {
   display: block;
   width: 100%;
   padding: 0.45rem 0.55rem;
-  border: 1px solid color-mix(in srgb, var(--hl-amber-edge) 40%, transparent);
+  border: 1px solid color-mix(in srgb, var(--hl-edge) 40%, transparent);
   border-radius: 7px;
   background: var(--surface);
   color: var(--ink);
@@ -90,12 +90,13 @@ mark.hl--pending {
 }
 
 .composer__input:focus {
-  outline: 2px solid var(--hl-amber-edge);
+  outline: 2px solid var(--hl-edge);
   outline-offset: -1px;
 }
 
 .composer__actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: 0.4rem;
   margin-top: 0.5rem;
@@ -105,7 +106,7 @@ mark.hl--pending {
   padding: 0.34rem 0.7rem;
   border: 0;
   border-radius: 7px;
-  background: var(--hl-amber-edge);
+  background: var(--hl-edge);
   color: white;
   font: 600 0.76rem/1 var(--font-body);
   cursor: pointer;
@@ -122,10 +123,46 @@ mark.hl--pending {
 
 .composer__button--ghost:hover { opacity: 1; filter: none; }
 
+/* --- colour picker -------------------------------------------------------- */
+
+/* Five swatches, in the composer and in every note's card. Each one carries
+   its own token class, so a swatch is painted with exactly the fill and edge
+   the highlight will get -- there is no second copy of the palette here. */
+.swatches {
+  display: flex;
+  gap: 0.25rem;
+  margin-right: auto;        /* the buttons beside it stay flush right */
+}
+
+.swatch {
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  border: 1px solid var(--hl-edge);
+  border-radius: 50%;
+  background: var(--hl-bg);
+  cursor: pointer;
+}
+
+/* The current colour is filled in, not merely ringed: among five dots of one
+   size an outline alone is too quiet to find. */
+.swatch[aria-checked="true"] {
+  background: var(--hl-edge);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--hl-edge) 30%, transparent);
+}
+
+.swatch:hover { filter: brightness(1.1); transform: scale(1.15); }
+
+.swatch:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 /* --- delete ------------------------------------------------------------- */
 
 .note__footer {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: 0.25rem;
   margin-top: 0.55rem;
@@ -154,8 +191,8 @@ mark.hl--pending {
 
 .note__delete:hover:not(:disabled) {
   opacity: 1;
-  background: color-mix(in srgb, var(--hl-rose-edge) 16%, transparent);
-  color: var(--hl-rose-edge);
+  background: color-mix(in srgb, var(--hl-pink-edge) 16%, transparent);
+  color: var(--hl-pink-edge);
 }
 
 .note__reset:disabled,

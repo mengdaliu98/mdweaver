@@ -25,6 +25,10 @@
   var doc = mdw.doc;
   var layer = mdw.layer;
   var PENDING = "__pending__";
+  // Keep in step with model.COLOR_TOKENS and model.DEFAULT_COLOR; a drift
+  // offers a swatch the server will refuse.
+  var COLORS = ["yellow", "orange", "green", "pink", "purple"];
+  var DEFAULT_COLOR = "yellow";
   var DOC_ID = document.body.dataset.document || "";
   var API = "/api/annotations";
   var CONTEXT = 48; // keep in step with anchors.CONTEXT_CHARS
@@ -205,6 +209,107 @@
     toolbar.style.left = Math.max(4, left) + "px";
   }
 
+  /* --- colour ------------------------------------------------------------ */
+
+  /* "custom" is the class a raw CSS colour renders as. It has to come off with
+   * the rest when a token is picked: its rule sits further down the stylesheet
+   * at the same specificity, so leaving it on would quietly beat the choice. */
+  var PALETTE = COLORS.concat(["custom"]);
+
+  function paletteName(color) {
+    return color.charAt(0).toUpperCase() + color.slice(1);
+  }
+
+  function wearColor(element, prefix, color) {
+    PALETTE.forEach(function (other) {
+      element.classList.remove(prefix + other);
+    });
+    element.classList.add(prefix + color);
+  }
+
+  /** Which of the five an element is currently wearing, or null for none. */
+  function colorOf(element, prefix) {
+    for (var i = 0; i < COLORS.length; i++) {
+      if (element.classList.contains(prefix + COLORS[i])) return COLORS[i];
+    }
+    return null;
+  }
+
+  /* Recolour a highlight and its card in place. All four values -- fill,
+   * underline, pin and card -- hang off the one class, so this is the whole
+   * visual change; the inline property a custom colour reads goes with it. */
+  function recolor(annId, card, color) {
+    mdw.marksFor(annId).forEach(function (mark) {
+      wearColor(mark, "hl--", color);
+      mark.style.removeProperty("--hl-custom");
+    });
+    if (card) {
+      wearColor(card, "note--", color);
+      card.style.removeProperty("--note-custom");
+    }
+  }
+
+  var ARROWS = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 };
+
+  /* Five swatches as a radio group, not five toggles: the colours are mutually
+   * exclusive. That buys the arrow keys and one tab stop for the whole group
+   * instead of five, which matters in a note card that already has two
+   * buttons after it. */
+  function colorPicker(current, onPick) {
+    var row = document.createElement("div");
+    row.className = "swatches";
+    row.setAttribute("role", "radiogroup");
+    row.setAttribute("aria-label", "Highlight colour");
+
+    var swatches = COLORS.map(function (color) {
+      var swatch = document.createElement("button");
+      swatch.type = "button";
+      swatch.className = "swatch swatch--" + color;
+      swatch.dataset.color = color;
+      swatch.setAttribute("role", "radio");
+      swatch.setAttribute("aria-label", paletteName(color));
+      swatch.title = paletteName(color);
+      row.appendChild(swatch);
+      return swatch;
+    });
+
+    function select(color, focus) {
+      swatches.forEach(function (swatch) {
+        var on = swatch.dataset.color === color;
+        swatch.setAttribute("aria-checked", on ? "true" : "false");
+        // Roving tabindex: only the current colour is a tab stop.
+        swatch.tabIndex = on ? 0 : -1;
+        if (on && focus) swatch.focus();
+      });
+    }
+
+    select(current, false);
+    // An annotation carrying a raw CSS colour matches no swatch, which would
+    // leave the group with no tab stop at all and no way to reach it.
+    if (COLORS.indexOf(current) === -1) swatches[0].tabIndex = 0;
+
+    row.addEventListener("click", function (event) {
+      var swatch = event.target.closest && event.target.closest(".swatch");
+      if (!swatch) return;
+      event.stopPropagation(); // inside a card, a stray click closes the note
+      select(swatch.dataset.color, false);
+      onPick(swatch.dataset.color);
+    });
+
+    row.addEventListener("keydown", function (event) {
+      var step = ARROWS[event.key];
+      var at = swatches.indexOf(document.activeElement);
+      if (!step || at === -1) return;
+      event.preventDefault();
+
+      var next = COLORS[(at + step + COLORS.length) % COLORS.length];
+      select(next, true);
+      onPick(next);
+    });
+
+    return row;
+  }
+
   /* --- composer ---------------------------------------------------------- */
 
   /* Drop the panel but leave the document alone. */
@@ -230,7 +335,9 @@
     removeComposer();
 
     composer = document.createElement("div");
-    composer.className = "composer";
+    // The composer stands in for the card the annotation is about to get, so
+    // it wears the same colour class and reads the same four variables.
+    composer.className = "composer note--" + DEFAULT_COLOR;
     composer.dataset.ann = PENDING;
     composer.innerHTML =
       '<blockquote class="composer__quote"></blockquote>' +
@@ -240,6 +347,19 @@
       '<button type="button" class="composer__button" data-act="save">Comment</button>' +
       "</div>";
     composer.querySelector(".composer__quote").textContent = selector.quote;
+
+    var actions = composer.querySelector(".composer__actions");
+    var color = DEFAULT_COLOR;
+    actions.insertBefore(
+      colorPicker(color, function (picked) {
+        color = picked;
+        // Nothing is saved yet: the pending highlight and the panel simply
+        // show what the comment is about to look like.
+        recolor(PENDING, composer, picked);
+      }),
+      actions.firstChild
+    );
+
     layer.appendChild(composer);
     mdw.layout();
 
@@ -249,12 +369,12 @@
 
     composer.querySelector('[data-act="cancel"]').addEventListener("click", closeComposer);
     save.addEventListener("click", function () {
-      submit(selector, input, save);
+      submit(selector, input, save, color);
     });
     input.addEventListener("keydown", function (event) {
       if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
         event.preventDefault();
-        submit(selector, input, save);
+        submit(selector, input, save, color);
       } else if (event.key === "Escape") {
         event.preventDefault();
         closeComposer();
@@ -262,7 +382,7 @@
     });
   }
 
-  function submit(selector, input, saveButton) {
+  function submit(selector, input, saveButton, color) {
     var body = input.value.trim();
     if (!body) {
       input.focus();
@@ -281,6 +401,7 @@
         prefix: selector.prefix,
         suffix: selector.suffix,
         occurrence: selector.occurrence,
+        color: color,
         body: body,
         author: localStorage.getItem("mdweave.author") || "me",
         at: new Date().toISOString(),
@@ -301,7 +422,8 @@
         closeComposer();
 
         if (span) {
-          wrapSpan(index, span[0], span[1], "hl hl--amber hl--has-note", annotation.id);
+          var token = annotation.color || DEFAULT_COLOR;
+          wrapSpan(index, span[0], span[1], "hl hl--" + token + " hl--has-note", annotation.id);
           addNote(annotation);
         } else {
           toast("Saved, but could not place it here — reload to see it.", "warn");
@@ -357,7 +479,7 @@
     var entry = (annotation.thread && annotation.thread[0]) || { author: "me", body: "" };
 
     var note = document.createElement("div");
-    note.className = "note note--" + (annotation.color || "amber");
+    note.className = "note note--" + (annotation.color || DEFAULT_COLOR);
     note.id = "note-" + annotation.id;
     note.dataset.ann = annotation.id;
     note.dataset.status = annotation.status || "open";
@@ -400,7 +522,7 @@
     body.id = "note-body-" + annotation.id;
     body.appendChild(quote);
     body.appendChild(item);
-    if (writable) body.appendChild(noteActions(annotation.id));
+    if (writable) body.appendChild(noteActions(note));
 
     note.appendChild(pin);
     note.appendChild(body);
@@ -430,6 +552,23 @@
       });
   }
 
+  /* Persist a recolour. The note is already wearing the new colour by the time
+   * this runs, so a failure is reported rather than silently reverted -- same
+   * bargain as a dragged position. */
+  function persistColor(annId, color) {
+    fetch(API + "/" + encodeURIComponent(annId), {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ document: DOC_ID, color: color }),
+    })
+      .then(function (response) {
+        if (!response.ok) return reject(response);
+      })
+      .catch(function (error) {
+        toast("Colour not saved: " + error.message, "error");
+      });
+  }
+
   function actionButton(className, label, onClick) {
     var button = document.createElement("button");
     button.type = "button";
@@ -442,9 +581,17 @@
     return button;
   }
 
-  function noteActions(annId) {
+  function noteActions(note) {
+    var annId = note.dataset.ann;
     var row = document.createElement("div");
     row.className = "note__footer";
+
+    row.appendChild(
+      colorPicker(colorOf(note, "note--"), function (color) {
+        recolor(annId, note, color);
+        persistColor(annId, color);
+      })
+    );
 
     row.appendChild(
       actionButton("note__reset", "Reset position", function () {
@@ -478,7 +625,7 @@
     layer.querySelectorAll(".note").forEach(function (note) {
       var body = note.querySelector(".note__body");
       if (body && !body.querySelector(".note__footer")) {
-        body.appendChild(noteActions(note.dataset.ann));
+        body.appendChild(noteActions(note));
       }
     });
   }
@@ -545,7 +692,7 @@
 
     // Provisional highlight, so the target stays visible while typing -- and so
     // the composer has something to position itself against.
-    wrapSpan(index, span[0], span[1], "hl hl--amber hl--pending", PENDING);
+    wrapSpan(index, span[0], span[1], "hl hl--" + DEFAULT_COLOR + " hl--pending", PENDING);
     selection.removeAllRanges();
     openComposer(selector);
   });

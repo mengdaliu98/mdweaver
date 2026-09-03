@@ -27,7 +27,7 @@ from urllib.parse import parse_qs, quote, urlparse
 
 from . import checkpoint as git_checkpoint
 from . import edits
-from .model import Annotation, Comment, Offset, TextTarget
+from .model import COLOR_TOKENS, DEFAULT_COLOR, Annotation, Comment, Offset, TextTarget
 from .render import render_document, write_assets
 from .sources import obsidian_inline, sidecar
 from .tree import build_tree, document_ids, humanize, safe_document_name
@@ -425,7 +425,7 @@ class Handler(SimpleHTTPRequestHandler):
                 occurrence=int(payload.get("occurrence", 0)),
             ),
             kind="comment",
-            color=str(payload.get("color", "amber")),
+            color=_parse_color(payload.get("color", DEFAULT_COLOR)),
             thread=[
                 Comment(
                     body=body,
@@ -587,6 +587,8 @@ class Handler(SimpleHTTPRequestHandler):
 
         if "offset" in payload:
             target.offset = _parse_offset(payload["offset"])
+        if "color" in payload:
+            target.color = _parse_color(payload["color"])
 
         self.workspace.save(doc_id, annotations)
         return HTTPStatus.OK, {"annotation": target.to_dict()}
@@ -673,6 +675,19 @@ class Handler(SimpleHTTPRequestHandler):
     def log_message(self, fmt: str, *args) -> None:
         if self.command != "GET" or "/api/" in self.path:
             super().log_message(fmt, *args)
+
+
+def _parse_color(raw) -> str:
+    """Validate a client-supplied colour: a palette token, nothing else.
+
+    A raw CSS colour is legitimate in a hand-edited sidecar, but it reaches the
+    page as an inline custom property -- so taking one from the browser would
+    be writing a client string into a style attribute. The five tokens are all
+    the picker can produce anyway.
+    """
+    if raw not in COLOR_TOKENS:
+        raise ApiError(HTTPStatus.BAD_REQUEST, f"unknown colour {raw!r}")
+    return raw
 
 
 def _parse_offset(raw) -> Offset | None:

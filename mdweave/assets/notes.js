@@ -119,7 +119,7 @@
     note.style.top = spot.top + "px";
     orient(note, spot.left, spot.top, bounds);
 
-    return { spot: spot, corner: corner, moved: moved };
+    return { spot: spot, moved: moved };
   }
 
   /* Pin every note to its highlight. Pins that would land on top of each other
@@ -127,42 +127,13 @@
   function layout() {
     var bounds = layer.getBoundingClientRect();
     var taken = [];
-    var links = [];
 
     layer.querySelectorAll(".note").forEach(function (note) {
       var placed = place(note, bounds, taken);
-      if (!placed) return;
-      taken.push(placed.spot);
-      if (placed.moved) links.push({ note: note, from: placed.corner, to: placed.spot });
+      if (placed) taken.push(placed.spot);
     });
 
-    drawLinks(links);
     layoutComposer(bounds);
-  }
-
-  /* --- leader lines ------------------------------------------------------ */
-
-  /* A note dragged away from its text loses the visual link to it, so draw a
-   * faint line back to the anchor. Only moved notes get one. */
-  var SVG_NS = "http://www.w3.org/2000/svg";
-  var canvas = document.createElementNS(SVG_NS, "svg");
-  canvas.setAttribute("class", "notes-links");
-  canvas.setAttribute("aria-hidden", "true");
-  layer.insertBefore(canvas, layer.firstChild);
-
-  function drawLinks(links) {
-    while (canvas.firstChild) canvas.removeChild(canvas.firstChild);
-
-    links.forEach(function (link) {
-      var pin = link.note.querySelector(".note__pin");
-      var line = document.createElementNS(SVG_NS, "line");
-      line.setAttribute("x1", link.from.left);
-      line.setAttribute("y1", link.from.top);
-      line.setAttribute("x2", link.to.left + PIN / 2);
-      line.setAttribute("y2", link.to.top + PIN / 2);
-      if (pin) line.setAttribute("stroke", getComputedStyle(pin).backgroundColor);
-      canvas.appendChild(line);
-    });
   }
 
   /* The composer stands in for a note's card before the note exists, so it is
@@ -260,15 +231,12 @@
 
       moved = true;
       note.classList.add("note--dragging");
-      layer.classList.add("notes-layer--dragging");
       note.dataset.dx = String(base.dx + delta.dx);
       note.dataset.dy = String(base.dy + delta.dy);
 
       // Reposition only this note: a full layout on every pointermove would
       // measure every highlight in the document.
-      var bounds = layer.getBoundingClientRect();
-      var placed = place(note, bounds, null);
-      if (placed) drawLinks([{ note: note, from: placed.corner, to: placed.spot }]);
+      place(note, layer.getBoundingClientRect(), null);
     });
 
     function finish(event) {
@@ -280,7 +248,6 @@
       }
       active = null;
       note.classList.remove("note--dragging");
-      layer.classList.remove("notes-layer--dragging");
       if (!moved) return;
 
       moved = false;

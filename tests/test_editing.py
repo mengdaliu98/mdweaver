@@ -482,6 +482,30 @@ def test_offset_survives_a_sidecar_round_trip(tmp_path):
     assert restored.to_dict() == original.to_dict()
 
 
+def test_a_moved_note_is_not_joined_to_its_text_by_a_line():
+    """The dashed leader line is gone, canvas and all.
+
+    A half-removal leaves an empty svg sitting over the notes layer, or a CSS
+    rule for elements nothing creates any more.
+    """
+    js = (ASSETS / "notes.js").read_text(encoding="utf-8")
+    css = (ASSETS.parent / "theme" / "annotations.css").read_text(encoding="utf-8")
+
+    for gone in ("drawLinks", "notes-links", "createElementNS", "notes-layer--dragging"):
+        assert gone not in js, f"notes.js still mentions {gone}"
+        assert gone not in css, f"annotations.css still mentions {gone}"
+
+
+def test_dragging_a_note_still_moves_and_saves_it():
+    """Everything the leader line was drawn alongside has to survive it."""
+    js = strip_js_comments((ASSETS / "notes.js").read_text(encoding="utf-8"))
+
+    assert "note.classList.add(\"note--dragging\")" in js
+    assert "note.dataset.dx = String(base.dx + delta.dx)" in js
+    assert "moveHandler(note.dataset.ann, shift.dx, shift.dy)" in js
+    assert "resetPosition: resetPosition" in js
+
+
 def test_a_zero_offset_is_treated_as_no_offset():
     from mdweave.model import Annotation as A, Offset
 
@@ -587,7 +611,7 @@ def test_the_pending_highlight_is_created_before_the_composer_opens():
     """Order matters: the anchor has to exist when layoutComposer measures."""
     source = strip_js_comments((ASSETS / "annotate.js").read_text(encoding="utf-8"))
     # The semicolon distinguishes the call site from the declaration.
-    wrap_at = source.index('"hl hl--amber hl--pending", PENDING)')
+    wrap_at = source.index('hl--pending", PENDING)')
     open_at = source.index("openComposer(selector);")
     assert wrap_at < open_at, "the pending highlight must exist before the panel opens"
 
@@ -605,7 +629,7 @@ def test_the_composer_anchors_to_the_pending_mark():
     assert 'var PENDING = "__pending__";' in source
     assert "composer.dataset.ann = PENDING;" in source
     # wrapSpan only sets data-ann when given an id, so it must be passed one.
-    assert '"hl hl--amber hl--pending", PENDING' in source
+    assert 'hl--pending", PENDING' in source
 
 
 def test_composer_and_note_cards_share_one_gap_value():

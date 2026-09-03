@@ -8,7 +8,7 @@ Lives next to the markdown as `<doc>.ann.json`:
         {
           "id": "kxejp",
           "kind": "comment",
-          "color": "amber",
+          "color": "yellow",
           "status": "open",
           "target": {"quote": "CRAM/BAM", "prefix": "...", "suffix": "..."},
           "thread": [{"author": "me", "at": "...", "body": "..."}]
