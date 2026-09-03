@@ -1,26 +1,67 @@
-{#- Recursive: a folder renders its children through the same macro. -#}
-{% macro tree_list(nodes, prefix, active, depth) %}
-      <ul class="tree" role="group">
+{#- The per-row controls: create, import, rename, delete.
+
+    Rendered on every row and revealed on hover or focus, so the thing you want
+    to act on is the thing you are pointing at -- and so they stay in the tab
+    order rather than hiding behind a gesture a keyboard cannot make. filetree.js
+    unhides the set once it knows a server is listening; over `file://` there is
+    nothing to write to. -#}
+{% macro row_actions(what, label) %}
+{% set where = "in" if what == "folder" else "beside" %}
+              <span class="tree__actions">
+                <button class="tree__action" type="button" data-action="create"
+                        title="New document" aria-label="New document {{ where }} {{ label }}">
+                  <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M7 2.5v9M2.5 7h9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+                </button>
+                <button class="tree__action" type="button" data-action="import"
+                        title="Import a .md file" aria-label="Import a markdown file {{ where }} {{ label }}">
+                  <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M7 1.8v6.4M4.4 5.9 7 8.5l2.6-2.6M2.4 9.4v1.6h9.2V9.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+{% if what == "file" %}
+                <button class="tree__action" type="button" data-action="rename"
+                        title="Rename" aria-label="Rename {{ label }}">
+                  <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M9.4 2.3 11.7 4.6 5.3 11H3v-2.3z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+                </button>
+                <button class="tree__action tree__action--danger" type="button" data-action="delete"
+                        title="Delete" aria-label="Delete {{ label }}">
+                  <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M2.8 4h8.4M5.6 4V2.6h2.8V4M4 4l.5 7.4h5L10 4" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+{% endif %}
+              </span>
+{% endmacro %}
+{#- Recursive: a folder renders its children through the same macro. `path` is
+    the folder this list sits in, `""` at the root -- the key the arrangement is
+    stored under, and what a drop needs to know to say where it landed. -#}
+{% macro tree_list(nodes, prefix, active, depth, path) %}
+      <ul class="tree" role="group" data-path="{{ path }}">
 {% for node in nodes %}
 {% if node.is_dir %}
         <li class="tree__item">
-          <details class="tree__folder" data-folder="{{ node.name }}" open>
+          <details class="tree__folder" data-folder="{{ node.name }}"
+                   data-path="{{ path }}{% if path %}/{% endif %}{{ node.name }}" open>
             <summary class="tree__row tree__row--folder" style="--depth: {{ depth }}">
               <svg class="tree__chevron" viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2.5 8 6l-4 3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
               <span class="tree__label">{{ node.label }}</span>
+{{ row_actions("folder", node.label) }}
             </summary>
-            {{ tree_list(node.children, prefix, active, depth + 1) }}
+            {{ tree_list(node.children, prefix, active, depth + 1, path ~ ("/" if path else "") ~ node.name) }}
           </details>
         </li>
 {% else %}
+        {# The row is a link, and a link may not contain a button, so the
+           controls are a sibling laid over its right-hand end. #}
         <li class="tree__item">
-          <a class="tree__row tree__row--file{% if node.doc_id == active %} tree__row--active{% endif %}"
-             style="--depth: {{ depth }}"
-             href="{{ prefix }}{{ node.doc_id }}.html"
-             {% if node.doc_id == active %}aria-current="page"{% endif %}>
-            <svg class="tree__icon" viewBox="0 0 14 14" aria-hidden="true"><path d="M3.5 1.5h4.2L11 4.8v7.7H3.5z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M7.6 1.7v3.2h3.2" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
-            <span class="tree__label">{{ node.label }}</span>
-          </a>
+          <div class="tree__file">
+            <a class="tree__row tree__row--file{% if node.doc_id == active %} tree__row--active{% endif %}"
+               style="--depth: {{ depth }}"
+               href="{{ prefix }}{{ node.doc_id }}.html"
+               draggable="true"
+               data-doc="{{ node.doc_id }}" data-name="{{ node.name }}" data-parent="{{ path }}"
+               {% if node.doc_id == active %}aria-current="page"{% endif %}>
+              <svg class="tree__icon" viewBox="0 0 14 14" aria-hidden="true"><path d="M3.5 1.5h4.2L11 4.8v7.7H3.5z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M7.6 1.7v3.2h3.2" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
+              <span class="tree__label">{{ node.label }}</span>
+            </a>
+{{ row_actions("file", node.label) }}
+          </div>
         </li>
 {% endif %}
 {% endfor %}
@@ -43,10 +84,8 @@
     <div class="sidebar__head">
       <span class="sidebar__title">Documents</span>
       <span class="sidebar__actions">
-        <button class="sidebar__import" type="button" id="sidebar-import"
-                title="Import .md files" aria-label="Import markdown files" hidden>
-          <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M7 2.5v9M2.5 7h9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
-        </button>
+        {# Shared by every row's import button: which folder it lands in is
+           whichever row was clicked, not a property of the picker. #}
         <input type="file" id="sidebar-file" accept=".md,text/markdown" multiple hidden>
         <button class="sidebar__collapse" type="button" id="sidebar-collapse"
                 title="Hide sidebar" aria-label="Hide sidebar" aria-expanded="true">
@@ -56,10 +95,13 @@
     </div>
     <div class="sidebar__dropzone" aria-hidden="true"><span>Drop .md files to import</span></div>
 {% if tree %}
-    {{ tree_list(tree, prefix, doc_id, 0) }}
+    {{ tree_list(tree, prefix, doc_id, 0, "") }}
 {% else %}
     <p class="sidebar__empty">No documents found.</p>
 {% endif %}
+    {# The rest of the panel. A drop that lands here means "the top level",
+       which is the only way to get a document back out of a folder. #}
+    <div class="sidebar__root" id="sidebar-root" data-path=""></div>
   </nav>
 
   {# Drag to set the panel width. A separator rather than a button: it has a

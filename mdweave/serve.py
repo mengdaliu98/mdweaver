@@ -30,7 +30,14 @@ from . import edits
 from .model import COLOR_TOKENS, DEFAULT_COLOR, Annotation, Comment, Offset, TextTarget
 from .render import render_document, write_assets
 from .sources import obsidian_inline, sidecar
-from .tree import build_tree, document_ids, humanize, safe_document_name
+from .tree import (
+    build_tree,
+    document_ids,
+    humanize,
+    load_order,
+    safe_document_name,
+    save_order,
+)
 
 ID_ALPHABET = string.ascii_lowercase + string.digits
 ID_LENGTH = 5
@@ -100,6 +107,43 @@ class Workspace:
         except KeyError:
             raise ApiError(HTTPStatus.NOT_FOUND, f"unknown document: {doc_id!r}")
 
+    def folders(self) -> dict[str, Path]:
+        """Every folder under the markdown root, keyed by path; `""` is the root.
+
+        The counterpart of `documents()` for the other half of a move. Same
+        guard, for the same reason: a client names a folder that is already
+        there, rather than handing over a string to be joined onto a path.
+        """
+        found: dict[str, Path] = {"": self.inputs}
+        if not self.inputs.is_dir():
+            return found
+
+        for path in sorted(self.inputs.rglob("*")):
+            if not path.is_dir():
+                continue
+            relative = path.relative_to(self.inputs)
+            # .obsidian and friends are not part of the navigation, so they are
+            # not somewhere a document can be dropped either.
+            if any(part.startswith(".") for part in relative.parts):
+                continue
+            found[relative.as_posix()] = path
+        return found
+
+    def folder_for(self, folder: str) -> Path:
+        try:
+            return self.folders()[folder.replace("\\", "/").strip("/")]
+        except KeyError:
+            raise ApiError(HTTPStatus.NOT_FOUND, f"unknown folder: {folder!r}")
+
+    def children_of(self, folder: str) -> set[str]:
+        """The names the sidebar draws directly inside one folder."""
+        prefix = f"{folder}/" if folder else ""
+        return {
+            doc_id[len(prefix) :].split("/", 1)[0]
+            for doc_id in self.documents()
+            if doc_id.startswith(prefix)
+        }
+
     def annotations_for(self, doc_id: str) -> list[Annotation]:
         md = self.markdown_for(doc_id)
         annotations = sidecar.load(sidecar.sidecar_path(md))
@@ -117,8 +161,12 @@ class Workspace:
             annotations,
             title=humanize(md.stem),
             doc_id=doc_id,
-            tree=tree if tree is not None else build_tree(list(self.documents())),
+            tree=tree if tree is not None else self.tree(),
         )
+
+    def tree(self):
+        """The sidebar, arranged the way the reader last dragged it."""
+        return build_tree(list(self.documents()), load_order(self.inputs))
 
     def write_html(self, doc_id: str, annotations: list[Annotation], tree=None):
         result = self.render(doc_id, annotations, tree=tree)
@@ -141,26 +189,154 @@ class Workspace:
         """
         write_assets(self.outputs)
         documents = self.documents()
-        tree = build_tree(list(documents))
+        tree = self.tree()
         for doc_id in documents:
             self.write_html(doc_id, self.annotations_for(doc_id), tree=tree)
 
-    def add_document(self, raw_name: str, content: str, replace: bool) -> str:
+    def add_document(
+        self, raw_name: str, content: str, replace: bool, folder: str = ""
+    ) -> str:
         """Write an imported markdown file and return its document id."""
+        directory = self.folder_for(folder)
         try:
             name = safe_document_name(raw_name)
         except ValueError as exc:
             raise ApiError(HTTPStatus.BAD_REQUEST, str(exc))
 
-        target = self.inputs / name
+        target = directory / name
         if target.exists() and not replace:
             raise ApiError(
                 HTTPStatus.CONFLICT, f"a document called {name!r} already exists"
             )
 
-        self.inputs.mkdir(parents=True, exist_ok=True)
+        directory.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
-        return target.stem
+        return self._id_of(target)
+
+    # --- rearranging the tree ---------------------------------------------
+
+    def _id_of(self, path: Path) -> str:
+        return path.relative_to(self.inputs).with_suffix("").as_posix()
+
+    def destination(self, target: str) -> tuple[str, Path]:
+        """Split a proposed document id into a folder that exists and a safe name.
+
+        Both halves are guarded, and differently. The folder is looked up in
+        `folders()` and never joined, so `../escape` asks for a folder called
+        `..` and gets a 404. The leaf goes through `safe_document_name`, which
+        throws away any path it is given. Neither half can name a file outside
+        the markdown root, which is the property every write here depends on.
+        """
+        cleaned = target.replace("\\", "/").strip("/")
+        folder, _, leaf = cleaned.rpartition("/")
+        directory = self.folder_for(folder)
+
+        # The client sends an id, which has no suffix -- but tolerate one, so
+        # that a rename typed as "weekly.md" does not become "weekly.md.md".
+        if not leaf.lower().endswith(".md"):
+            leaf += ".md"
+        try:
+            name = safe_document_name(leaf)
+        except ValueError as exc:
+            raise ApiError(HTTPStatus.BAD_REQUEST, str(exc))
+
+        stem = name[: -len(".md")]
+        return (f"{folder}/{stem}" if folder else stem), directory / name
+
+    def create_document(self, target: str) -> str:
+        """Make a new document, and return its id."""
+        doc_id, path = self.destination(target)
+        if path.exists():
+            raise ApiError(
+                HTTPStatus.CONFLICT, f"a document called {doc_id!r} already exists"
+            )
+
+        # Not literally empty: a file with no blocks in it renders a page with
+        # nothing to click, and clicking a block is the only way to edit one.
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"# {humanize(path.stem)}\n", encoding="utf-8")
+        return doc_id
+
+    def move_document(self, doc_id: str, target: str) -> str:
+        """Move or rename a document, and return the id it now has.
+
+        A rename is a move to the same folder -- the id is the path, so there
+        is no second operation to write.
+        """
+        source = self.markdown_for(doc_id)
+        new_id, path = self.destination(target)
+        if new_id == doc_id:
+            return doc_id
+        if path.exists():
+            raise ApiError(
+                HTTPStatus.CONFLICT, f"a document called {new_id!r} already exists"
+            )
+
+        # The sidecar's name is derived from the markdown's, so leaving it
+        # behind would silently orphan every annotation on the document.
+        beside = sidecar.sidecar_path(source)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        source.rename(path)
+        if beside.exists():
+            beside.rename(sidecar.sidecar_path(path))
+
+        # The generated page is named after the old id, which no document
+        # claims any more; `rebuild_all` writes the new one but has no reason
+        # to go looking for the file it replaced.
+        (self.outputs / f"{doc_id}.html").unlink(missing_ok=True)
+
+        self._reindex(doc_id, new_id)
+        return new_id
+
+    def delete_document(self, doc_id: str) -> None:
+        """Remove a document, its annotations, and the page built from them."""
+        markdown = self.markdown_for(doc_id)
+        beside = sidecar.sidecar_path(markdown)
+
+        markdown.unlink()
+        beside.unlink(missing_ok=True)
+        (self.outputs / f"{doc_id}.html").unlink(missing_ok=True)
+
+        self._reindex(doc_id, None)
+
+    def set_order(self, folder: str, names: list[str]) -> list[str]:
+        """Remember the order of one folder's children."""
+        self.folder_for(folder)  # 404s a folder that is not there
+        children = self.children_of(folder)
+
+        # Only names the sidebar actually draws. A stale entry is harmless --
+        # `_sort` ignores what it cannot find -- but the file is read by people
+        # too, and letting it accumulate ghosts makes it unreadable.
+        kept = [name for name in names if name in children]
+
+        order = load_order(self.inputs)
+        if kept:
+            order[folder] = kept
+        else:
+            order.pop(folder, None)
+        save_order(self.inputs, order)
+        return kept
+
+    def _reindex(self, old_id: str, new_id: str | None) -> None:
+        """Follow a move or a delete through the hand-arranged order."""
+        old_folder, _, old_name = old_id.rpartition("/")
+        order = load_order(self.inputs)
+        listed = order.get(old_folder)
+        if not listed or old_name not in listed:
+            return
+
+        at = listed.index(old_name)
+        listed.pop(at)
+        if new_id is not None:
+            new_folder, _, new_name = new_id.rpartition("/")
+            # A rename keeps its place. Dropping it back among the unranked
+            # would send a row to the bottom of the folder for the crime of
+            # being given a better name.
+            if new_folder == old_folder:
+                listed.insert(at, new_name)
+
+        order[old_folder] = listed
+        save_order(self.inputs, order)
 
     # --- editing the prose ------------------------------------------------
 
@@ -397,6 +573,14 @@ class Handler(SimpleHTTPRequestHandler):
         route = urlparse(self.path)
         if route.path == "/api/documents":
             return self._api_import()
+        if route.path == "/api/documents/create":
+            return self._api_create()
+        if route.path == "/api/documents/move":
+            return self._api_move()
+        if route.path == "/api/documents/delete":
+            return self._api_delete_document()
+        if route.path == "/api/tree/order":
+            return self._api_order()
         if route.path == "/api/block":
             return self._api_block()
         if route.path == "/api/cut":
@@ -458,19 +642,64 @@ class Handler(SimpleHTTPRequestHandler):
         if not isinstance(content, str):
             raise ApiError(HTTPStatus.BAD_REQUEST, "'content' must be a string")
 
-        doc_id = self.workspace.add_document(name, content, bool(payload.get("replace")))
+        doc_id = self.workspace.add_document(
+            name,
+            content,
+            bool(payload.get("replace")),
+            folder=_optional(payload, "folder"),
+        )
 
         # Every page carries its own sidebar, so they all need regenerating for
         # the new document to be reachable -- no restart involved.
         self.workspace.rebuild_all()
 
-        return HTTPStatus.CREATED, {
-            "document": {
-                "id": doc_id,
-                "href": f"{doc_id}.html",
-                "label": humanize(doc_id),
-            }
-        }
+        return HTTPStatus.CREATED, _described(doc_id)
+
+    def _api_create(self):
+        """Make a new, empty document where the reader asked for one."""
+        payload = self._json_body()
+        doc_id = self.workspace.create_document(_require(payload, "path"))
+        self.workspace.rebuild_all()
+        return HTTPStatus.CREATED, _described(doc_id)
+
+    def _api_move(self):
+        """Move a document into another folder, or rename it -- one operation.
+
+        A document's id is its path, so both are the same write: `notes/weekly`
+        to `archive/weekly` is a drag, and to `notes/summary` is a rename.
+        """
+        payload = self._json_body()
+        doc_id = self.workspace.move_document(
+            _require(payload, "from"), _require(payload, "to")
+        )
+        self.workspace.rebuild_all()
+        return HTTPStatus.OK, _described(doc_id)
+
+    def _api_delete_document(self):
+        """Throw a document away -- the prose, its annotations, and its page."""
+        payload = self._json_body()
+        doc_id = _require(payload, "document")
+
+        self.workspace.delete_document(doc_id)
+        self.workspace.rebuild_all()
+        return HTTPStatus.OK, {"deleted": doc_id}
+
+    def _api_order(self):
+        """Persist the order the reader dragged one folder's children into."""
+        payload = self._json_body()
+        folder = payload.get("folder", "")
+        if not isinstance(folder, str):
+            raise ApiError(HTTPStatus.BAD_REQUEST, "'folder' must be a string")
+
+        names = payload.get("order")
+        if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+            raise ApiError(HTTPStatus.BAD_REQUEST, "'order' must be a list of names")
+
+        kept = self.workspace.set_order(folder, names)
+        # The arrangement is baked into every page's sidebar, same as the set
+        # of documents is.
+        self.workspace.rebuild_all()
+        return HTTPStatus.OK, {"folder": folder, "order": kept}
 
     def _api_block(self):
         """Replace one block's markdown -- clicking a paragraph and typing."""
@@ -749,6 +978,24 @@ def _line_range(payload: dict) -> tuple[int, int]:
     if end <= line:
         raise ApiError(HTTPStatus.BAD_REQUEST, f"bad line range {line}-{end}")
     return line, end
+
+
+def _described(doc_id: str) -> dict:
+    """What the browser needs to open a document it has just caused to exist."""
+    return {
+        "document": {
+            "id": doc_id,
+            "href": f"{doc_id}.html",
+            "label": humanize(doc_id.rpartition("/")[2]),
+        }
+    }
+
+
+def _optional(payload: dict, key: str) -> str:
+    value = payload.get(key, "")
+    if not isinstance(value, str):
+        raise ApiError(HTTPStatus.BAD_REQUEST, f"{key!r} must be a string")
+    return value
 
 
 def _require(payload: dict, key: str) -> str:

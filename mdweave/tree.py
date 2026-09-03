@@ -8,9 +8,15 @@ API takes.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+
+# Where a hand-arranged tree is remembered. A dotfile at the markdown root, so
+# it travels with the documents in the contents repo -- and so `document_ids`
+# never sees it: it only looks at `*.md`, and skips dotted paths on top of that.
+ORDER_FILE = ".mdweave-order.json"
 
 
 def humanize(name: str) -> str:
@@ -80,7 +86,41 @@ def document_ids(root: Path) -> dict[str, Path]:
     return found
 
 
-def build_tree(doc_ids: list[str]) -> list[Node]:
+def load_order(root: Path) -> dict[str, list[str]]:
+    """The hand-arranged order, keyed by folder path -- `""` being the root.
+
+    Absent, unreadable, or hand-mangled all mean the same thing: fall back to
+    the alphabetical sort. A broken dotfile must never take the sidebar with
+    it, so anything that is not a list of strings is dropped on the floor.
+    """
+    path = root / ORDER_FILE
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {
+        str(folder): [n for n in names if isinstance(n, str)]
+        for folder, names in data.items()
+        if isinstance(names, list)
+    }
+
+
+def save_order(root: Path, order: dict[str, list[str]]) -> None:
+    """Write the hand-arranged order back, or remove it once nothing is left."""
+    path = root / ORDER_FILE
+    trimmed = {folder: names for folder, names in order.items() if names}
+    if not trimmed:
+        path.unlink(missing_ok=True)
+        return
+    root.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(trimmed, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+
+def build_tree(doc_ids: list[str], order: dict[str, list[str]] | None = None) -> list[Node]:
     """Assemble a nested tree from flat document ids."""
     root = Node(name="", label="", is_dir=True)
 
@@ -104,15 +144,27 @@ def build_tree(doc_ids: list[str]) -> list[Node]:
                 cursor.children.append(match)
             cursor = match
 
-    _sort(root)
+    _sort(root, order or {}, "")
     return root.children
 
 
-def _sort(node: Node) -> None:
-    """Folders first, then documents, each alphabetical -- as VS Code shows it."""
-    node.children.sort(key=lambda c: (not c.is_dir, c.label.lower()))
+def _sort(node: Node, order: dict[str, list[str]], path: str) -> None:
+    """Hand-arranged first, then folders before documents, then alphabetical.
+
+    A name the reader has never dragged has no rank, so it takes one past the
+    end of the list and falls back to the old sort among its own kind. That is
+    what keeps a document someone else added from landing in the middle of an
+    arrangement it was never part of.
+    """
+    listed = order.get(path) or []
+
+    def rank(child: Node) -> tuple[int, bool, str]:
+        at = listed.index(child.name) if child.name in listed else len(listed)
+        return (at, not child.is_dir, child.label.lower())
+
+    node.children.sort(key=rank)
     for child in node.children:
-        _sort(child)
+        _sort(child, order, f"{path}/{child.name}" if path else child.name)
 
 
 def relative_prefix(doc_id: str) -> str:

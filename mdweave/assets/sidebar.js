@@ -177,19 +177,36 @@
   /* --- importing ---------------------------------------------------------- */
 
   var ui = window.mdweaveUI;
-  var importButton = document.getElementById("sidebar-import");
   var filePicker = document.getElementById("sidebar-file");
   var PREFIX = document.body.dataset.prefix || "";
   var DOCUMENTS_API = "/api/documents";
   var REJECTED = "only markdown files are supported";
 
+  /* Which folder the next import lands in. The picker is one element shared by
+   * every row's import button, so the destination is remembered here between
+   * the click and the `change` it eventually produces. */
+  var pendingFolder = "";
+
   function isMarkdown(file) {
     return /\.md$/i.test(file.name);
   }
 
+  /* The folder a drop landed in: the innermost one enclosing the cursor.
+   * An expanded folder's <details> spans its whole subtree, so dropping on a
+   * document inside it puts the new file beside that document, not at the
+   * top level -- which is what "into that folder" has to mean. */
+  function detailsAt(target) {
+    return target && target.closest ? target.closest(".tree__folder") : null;
+  }
+
+  function folderAt(target) {
+    var details = detailsAt(target);
+    return details ? details.dataset.path || "" : "";
+  }
+
   /* Send one file. A name clash comes back as 409; ask, then retry with an
    * explicit replace rather than silently overwriting the reader's work. */
-  function upload(file, replace) {
+  function upload(file, folder, replace) {
     return file
       .text()
       .then(function (content) {
@@ -199,6 +216,7 @@
           body: JSON.stringify({
             name: file.name,
             content: content,
+            folder: folder || "",
             replace: !!replace,
           }),
         });
@@ -208,7 +226,7 @@
           var again = window.confirm(
             '"' + file.name + '" already exists here. Replace it?'
           );
-          return again ? upload(file, true) : null;
+          return again ? upload(file, folder, true) : null;
         }
         if (!response.ok) return ui.reject(response);
         return response.json().then(function (payload) {
@@ -221,7 +239,7 @@
       });
   }
 
-  function importFiles(list) {
+  function importFiles(list, folder) {
     var files = Array.prototype.slice.call(list || []);
     if (!files.length) return;
 
@@ -238,7 +256,7 @@
     markdown
       .reduce(function (chain, file) {
         return chain.then(function (done) {
-          return upload(file).then(function (doc) {
+          return upload(file, folder).then(function (doc) {
             if (doc) done.push(doc);
             return done;
           });
@@ -254,12 +272,16 @@
       });
   }
 
-  if (importButton && filePicker) {
-    importButton.addEventListener("click", function () {
-      filePicker.click();
-    });
+  /* Open the file picker on behalf of one row. */
+  function importInto(folder) {
+    if (!filePicker) return;
+    pendingFolder = folder || "";
+    filePicker.click();
+  }
+
+  if (filePicker) {
     filePicker.addEventListener("change", function () {
-      importFiles(filePicker.files);
+      importFiles(filePicker.files, pendingFolder);
       filePicker.value = ""; // so re-picking the same file fires change again
     });
   }
@@ -276,6 +298,27 @@
     event.preventDefault();
   });
 
+  /* Files from the desktop, as opposed to a row being dragged within the tree
+   * -- which filetree.js handles, and which must not put the panel into the
+   * "drop a file here" state. */
+  function hasFiles(event) {
+    var types = event.dataTransfer && event.dataTransfer.types;
+    return !!types && Array.prototype.indexOf.call(types, "Files") !== -1;
+  }
+
+  /* Which folder row is lit as the destination. The drop lands wherever the
+   * cursor is, so something has to say where that is -- a panel-wide highlight
+   * would be a lie now that the top level is not the only answer. */
+  var lit = null;
+
+  function light(details) {
+    var row = details ? details.firstElementChild : null;
+    if (lit === row) return;
+    if (lit) lit.classList.remove("tree__row--into");
+    lit = row;
+    if (row) row.classList.add("tree__row--into");
+  }
+
   function enableDrop() {
     // dragenter/dragleave fire for every child element crossed, so count the
     // nesting rather than toggling on each one.
@@ -283,26 +326,32 @@
 
     function setActive(on) {
       sidebar.classList.toggle("sidebar--drop", on);
+      if (!on) light(null);
     }
 
     sidebar.addEventListener("dragenter", function (event) {
+      if (!hasFiles(event)) return;
       event.preventDefault();
       depth += 1;
       setActive(true);
     });
     sidebar.addEventListener("dragover", function (event) {
+      if (!hasFiles(event)) return;
       event.preventDefault();
       if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+      light(detailsAt(event.target));
     });
-    sidebar.addEventListener("dragleave", function () {
+    sidebar.addEventListener("dragleave", function (event) {
+      if (!hasFiles(event)) return;
       depth = Math.max(0, depth - 1);
       if (!depth) setActive(false);
     });
     sidebar.addEventListener("drop", function (event) {
+      if (!hasFiles(event)) return;
       event.preventDefault();
       depth = 0;
       setActive(false);
-      importFiles(event.dataTransfer && event.dataTransfer.files);
+      importFiles(event.dataTransfer.files, folderAt(event.target));
     });
   }
 
@@ -310,9 +359,12 @@
   if (ui) {
     ui.api().then(function (health) {
       if (!health) return;
-      if (importButton) importButton.hidden = false;
       sidebar.classList.add("sidebar--importable");
       enableDrop();
     });
   }
+
+  /* filetree.js drives the per-row controls; importing stays here, so it hands
+   * over the one entry point rather than a second copy of the upload dance. */
+  window.mdweaveSidebar = { importInto: importInto, folderAt: folderAt };
 })();

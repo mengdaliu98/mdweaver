@@ -123,6 +123,7 @@ def render_document(
     js_srcs: tuple[str, ...] = (
         "assets/ui.js",
         "assets/sidebar.js",
+        "assets/filetree.js",
         "assets/notes.js",
         "assets/annotate.js",
         "assets/edit.js",
@@ -236,7 +237,7 @@ def write_assets(outdir: Path) -> None:
     )
 
     scripts = (
-        "ui.js", "sidebar.js", "notes.js", "annotate.js",
+        "ui.js", "sidebar.js", "filetree.js", "notes.js", "annotate.js",
         "edit.js", "copy.js", "refresh.js", "checkpoint.js",
     )
     for script in scripts:
