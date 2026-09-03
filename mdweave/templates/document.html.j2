@@ -62,10 +62,43 @@
 {% endif %}
   </nav>
 
+  {# Drag to set the panel width. A separator rather than a button: it has a
+     value along one axis, which is also why the arrow keys work on it. #}
+  <div class="sidebar-resize" id="sidebar-resize" role="separator"
+       aria-orientation="vertical" aria-label="Resize sidebar" tabindex="0"></div>
+
   <button class="sidebar-show" type="button" id="sidebar-show"
           title="Show sidebar" aria-label="Show sidebar" hidden>
     <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M5 3l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
   </button>
+
+  {# Page-level actions. Hidden until the server answers, like every other
+     control that reaches back to it. #}
+  <div class="page-actions">
+    <button class="page-action page-action--icon" type="button" id="refresh"
+            title="Reload this document from disk" aria-label="Refresh" hidden>
+      <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M11.95 8.75a5.25 5.25 0 1 1-1.24-5.46l2.71 2.54M13.42 2.33v3.5h-3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <button class="page-action" type="button" id="checkpoint"
+            title="Commit and push this document" hidden>
+      <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M7 1.8v10.4M2.6 6.2 7 1.8l4.4 4.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span>Checkpoint</span>
+    </button>
+  </div>
+
+  <dialog class="checkpoint-dialog" id="checkpoint-dialog" aria-labelledby="checkpoint-title">
+    <form method="dialog" id="checkpoint-form">
+      <h2 class="checkpoint-dialog__title" id="checkpoint-title">Checkpoint this document</h2>
+      <p class="checkpoint-dialog__what" id="checkpoint-what"></p>
+      <textarea class="checkpoint-dialog__message" id="checkpoint-message" rows="3"
+                placeholder="What changed?" aria-label="Commit message"></textarea>
+      <p class="checkpoint-dialog__error" id="checkpoint-error" hidden></p>
+      <div class="checkpoint-dialog__actions">
+        <button type="button" class="checkpoint-dialog__cancel" id="checkpoint-cancel">Cancel</button>
+        <button type="submit" class="checkpoint-dialog__submit" id="checkpoint-submit">Commit and push</button>
+      </div>
+    </form>
+  </dialog>
 
   <main class="main">
     <div class="page">
