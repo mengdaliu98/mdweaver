@@ -7,6 +7,14 @@
   --sidebar-w: 16rem;
   --tree-indent: 0.85rem;
   --tree-row-h: 1.65rem;
+  /* Only Delete uses this, and only on hover. Kept here rather than in
+     base.css so the one destructive control in the tree does not need a
+     site-wide token invented for it. */
+  --tree-danger: rgb(192, 57, 43);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root { --tree-danger: rgb(248, 130, 118); }
 }
 
 .shell {
@@ -159,6 +167,7 @@ body.sidebar-resizing {
 
 /* Every row is indented by its depth, so nesting reads at a glance. */
 .tree__row {
+  position: relative; /* the per-row controls hang off the right-hand end */
   display: flex;
   align-items: center;
   gap: 0.32rem;
@@ -193,6 +202,7 @@ body.sidebar-resizing {
 }
 
 .tree__label {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -266,58 +276,150 @@ body.sidebar-resizing {
   gap: 0.1rem;
 }
 
-.sidebar__import {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.5rem;
-  height: 1.5rem;
-  padding: 0;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--ink-faint);
-  cursor: pointer;
-}
+/* A banner along the foot of the panel while a drag is over it, not a cover.
+   It used to cover: there was one destination, so the tree underneath did not
+   matter. Now the folder the cursor is over is the destination, and hiding the
+   tree would hide the only thing telling you where the file is about to land.
 
-.sidebar__import[hidden] { display: none; }
-
-.sidebar__import:hover {
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  color: var(--accent);
-}
-
-.sidebar__import svg { width: 14px; height: 14px; }
-
-/* Covers the panel while a drag is over it. Fixed rather than absolute: the
-   panel scrolls, and an absolutely positioned overlay would scroll away with
-   its content. The panel is a fixed-width strip down the left edge, so these
-   coordinates track it exactly in both the docked and the narrow-screen mode. */
+   Fixed rather than absolute: the panel scrolls, and an absolutely positioned
+   overlay would scroll away with its content. The panel is a fixed-width strip
+   down the left edge, so these coordinates track it exactly in both the docked
+   and the narrow-screen mode. */
 .sidebar__dropzone {
   position: fixed;
-  top: 0;
+  bottom: 0;
   left: 0;
   width: var(--sidebar-w);
-  height: 100vh;
   z-index: 3;
   display: none;
   align-items: center;
   justify-content: center;
-  padding: 1rem;
+  padding: 0.55rem 0.75rem;
   text-align: center;
   background: color-mix(in srgb, var(--accent) 12%, var(--surface-sunk));
-  border: 2px dashed var(--accent);
-  border-radius: 8px;
+  border-top: 2px dashed var(--accent);
   color: var(--accent);
   font-weight: 600;
   pointer-events: none;
 }
 
 .sidebar--drop .sidebar__dropzone { display: flex; }
+.sidebar--drop { box-shadow: inset 0 0 0 2px var(--accent); }
 
 .sidebar--busy { cursor: progress; }
 .sidebar--busy .tree { opacity: 0.5; pointer-events: none; }
 
 @media print {
   .sidebar__dropzone { display: none !important; }
+}
+
+/* --- managing the files -------------------------------------------------- */
+
+/* The rest of the panel below the tree. A drop here means the top level, which
+   is the only way to get a document back out of a folder. */
+.sidebar__root { min-height: 6rem; }
+
+/* A document row and the controls laid over its right-hand end. */
+.tree__file { position: relative; }
+
+.tree__file:hover > .tree__row--file {
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+  color: var(--ink);
+}
+
+/* Absolutely positioned and faded out rather than `display: none`, because a
+   hidden button is not in the tab order -- and these have to be reachable
+   without a mouse. Out of flow so they cost the label no width until they are
+   actually showing. */
+.tree__actions {
+  position: absolute;
+  top: 0;
+  right: 0.2rem;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.05rem;
+  padding-left: 0.35rem;
+  opacity: 0;
+  pointer-events: none;
+  /* Opaque, so a long label runs behind them rather than through them. The
+     tints below mirror the row states exactly; a mismatch here shows up as a
+     pale rectangle sitting on a highlighted row. */
+  background: var(--surface-sunk);
+}
+
+.tree__row--folder:hover > .tree__actions,
+.tree__file:hover > .tree__actions {
+  background: color-mix(in srgb, var(--ink) 6%, var(--surface-sunk));
+}
+
+.tree__row--active ~ .tree__actions {
+  background: color-mix(in srgb, var(--accent) 13%, var(--surface-sunk));
+}
+
+.tree__file:hover > .tree__row--active ~ .tree__actions {
+  background: color-mix(in srgb, var(--accent) 18%, var(--surface-sunk));
+}
+
+/* Only once a server has answered: all four write to disk. */
+.sidebar--manageable .tree__row--folder:hover > .tree__actions,
+.sidebar--manageable .tree__row--folder:focus-within > .tree__actions,
+.sidebar--manageable .tree__file:hover > .tree__actions,
+.sidebar--manageable .tree__file:focus-within > .tree__actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.tree__action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 1.15rem;
+  height: 1.15rem;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+
+.tree__action svg { width: 12px; height: 12px; }
+
+.tree__action:hover {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+}
+
+.tree__action--danger:hover {
+  background: color-mix(in srgb, var(--tree-danger) 16%, transparent);
+  color: var(--tree-danger);
+}
+
+.tree__action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* --- dragging a row ------------------------------------------------------ */
+
+.tree__row--dragging { opacity: 0.4; }
+
+/* Where the drop would land. `--into` is the folder itself; the other two are
+   the line between two rows, drawn on the near edge of the row below or the
+   far edge of the row above. These come after `--active` deliberately: while a
+   drag is in flight, where it lands matters more than where you are. */
+.tree__row--into {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.tree__row--before { box-shadow: inset 0 2px 0 var(--accent); }
+.tree__row--after { box-shadow: inset 0 -2px 0 var(--accent); }
+
+.sidebar--root-drop { box-shadow: inset 0 0 0 2px var(--accent); }
+
+@media print {
+  .tree__actions, .sidebar__root { display: none !important; }
 }

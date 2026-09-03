@@ -72,13 +72,42 @@ Every page carries a VS Code style explorer over `knowledge_base/markdown_inputs
 so any document is one click away. Folders are collapsible and remember their
 state; the panel itself can be hidden and stays hidden across navigations.
 
-**Importing.** The `+` in the panel header opens Finder; you can also drag
-`.md` files onto the panel, which highlights as you drag over it. Either way
-the file is copied into `markdown_inputs/`, rendered, and opened — no restart,
-because every page is regenerated so all their sidebars pick it up. A name
-clash asks before replacing. Filenames are reduced to something safe to write
-and link to: any path is discarded down to the bare name, spaces become
-underscores, and characters that break filenames or URLs are dropped.
+**Managing the files.** Hover a row — a folder or a document — and four
+controls appear on its right: `+` makes a new document, the tray arrow imports
+one from disk, and on a document row the pencil renames and the bin deletes.
+Where they act is the row they hang off: *in* that folder, or *beside* that
+document at its level. They are ordinary buttons, so `Tab` reaches them too;
+they are laid over the label rather than taking width from it, which is why
+they are faded out rather than hidden.
+
+Delete asks first. It takes the prose, the `.ann.json` beside it, and the
+rendered page, and none of that comes back.
+
+**Importing.** The tray arrow on any row opens Finder; you can also drag `.md`
+files onto the panel, and the folder under the cursor lights up as the one they
+will land in — an expanded folder covers its whole subtree, so dropping on a
+document inside it puts the file beside that document. Either way the file is
+copied into `markdown_inputs/`, rendered, and opened — no restart, because
+every page is regenerated so all their sidebars pick it up. A name clash asks
+before replacing. Filenames are reduced to something safe to write and link to:
+any path is discarded down to the bare name, spaces become underscores, and
+characters that break filenames or URLs are dropped.
+
+**Rearranging.** Drag a document row onto a folder to move it in, onto the
+empty space below the tree to bring it back out to the top level, or between
+two rows to put it exactly there. A document's id is its path, so moving it
+renames it: the `.md`, its `.ann.json`, and its generated `.html` all travel
+together, and the page at the old address is removed rather than left to serve
+a document that has gone. Renaming from the pencil is the same operation, and
+keeps the row's position rather than sending it to the bottom of the folder.
+
+Order is not a property of the filesystem, so it is written down:
+`markdown_inputs/.mdweave-order.json` maps a folder path — `""` for the root —
+to the order of its children. Anything not listed falls back to the old sort,
+folders first and then alphabetical, *after* the names that are listed; a
+document someone else adds appears at the end rather than in the middle of an
+arrangement it was never part of. Delete the file and the tree goes back to
+being sorted.
 
 Anything that is not a `.md` is refused with **only markdown files are
 supported**, centred on the page rather than tucked into the corner a toast
@@ -86,8 +115,8 @@ lives in — mid-drag your eye is on the cursor, not down there. Click it,
 press `Esc`, or wait, and it goes. The check is on both sides: the browser
 filters the drop, and `/api/documents` refuses the same thing again.
 
-Import needs the server, like commenting; over `file://` the button stays
-hidden.
+All of this writes to disk, so it needs the server, like commenting. Over
+`file://` the row controls never appear and a dragged row goes nowhere.
 
 Labels drop the `.md` and read as prose, in sentence case: underscores *and*
 hyphens become spaces, the first letter goes up, and the rest goes down.
@@ -343,6 +372,7 @@ wins on conflict.
   structure is decided.
 - **Interactivity**: `mdweave/assets/` holds `ui.js` (toasts, the centred
   notice, the shared server probe), `sidebar.js` (tree state, importing),
+  `filetree.js` (the per-row controls and dragging rows about),
   `notes.js` (sticky notes), `annotate.js` (selecting and commenting),
   `edit.js` (editing prose in place), `refresh.js` (re-render from disk) and
   `checkpoint.js` (commit and push). Plain ES5, no build step, copied verbatim

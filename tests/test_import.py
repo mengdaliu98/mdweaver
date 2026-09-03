@@ -272,10 +272,14 @@ def test_dropping_elsewhere_cannot_navigate_the_page_away():
     assert 'window.addEventListener("dragover"' in source
 
 
-def test_the_import_button_is_hidden_until_a_server_answers():
-    source = (ASSETS / "sidebar.js").read_text(encoding="utf-8")
-    assert "ui.api()" in source
-    assert "importButton.hidden = false" in source
+def test_importing_only_turns_on_once_a_server_answers():
+    """The per-row buttons live in filetree.js now; the drop still lives here."""
+    sidebar = (ASSETS / "sidebar.js").read_text(encoding="utf-8")
+    filetree = (ASSETS / "filetree.js").read_text(encoding="utf-8")
+
+    assert "ui.api()" in sidebar
+    assert "enableDrop()" in sidebar.split("ui.api()")[1]
+    assert "ui.api()" in filetree
 
 
 def test_a_rejected_drop_is_reported_in_the_middle_of_the_page():
