@@ -20,9 +20,11 @@ RUN pip install --no-cache-dir .
 COPY deploy/start.sh /usr/local/bin/mdweave-start
 RUN chmod +x /usr/local/bin/mdweave-start
 
-# Where start.sh puts the clone. A Railway volume can be mounted here to keep
-# edits that were never checkpointed; without one, git is the storage.
+# Where start.sh puts the clone. Mount a Railway volume at /data to keep edits
+# that were never checkpointed; without one, git is the storage.
+#
+# No `VOLUME` instruction: Railway rejects the Dockerfile outright if it finds
+# one, because mounts are declared on the service, not in the image.
 ENV MDWEAVE_CONTENTS=/data/knowledge_base
-VOLUME ["/data"]
 
 CMD ["mdweave-start"]
