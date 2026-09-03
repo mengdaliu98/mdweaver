@@ -26,6 +26,75 @@
     return el;
   }
 
+  /* A message in the middle of the page.
+   *
+   * For a failure about the gesture rather than the document -- a dropped file
+   * we cannot take. The eye is on the cursor mid-drop, nowhere near the corner
+   * a toast lives in, so that one is too easy to miss. Dismissed by clicking
+   * it, by Escape, or by waiting. */
+  var noticeEl = null;
+  var noticeTimer = null;
+
+  function dismissNotice() {
+    if (noticeTimer) {
+      clearTimeout(noticeTimer);
+      noticeTimer = null;
+    }
+    if (!noticeEl) return;
+
+    var el = noticeEl;
+    noticeEl = null;
+    el.classList.add("mdweave-notice--out");
+    setTimeout(function () {
+      el.remove();
+    }, FADE_MS);
+  }
+
+  function notice(message) {
+    dismissNotice(); // one at a time -- a second bad drop replaces the first
+
+    var el = document.createElement("div");
+    el.className = "mdweave-notice";
+    el.setAttribute("role", "alert");
+
+    var card = document.createElement("p");
+    card.className = "mdweave-notice__card";
+    card.textContent = message;
+    el.appendChild(card);
+
+    el.addEventListener("click", dismissNotice);
+    document.body.appendChild(el);
+
+    noticeEl = el;
+    noticeTimer = setTimeout(dismissNotice, VISIBLE_MS);
+    return el;
+  }
+
+  document.addEventListener("keydown", function (event) {
+    if (event.key === "Escape") dismissNotice();
+  });
+
+  /* Swap freshly rendered prose into the page.
+   *
+   * Replacing only the article and the notes leaves the sidebar, the scroll
+   * position, and everything else exactly where they were -- far less jarring
+   * than a reload. Shared by the two things that produce new HTML: saving an
+   * edit, and refreshing from disk.
+   *
+   * `notes.js` caches the note elements it found at load, so it has to be told
+   * to go and look again. */
+  function adopt(payload) {
+    if (!payload) return;
+
+    var doc = document.getElementById("doc");
+    if (doc && typeof payload.body === "string") doc.innerHTML = payload.body;
+
+    var layer = document.getElementById("notes-layer");
+    if (layer && typeof payload.notes === "string") layer.innerHTML = payload.notes;
+
+    if (window.mdweave && window.mdweave.refresh) window.mdweave.refresh();
+  }
+
   /* Resolves to the /api/health payload, or null when the page is static.
    * Memoised: opening a document must not cost several identical probes. */
   var probe = null;
@@ -60,7 +129,7 @@
         if (payload && payload.error) return new Error(payload.error);
         if (response.status === 501) {
           return new Error(
-            "the server does not support this yet — restart it (mdweave_stop, then reload)"
+            "the server does not support this yet — run `mdweave start` to restart it, then reload"
           );
         }
         return new Error("server said " + response.status + " " + response.statusText);
@@ -73,5 +142,12 @@
     });
   }
 
-  window.mdweaveUI = { toast: toast, api: api, reject: reject };
+  window.mdweaveUI = {
+    toast: toast,
+    notice: notice,
+    dismissNotice: dismissNotice,
+    adopt: adopt,
+    api: api,
+    reject: reject,
+  };
 })();

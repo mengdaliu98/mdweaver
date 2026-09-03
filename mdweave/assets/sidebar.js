@@ -12,10 +12,15 @@
 
   var FOLDERS_KEY = "mdweave.folders.closed";
   var PANEL_KEY = "mdweave.sidebar";
+  var WIDTH_KEY = "mdweave.sidebar.width";
+
+  var MIN_WIDTH = 150; // narrower than this and the labels are unreadable
+  var MAX_WIDTH = 600; // wider and it starts eating the text column
 
   var sidebar = document.getElementById("sidebar");
   var collapse = document.getElementById("sidebar-collapse");
   var show = document.getElementById("sidebar-show");
+  var handle = document.getElementById("sidebar-resize");
   if (!sidebar) return;
 
   function read(key, fallback) {
@@ -91,6 +96,78 @@
     });
   }
 
+  /* --- panel width -------------------------------------------------------- */
+
+  /* The width is one custom property, which the grid column and the handle's
+   * own position both read -- so setting it moves everything at once. */
+  function clampWidth(px) {
+    return Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, Math.round(px)));
+  }
+
+  function applyWidth(px) {
+    document.documentElement.style.setProperty("--sidebar-w", px + "px");
+  }
+
+  function settleWidth(px) {
+    write(WIDTH_KEY, px);
+    // Notes are positioned against the page, which just changed width. The
+    // ResizeObserver in notes.js keeps up during the drag; this is the
+    // final word once it stops.
+    if (window.mdweave && window.mdweave.layout) window.mdweave.layout();
+  }
+
+  var storedWidth = read(WIDTH_KEY, null);
+  if (typeof storedWidth === "number") applyWidth(clampWidth(storedWidth));
+
+  if (handle) {
+    handle.addEventListener("pointerdown", function (event) {
+      // Stop the browser starting a text selection or a native drag.
+      event.preventDefault();
+
+      var width = clampWidth(event.clientX);
+      document.body.classList.add("sidebar-resizing");
+      if (handle.setPointerCapture) handle.setPointerCapture(event.pointerId);
+
+      function move(moved) {
+        width = clampWidth(moved.clientX); // the panel is flush left, so x is the width
+        applyWidth(width);
+      }
+
+      function done() {
+        handle.removeEventListener("pointermove", move);
+        handle.removeEventListener("pointerup", done);
+        handle.removeEventListener("pointercancel", done);
+        document.body.classList.remove("sidebar-resizing");
+        settleWidth(width);
+      }
+
+      handle.addEventListener("pointermove", move);
+      handle.addEventListener("pointerup", done);
+      handle.addEventListener("pointercancel", done);
+    });
+
+    /* Back to whatever the stylesheet says. */
+    handle.addEventListener("dblclick", function () {
+      document.documentElement.style.removeProperty("--sidebar-w");
+      settleWidth(null);
+    });
+
+    handle.addEventListener("keydown", function (event) {
+      var step = event.shiftKey ? 40 : 10;
+      var current = sidebar.getBoundingClientRect().width;
+      var next;
+
+      if (event.key === "ArrowLeft") next = current - step;
+      else if (event.key === "ArrowRight") next = current + step;
+      else return;
+
+      event.preventDefault();
+      var width = clampWidth(next);
+      applyWidth(width);
+      settleWidth(width);
+    });
+  }
+
   /* Keep the selected document in view when the tree is long. */
   var active = sidebar.querySelector(".tree__row--active");
   if (active && active.scrollIntoView) {
@@ -104,6 +181,7 @@
   var filePicker = document.getElementById("sidebar-file");
   var PREFIX = document.body.dataset.prefix || "";
   var DOCUMENTS_API = "/api/documents";
+  var REJECTED = "only markdown files are supported";
 
   function isMarkdown(file) {
     return /\.md$/i.test(file.name);
@@ -148,13 +226,8 @@
     if (!files.length) return;
 
     var markdown = files.filter(isMarkdown);
-    var skipped = files.length - markdown.length;
-    if (skipped) {
-      ui.toast(
-        skipped + (skipped === 1 ? " file was" : " files were") +
-          " skipped — only .md can be imported",
-        "warn"
-      );
+    if (markdown.length !== files.length) {
+      ui.notice(REJECTED);
     }
     if (!markdown.length) return;
 

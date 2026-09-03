@@ -182,7 +182,9 @@ def test_a_spaced_filename_is_normalised(server):
     _, payload = upload(base, name="My Weekly Notes.md")
 
     assert payload["document"]["id"] == "My_Weekly_Notes"
-    assert payload["document"]["label"] == "My Weekly Notes"
+    # The id keeps the name as given; the label is sentence case, like every
+    # other label in the tree.
+    assert payload["document"]["label"] == "My weekly notes"
     assert (workspace.inputs / "My_Weekly_Notes.md").exists()
 
 
@@ -274,6 +276,39 @@ def test_the_import_button_is_hidden_until_a_server_answers():
     source = (ASSETS / "sidebar.js").read_text(encoding="utf-8")
     assert "ui.api()" in source
     assert "importButton.hidden = false" in source
+
+
+def test_a_rejected_drop_is_reported_in_the_middle_of_the_page():
+    """A corner toast is missed mid-drag; the eye is on the cursor."""
+    sidebar = (ASSETS / "sidebar.js").read_text(encoding="utf-8")
+    assert '"only markdown files are supported"' in sidebar
+    assert "ui.notice(REJECTED)" in sidebar
+    assert "skipped" not in sidebar, "the old corner-toast wording is gone"
+
+
+def test_the_notice_is_centred_and_dismissable():
+    ui = (ASSETS / "ui.js").read_text(encoding="utf-8")
+    css = (Path(__file__).resolve().parents[1] / "mdweave" / "theme" / "editor.css").read_text(
+        encoding="utf-8"
+    )
+
+    assert "function notice(" in ui
+    assert "notice: notice" in ui, "notice must be published on window.mdweaveUI"
+    assert 'el.setAttribute("role", "alert")' in ui, "screen readers must hear it"
+    assert 'event.key === "Escape"' in ui
+
+    block = css.split(".mdweave-notice {")[1].split("}")[0]
+    assert "position: fixed" in block
+    assert "place-items: center" in block, "the message must land in the middle"
+    assert "pointer-events: none" in block, "the overlay must not trap clicks"
+    assert "pointer-events: auto" in css.split(".mdweave-notice__card {")[1].split("}")[0]
+
+
+def test_only_one_notice_shows_at_a_time():
+    """Two bad drops in a row must not stack two cards on top of each other."""
+    ui = (ASSETS / "ui.js").read_text(encoding="utf-8")
+    body = ui.split("function notice(")[1]
+    assert "dismissNotice();" in body.split("var el =")[0]
 
 
 def test_shared_helpers_are_used_rather_than_duplicated():
