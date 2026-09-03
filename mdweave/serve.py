@@ -9,18 +9,24 @@ Bound to loopback only. There is no authentication, so do not expose it.
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import hmac
 import json
 import math
+import os
 import random
 import string
+import sys
 from dataclasses import dataclass
 from functools import partial
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
+from . import checkpoint as git_checkpoint
+from . import edits
 from .model import Annotation, Comment, Offset, TextTarget
 from .render import render_document, write_assets
 from .sources import obsidian_inline, sidecar
@@ -156,6 +162,58 @@ class Workspace:
         target.write_text(content, encoding="utf-8")
         return target.stem
 
+    # --- editing the prose ------------------------------------------------
+
+    def source_of(self, doc_id: str) -> str:
+        return self.markdown_for(doc_id).read_text(encoding="utf-8")
+
+    def block_of(self, doc_id: str, line: int, end: int) -> str:
+        """The markdown behind one rendered block."""
+        try:
+            return edits.block_source(self.source_of(doc_id), line, end)
+        except IndexError as exc:
+            raise ApiError(HTTPStatus.BAD_REQUEST, str(exc))
+
+    def write_source(self, doc_id: str, markdown: str) -> None:
+        """Replace a document's markdown and re-render everything.
+
+        The whole set is rebuilt rather than just this page because a heading
+        edit changes the sidebar label, which every other page has baked in.
+        """
+        self.markdown_for(doc_id).write_text(markdown, encoding="utf-8")
+        self.rebuild_all()
+
+    def body_of(self, doc_id: str) -> tuple[str, str]:
+        """The rendered document and its notes, without the page around them.
+
+        What the browser swaps into `<article class="doc">` after an edit --
+        cheaper and far less jarring than reloading the page.
+        """
+        from bs4 import BeautifulSoup
+
+        result = self.render(doc_id, self.annotations_for(doc_id))
+        soup = BeautifulSoup(result.html, "html.parser")
+        article = soup.find("article", class_="doc")
+        layer = soup.find("aside", class_="notes-layer")
+        return (
+            article.decode_contents() if article else "",
+            layer.decode_contents() if layer else "",
+        )
+
+    def files_of(self, doc_id: str) -> list[Path]:
+        """Everything that belongs to one document.
+
+        The prose, the annotations beside it, and the page built from them --
+        but not `assets/`, which is shared and would drag every other document's
+        rebuild into a commit meant for this one.
+        """
+        markdown = self.markdown_for(doc_id)
+        return [
+            markdown,
+            sidecar.sidecar_path(markdown),
+            self.outputs / f"{doc_id}.html",
+        ]
+
     def check_anchors(self, doc_id: str, annotations: list[Annotation]) -> dict[str, str]:
         """Render without saving; report which annotations fail to anchor."""
         result = self.render(doc_id, annotations)
@@ -168,6 +226,38 @@ class Workspace:
                 return candidate
 
 
+def credentials() -> tuple[str, str] | None:
+    """The username and password every request must present, if any.
+
+    Unset means no authentication, which is right for the loopback server on
+    your own machine and wrong anywhere else -- see `refuse_insecure_bind`.
+    """
+    password = os.environ.get("MDWEAVE_PASSWORD")
+    if not password:
+        return None
+    return os.environ.get("MDWEAVE_USER") or "mdweave", password
+
+
+LOOPBACK = {"127.0.0.1", "::1", "localhost"}
+
+
+def refuse_insecure_bind(host: str) -> str | None:
+    """Why this bind should not happen, or None if it is fine.
+
+    Reachable from another machine and unauthenticated is the one combination
+    that must never happen by accident: every write endpoint is open, and
+    `/api/checkpoint` will push to a git remote with whatever credential the
+    process has. Set MDWEAVE_ALLOW_INSECURE=1 to say you meant it.
+    """
+    if host in LOOPBACK or credentials() or os.environ.get("MDWEAVE_ALLOW_INSECURE"):
+        return None
+    return (
+        f"refusing to serve on {host} without a password.\n"
+        "  Anyone who can reach this port could edit the documents and push to git.\n"
+        "  Set MDWEAVE_PASSWORD, or MDWEAVE_ALLOW_INSECURE=1 if you really mean it."
+    )
+
+
 class Handler(SimpleHTTPRequestHandler):
     """Static file server for html_outputs, plus a small JSON API."""
 
@@ -177,21 +267,93 @@ class Handler(SimpleHTTPRequestHandler):
         self.workspace = workspace
         super().__init__(*args, directory=str(workspace.outputs), **kwargs)
 
+    # --- authentication ----------------------------------------------------
+
+    def _allowed(self) -> bool:
+        """Check HTTP Basic credentials, if any are configured.
+
+        Basic rather than a login page: the browser prompts, remembers, and
+        re-sends it on the page's own fetch() calls without a line of code
+        here. It is only as private as the transport, which on Railway is TLS.
+        """
+        wanted = credentials()
+        if wanted is None:
+            return True
+
+        header = self.headers.get("Authorization", "")
+        if header.startswith("Basic "):
+            try:
+                offered = base64.b64decode(header[6:], validate=True).decode("utf-8")
+            except (ValueError, UnicodeDecodeError):
+                offered = ""
+            user, _, password = offered.partition(":")
+            # Compare both, always, rather than short-circuiting on the user.
+            ok_user = hmac.compare_digest(user, wanted[0])
+            ok_password = hmac.compare_digest(password, wanted[1])
+            if ok_user and ok_password:
+                return True
+
+        self.send_response(HTTPStatus.UNAUTHORIZED)
+        self.send_header("WWW-Authenticate", 'Basic realm="mdweave", charset="UTF-8"')
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+        return False
+
     # --- routing ---------------------------------------------------------
 
     def do_GET(self) -> None:  # noqa: N802 -- name fixed by BaseHTTPRequestHandler
-        if urlparse(self.path).path.startswith("/api/"):
+        # The one unauthenticated route. A platform health check cannot present
+        # a password, and answering it with /api/health would publish the list
+        # of document names to anyone who asked.
+        if urlparse(self.path).path == "/api/ping":
+            self._respond(HTTPStatus.OK, {"ok": True})
+            return
+        if not self._allowed():
+            return
+        route = urlparse(self.path).path
+        if route.startswith("/api/"):
             self._dispatch(self._api_get)
+        elif route in ("", "/"):
+            self._serve_root()
         else:
             super().do_GET()
 
+    def do_HEAD(self) -> None:  # noqa: N802
+        if not self._allowed():
+            return
+        super().do_HEAD()
+
+    def _serve_root(self) -> None:
+        """Send the bare URL to a document rather than a directory listing.
+
+        `mdweave start` has no document to open -- the sidebar on every page is
+        how you get to the rest -- so the root just needs to reach one of them.
+        """
+        documents = sorted(self.workspace.documents())
+        if not documents:
+            self._respond(
+                HTTPStatus.NOT_FOUND,
+                {"error": f"no documents under {self.workspace.inputs}"},
+            )
+            return
+        self.send_response(HTTPStatus.FOUND)
+        self.send_header("Location", f"/{quote(documents[0])}.html")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def do_POST(self) -> None:  # noqa: N802
+        if not self._allowed():
+            return
         self._dispatch(self._api_post)
 
     def do_PATCH(self) -> None:  # noqa: N802
+        if not self._allowed():
+            return
         self._dispatch(self._api_patch)
 
     def do_DELETE(self) -> None:  # noqa: N802
+        if not self._allowed():
+            return
         self._dispatch(self._api_delete)
 
     def _dispatch(self, handler) -> None:
@@ -212,6 +374,7 @@ class Handler(SimpleHTTPRequestHandler):
         if route.path == "/api/health":
             return HTTPStatus.OK, {
                 "ok": True,
+                "pid": os.getpid(),  # how `mdweave stop` finds this process
                 "fingerprint": RUNNING_FINGERPRINT,
                 "documents": sorted(self.workspace.documents()),
             }
@@ -221,12 +384,27 @@ class Handler(SimpleHTTPRequestHandler):
             annotations = self.workspace.annotations_for(doc_id)
             return HTTPStatus.OK, {"annotations": [a.to_dict() for a in annotations]}
 
+        if route.path == "/api/block":
+            doc_id = self._query(route, "document")
+            line, end = self._span(route)
+            return HTTPStatus.OK, {
+                "markdown": self.workspace.block_of(doc_id, line, end)
+            }
+
         raise ApiError(HTTPStatus.NOT_FOUND, f"no such endpoint: {route.path}")
 
     def _api_post(self):
         route = urlparse(self.path)
         if route.path == "/api/documents":
             return self._api_import()
+        if route.path == "/api/block":
+            return self._api_block()
+        if route.path == "/api/cut":
+            return self._api_cut()
+        if route.path == "/api/refresh":
+            return self._api_refresh()
+        if route.path == "/api/checkpoint":
+            return self._api_checkpoint()
         if route.path != "/api/annotations":
             raise ApiError(HTTPStatus.NOT_FOUND, f"no such endpoint: {route.path}")
 
@@ -292,6 +470,107 @@ class Handler(SimpleHTTPRequestHandler):
             }
         }
 
+    def _api_block(self):
+        """Replace one block's markdown -- clicking a paragraph and typing."""
+        payload = self._json_body(limit=MAX_UPLOAD_BYTES)
+        doc_id = _require(payload, "document")
+
+        text = payload.get("text")
+        if not isinstance(text, str):
+            raise ApiError(HTTPStatus.BAD_REQUEST, "'text' must be a string")
+
+        line, end = _line_range(payload)
+        source = self.workspace.source_of(doc_id)
+        try:
+            updated = edits.replace_block(source, line, end, text)
+        except IndexError as exc:
+            raise ApiError(HTTPStatus.BAD_REQUEST, str(exc))
+
+        return self._rewrite(doc_id, source, updated)
+
+    def _api_cut(self):
+        """Remove a selection that may run across several blocks."""
+        payload = self._json_body(limit=MAX_UPLOAD_BYTES)
+        doc_id = _require(payload, "document")
+
+        raw = payload.get("cuts")
+        if not isinstance(raw, list) or not raw:
+            raise ApiError(HTTPStatus.BAD_REQUEST, "'cuts' must be a non-empty list")
+
+        cuts = []
+        for item in raw:
+            if not isinstance(item, dict):
+                raise ApiError(HTTPStatus.BAD_REQUEST, "each cut must be an object")
+            line, end = _line_range(item)
+            cuts.append(
+                edits.Cut(
+                    line=line,
+                    end=end,
+                    start=_int_field(item, "from"),
+                    stop=_int_field(item, "to"),
+                )
+            )
+
+        source = self.workspace.source_of(doc_id)
+        return self._rewrite(doc_id, source, edits.apply_cuts(source, cuts))
+
+    def _api_refresh(self):
+        """Re-render from what is on disk now.
+
+        The markdown is a file, and this server is not the only thing that
+        writes to it. Everything is rebuilt, not just this document: an editor
+        or a `git pull` may have touched several, and a new file changes the
+        sidebar on every page.
+        """
+        payload = self._json_body()
+        doc_id = _require(payload, "document")
+
+        self.workspace.markdown_for(doc_id)  # 404s a document that has gone
+        self.workspace.rebuild_all()
+        body, notes = self.workspace.body_of(doc_id)
+
+        return HTTPStatus.OK, {
+            "body": body,
+            "notes": notes,
+            "documents": sorted(self.workspace.documents()),
+        }
+
+    def _api_checkpoint(self):
+        """Commit and push one document, with the message the reader wrote."""
+        payload = self._json_body()
+        doc_id = _require(payload, "document")
+        message = _require(payload, "message")
+
+        paths = self.workspace.files_of(doc_id)  # 404s an unknown document
+        try:
+            repo = git_checkpoint.repo_root(self.workspace.inputs)
+            result = git_checkpoint.checkpoint(repo, paths, message)
+        except git_checkpoint.GitError as exc:
+            # The reader can act on what git said, so pass it through rather
+            # than flattening it into "checkpoint failed".
+            raise ApiError(HTTPStatus.BAD_GATEWAY, str(exc))
+
+        return HTTPStatus.OK, {
+            "committed": result.committed,
+            "pushed": result.pushed,
+            "revision": result.revision,
+            "detail": result.detail,
+        }
+
+    def _rewrite(self, doc_id: str, before: str, after: str):
+        """Persist a new version of a document and hand back the new page body.
+
+        Nothing is written when the text is unchanged: a click that opens a
+        block and closes it again should not touch the file or rebuild.
+        """
+        if after == before:
+            body, notes = self.workspace.body_of(doc_id)
+            return HTTPStatus.OK, {"changed": False, "body": body, "notes": notes}
+
+        self.workspace.write_source(doc_id, after)
+        body, notes = self.workspace.body_of(doc_id)
+        return HTTPStatus.OK, {"changed": True, "body": body, "notes": notes}
+
     def _api_patch(self):
         route = urlparse(self.path)
         prefix = "/api/annotations/"
@@ -337,6 +616,17 @@ class Handler(SimpleHTTPRequestHandler):
         if not values:
             raise ApiError(HTTPStatus.BAD_REQUEST, f"missing ?{key}=")
         return values[0]
+
+    def _span(self, route) -> tuple[int, int]:
+        """The ?start=&end= source-line range a block carries in its markup."""
+        try:
+            line = int(self._query(route, "start"))
+            end = int(self._query(route, "end"))
+        except ValueError:
+            raise ApiError(HTTPStatus.BAD_REQUEST, "start and end must be integers")
+        if line < 0 or end <= line:
+            raise ApiError(HTTPStatus.BAD_REQUEST, f"bad line range {line}-{end}")
+        return line, end
 
     def _json_body(self, limit: int = MAX_BODY_BYTES) -> dict:
         length = int(self.headers.get("Content-Length") or 0)
@@ -406,6 +696,20 @@ def _parse_offset(raw) -> Offset | None:
     return offset if offset else None
 
 
+def _int_field(payload: dict, key: str) -> int:
+    value = payload.get(key)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ApiError(HTTPStatus.BAD_REQUEST, f"{key!r} must be a non-negative integer")
+    return value
+
+
+def _line_range(payload: dict) -> tuple[int, int]:
+    line, end = _int_field(payload, "start"), _int_field(payload, "end")
+    if end <= line:
+        raise ApiError(HTTPStatus.BAD_REQUEST, f"bad line range {line}-{end}")
+    return line, end
+
+
 def _require(payload: dict, key: str) -> str:
     value = payload.get(key)
     if not isinstance(value, str) or not value.strip():
@@ -419,11 +723,17 @@ def make_server(workspace: Workspace, host: str, port: int) -> ThreadingHTTPServ
 
 
 def serve(inputs: Path, outputs: Path, host: str = "127.0.0.1", port: int = 8765) -> int:
+    refusal = refuse_insecure_bind(host)
+    if refusal:
+        print(f"error: {refusal}", file=sys.stderr)
+        return 1
+
     workspace = Workspace(inputs=inputs, outputs=outputs)
     httpd = make_server(workspace, host, port)
+    guarded = " [password required]" if credentials() else ""
     print(
         f"mdweave serving http://{host}:{httpd.server_port}/  "
-        f"[{RUNNING_FINGERPRINT}]  (Ctrl-C to stop)"
+        f"[{RUNNING_FINGERPRINT}]{guarded}  (Ctrl-C to stop)"
     )
     for name in workspace.documents():
         print(f"  http://{host}:{httpd.server_port}/{name}.html")

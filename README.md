@@ -3,16 +3,16 @@
 Turning markdown into richly formatted, annotatable HTML: highlights, sticky-note
 comments you can drag, and a VS Code style document sidebar.
 
-This repo is the tool. It renders a *contents* directory that lives separately:
+This repo is the tool. It renders the documents of a *contents* repo that is
+checked out separately, as its sibling:
 
 ```
-knowledge_base/
-├── toolings/                  this repo (mdweaver)
+<parent>/
+├── mdweaver/                  this repo, the tool
 │   ├── mdweave/               the renderer, server, and browser assets
 │   ├── tests/
-│   ├── mdweave_render.sh      shell helpers
 │   └── pyproject.toml
-└── contents/                  the documents (knowledge_base repo)
+└── knowledge_base/            the documents
     ├── markdown_inputs/       source .md + .ann.json sidecars
     └── html_outputs/          generated .html + assets/
 ```
@@ -23,67 +23,171 @@ is the navigation -- add a subdirectory and it becomes a collapsible group.
 ## Setting up on a new machine
 
 ```bash
-mkdir -p ~/AAI/knowledge_base && cd ~/AAI/knowledge_base
-git clone git@github.com:mengdaliu98/mdweaver.git        toolings
-git clone git@github.com:mengdaliu98/knowledge_base.git  contents
+cd <parent>                    # e.g. /data/users/mengda
+git clone git@github.com:mengdaliu98/mdweaver.git
+git clone git@github.com:mengdaliu98/knowledge_base.git
 
-cd toolings
+cd mdweaver
 uv venv .venv && uv pip install --python .venv/bin/python -e .
-.venv/bin/python -m pytest tests/          # expect 165 passing
+.venv/bin/python -m pytest tests/          # expect 181 passing
 
-echo 'source '"$PWD"'/mdweave_render.sh' >> ~/.zshrc && source ~/.zshrc
+ln -s "$PWD/.venv/bin/mdweave" ~/.local/bin/mdweave    # or add .venv/bin to PATH
 ```
 
-If the checkout is not at `~/AAI/knowledge_base`, set `MDWEAVE_HOME` to wherever
-it is before sourcing the helper.
+Nothing needs sourcing into your shell. `mdweave` finds the documents by
+looking for `knowledge_base` next to its own checkout, so the command works
+from any directory. If the two repos are not siblings, point `MDWEAVE_CONTENTS`
+at the contents checkout.
 
 ## Quick start
 
+Two commands:
+
 ```bash
-mdweave_render ~/notes/some_doc.md
+mdweave start        # render everything, serve it, open it
+mdweave stop         # shut the server down
 ```
 
-That copies the file in, renders it, starts a local server if one is not
-already up, and opens the page. `mdweave_stop` shuts the server down.
+`start` renders every document, brings up a local server if one is not already
+running, and opens the knowledge base in a browser. There is no file argument:
+the sidebar on every page is how you reach the other documents.
 
-The helper restarts the server automatically when this repo's source has
-changed underneath it -- a long-lived process keeps serving whatever it
-imported at startup, which otherwise shows up as a new endpoint answering 501.
+It is safe to run repeatedly. Rendering happens every time, so a document added
+by hand shows up on the next `start`; the server is left alone if it is already
+serving current code. When it is *not* — when this repo's source has changed
+underneath it — `start` restarts it, because a long-lived process keeps serving
+whatever it imported at startup, which otherwise shows up as a new endpoint
+answering 501.
+
+The page opens with `open` on macOS and `xdg-open` on Linux. On a headless box
+neither can do anything, so `start` says so and prints the URL — forward port
+8765 to your laptop and open it there.
+
+`--port` moves both commands off 8765, and `--no-open` prints the URL without
+reaching for a browser.
 
 ## The sidebar
 
-Every page carries a VS Code style explorer over `contents/markdown_inputs`,
+Every page carries a VS Code style explorer over `knowledge_base/markdown_inputs`,
 so any document is one click away. Folders are collapsible and remember their
 state; the panel itself can be hidden and stays hidden across navigations.
 
 **Importing.** The `+` in the panel header opens Finder; you can also drag
-`.md` files onto the panel. Either way the file is copied into
-`markdown_inputs/`, rendered, and opened — no restart, because every page is
-regenerated so all their sidebars pick it up. Non-`.md` files are refused, and
-a name clash asks before replacing. Filenames are reduced to something safe to
-write and link to: any path is discarded down to the bare name, spaces become
+`.md` files onto the panel, which highlights as you drag over it. Either way
+the file is copied into `markdown_inputs/`, rendered, and opened — no restart,
+because every page is regenerated so all their sidebars pick it up. A name
+clash asks before replacing. Filenames are reduced to something safe to write
+and link to: any path is discarded down to the bare name, spaces become
 underscores, and characters that break filenames or URLs are dropped.
+
+Anything that is not a `.md` is refused with **only markdown files are
+supported**, centred on the page rather than tucked into the corner a toast
+lives in — mid-drag your eye is on the cursor, not down there. Click it,
+press `Esc`, or wait, and it goes. The check is on both sides: the browser
+filters the drop, and `/api/documents` refuses the same thing again.
 
 Import needs the server, like commenting; over `file://` the button stays
 hidden.
 
-Labels drop the `.md` and read as prose: underscores become spaces and the
-first letter is capitalised, with everything else left alone so deliberate
-capitals survive.
+Labels drop the `.md` and read as prose, in sentence case: underscores *and*
+hyphens become spaces, the first letter goes up, and the rest goes down.
 
 | file                                    | sidebar label                      |
 | --------------------------------------- | ---------------------------------- |
 | `system_for_bio_literature_research.md` | System for bio literature research |
-| `notes_about_CRAM_and_BAM.md`           | Notes about CRAM and BAM           |
-| `ome-zarr-layout-planner.md`            | Ome-zarr-layout-planner            |
+| `ome-zarr-layout-planner.md`            | Ome zarr layout planner            |
+| `notes_about_CRAM_and_BAM.md`           | Notes about cram and bam           |
 
-Hyphens are deliberately left alone — they read as part of a term (`OME-Zarr`)
-rather than as a word separator. Change `humanize` in `mdweave/tree.py` if you
-would rather they became spaces too.
+The last row is the cost of the rule: an acronym in a *filename* loses its
+capitals, because nothing distinguishes it from an ordinary word. The document
+keeps whatever title its own `# heading` gives it. `humanize` in
+`mdweave/tree.py` is the one place to change if that trade stops being worth it.
+
+**Resizing.** Drag the panel's right edge. The width persists across
+navigations, is clamped to 150–600px, and takes the arrow keys once the handle
+has focus (`Shift` for bigger steps). Double-click it to go back to the
+stylesheet's `--sidebar-w`. The handle hides itself when the panel is hidden,
+and on narrow screens where the panel is an overlay rather than a column.
 
 A document's id is its path under the root without the suffix, so
 `notes/weekly.md` is `notes/weekly`. That id is the sidebar link, the output
 filename, and the `document` field the API takes.
+
+## Editing the prose in the browser
+
+Click a paragraph and it becomes a small box holding *its own* markdown —
+just that block. Click away and it turns back into rendered prose. The rest of
+the page never changes, and at no point are you looking at a screen of raw
+markdown. Headings, lists, quotes, tables and code blocks all work the same
+way. `Esc` abandons the edit; `Cmd-Enter` saves without moving the mouse.
+
+Select across several paragraphs and press `Delete`, or cut with `Cmd-X`, and
+the selection goes — again without the markup ever appearing. This one has to
+cross back over the rendering: the browser sends offsets into the text it can
+*see*, and the server maps them onto the source that produced it.
+
+```
+you selected:  characters 2..6 of "a bold word"
+stored as:     a **bold** word
+after the cut: a  word
+```
+
+Every top-level block is rendered carrying the source lines it came from:
+
+```html
+<p data-src-start="14" data-src-end="18">…</p>
+```
+
+That is what makes "the paragraph you clicked" addressable — `SourceMappedRenderer`
+in `render.py` writes it, `edits.py` maps it back, and `edit.js` is the only
+part that needs to know about the mouse.
+
+**What it does not do yet.** Two people (or two tabs) editing one document will
+clobber each other; there is no version check. Annotations anchor to quoted
+text, so editing the words a comment is attached to will orphan it silently.
+And every save re-renders the whole set, which is a second or two — fine for a
+Save, too slow to do on every keystroke.
+
+Cutting is conservative about inline syntax. Delete a whole bolded phrase and
+the stranded `**` is swept up; delete half of one and the emphasis correctly
+survives. Deleting *part* of a link's text leaves the link, which is usually
+right and occasionally not.
+
+## Refreshing
+
+This server is not the only thing that writes to `markdown_inputs/` — an
+editor, a `git pull`, another machine — and the rendered page next to it goes
+stale silently. The circular arrow in the top right asks the server to render
+again and swaps the result in, keeping your scroll position.
+
+A plain browser reload would not do: it would re-serve the same stale HTML.
+The rebuild has to happen server-side first, which is what the button is for.
+
+Everything is rebuilt, not just the page you are on, since a pull can touch
+several files. If a document has appeared or disappeared, the sidebar baked
+into this page is wrong too, so the button falls back to a real reload rather
+than leaving you with a navigation that lies. It also waits for an edit that
+is still saving, instead of replacing the prose out from under it.
+
+## Checkpointing
+
+**Checkpoint** in the top right commits and pushes the document you are
+looking at. It asks for a message, then runs the commit with it.
+
+The commit is scoped to that one article — its markdown, its `.ann.json`
+sidecar, and its rendered page. Not `html_outputs/assets/`, which is shared and
+would otherwise drag every other document's rebuild into a commit meant for
+this one; and not another article that happens to be dirty at the same moment.
+The pathspec is repeated on `commit` as well as `add`, so anything already
+sitting in the index stays out too.
+
+If there was nothing to commit it still pushes, since the usual reason to be in
+that state is a commit that did not reach the remote last time. When git
+refuses, its own words come back into the dialog and the message you typed
+stays put.
+
+The message reaches git through argv, never a shell, so it is data and cannot
+turn into arguments.
 
 ## Adding comments in the browser
 
@@ -93,15 +197,16 @@ document's `.ann.json` sidecar and the HTML is regenerated, so a reload shows
 exactly what you just made. Open a note and `Delete` removes it again.
 
 This needs the page to be served, because a `file://` page has no API to write
-to. `mdweave_render` handles that. By hand:
-
-```bash
-mdweave serve                      # http://127.0.0.1:8765/
-```
+to. `mdweave start` handles that.
 
 Opened as a plain file the document is still perfectly readable — selecting
-text just says it is read-only. The server binds to loopback and has no
-authentication, so do not expose it.
+text just says it is read-only.
+
+By default the server binds to loopback and has no authentication. Set
+`MDWEAVE_PASSWORD` and every route asks for it over HTTP Basic — which is what
+makes it safe to put somewhere else. Without that password `serve` refuses to
+bind to anything but loopback, since an open port here means an open editor and
+a git push. See [DEPLOY.md](DEPLOY.md).
 
 Two things the server refuses, both with a message in the page: a selection it
 cannot re-anchor, and one that overlaps an existing highlight. It verifies by
@@ -113,7 +218,7 @@ leaves no trace in the sidecar.
 A markdown file stays clean. Its annotations live beside it in a sidecar:
 
 ```
-contents/markdown_inputs/
+knowledge_base/markdown_inputs/
   system_for_bio_literature_research.md         <- untouched prose
   system_for_bio_literature_research.ann.json   <- highlights and comments
 ```
@@ -177,7 +282,7 @@ pin, and card tint are all derived from it with `color-mix()`:
 { "color": "rgb(255 61 148)" }
 ```
 
-`contents/markdown_inputs/mdweave_style_reference.md` renders all six tokens
+`knowledge_base/markdown_inputs/mdweave_style_reference.md` renders all six tokens
 plus a custom colour, and is the fastest way to preview a change.
 
 ## Reading the output
@@ -202,17 +307,26 @@ lasts only for the session.
 
 ## Commands
 
+The two for everyday use:
+
+```bash
+mdweave start [--port N] [--no-open]      # render everything, serve it, open it
+mdweave stop  [--port N]                  # shut the background server down
+```
+
+The pieces they are built from, useful on their own:
+
 ```bash
 mdweave build <file.md|dir> -o <outdir>   # render; --strict fails on a lost anchor
                                           # a dir builds recursively; one file
                                           # still gets the full sidebar
-mdweave serve [--port N] [--no-build]     # serve, and accept comments from the browser
+mdweave serve [--port N] [--no-build]     # serve in the foreground, no browser
 mdweave extract <file.md> [--in-place]    # Obsidian inline comments -> sidecar JSON
 mdweave fingerprint                       # hash of the installed source
 ```
 
-From the shell helper: `mdweave_render <file.md>`, `mdweave_serve`,
-`mdweave_stop`.
+`serve` is what `start` puts in the background; run it directly when you want
+the request log in front of you and Ctrl-C to stop it.
 
 `extract` is a one-time migration for documents annotated with the Obsidian
 `document-comments` plugin. `build` also reads that markup inline, so a
@@ -227,16 +341,32 @@ wins on conflict.
 - **A new visual treatment**: `mdweave/theme/*.css` and
   `mdweave/templates/document.html.j2`. The template is the only place HTML
   structure is decided.
-- **Interactivity**: `mdweave/assets/` holds `ui.js` (toasts, the shared
-  server probe), `sidebar.js` (tree state, importing), `notes.js` (sticky
-  notes) and `annotate.js` (selecting and commenting). Plain ES5, no build
-  step, copied verbatim next to the output and loaded in that order.
+- **Interactivity**: `mdweave/assets/` holds `ui.js` (toasts, the centred
+  notice, the shared server probe), `sidebar.js` (tree state, importing),
+  `notes.js` (sticky notes), `annotate.js` (selecting and commenting),
+  `edit.js` (editing prose in place), `refresh.js` (re-render from disk) and
+  `checkpoint.js` (commit and push). Plain ES5, no build step, copied verbatim
+  next to the output and loaded in that order. `ui.adopt` is the one place
+  that swaps new HTML into the page; both saving and refreshing go through it.
   `notes.js` publishes `window.mdweave` — `register`, `layout`, `setOpen`,
   `remove`, `resetPosition`, `setMoveHandler` — which is how `annotate.js` adds
   a note at runtime that behaves like a rendered one.
 - **A new API endpoint**: `mdweave/serve.py`. `Workspace` owns all filesystem
   access and is the path-traversal guard; handlers never join a client string
   onto a path.
+- **Editing**: `mdweave/edits.py` turns "characters 4 to 12 of the block at
+  lines 14-18" back into a slice of the markdown. The alignment between
+  visible text and source is the delicate part; `rendered_text_in` resolves a
+  block against the *whole* document, because a footnote reference renders
+  differently without its definition and one character of drift puts every
+  later offset in the wrong place.
+- **Git**: `mdweave/checkpoint.py`. Every command goes through one `_git`
+  helper that takes an argv list, so no caller can accidentally introduce a
+  shell.
+- **Process lifecycle**: `mdweave/daemon.py` — spawning the detached server,
+  the health probe, the staleness check, and stopping it again. `stop` asks
+  `/api/health` for the server's own pid rather than matching `ps` output,
+  which would also match the shell that typed the command.
 
 ### Two invariants to respect
 
