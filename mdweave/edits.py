@@ -4,13 +4,16 @@ The browser only knows what it can see: "the block that came from lines 14-18",
 and character offsets into that block's visible text. This module turns those
 back into slices of the markdown file.
 
-Two operations, and the second is the interesting one:
+Three operations, and the last two are the interesting ones:
 
 * replacing a block wholesale, which is what clicking a paragraph and typing
   amounts to -- the source range is already known, so it is a line splice.
 * cutting a span of *visible* text, which has to cross back over the rendering.
   `**bold**` shows as four characters and is stored as eight, so a selection
-  offset is not a source offset. `_index_map` aligns the two.
+  offset is not a source offset. `_source_positions` aligns the two.
+* extracting a span of visible text, which is the same walk run backwards:
+  instead of the markdown either side of the selection, the markdown *under*
+  it, so that copying can put that on the clipboard rather than flat prose.
 """
 
 from __future__ import annotations
@@ -25,13 +28,22 @@ _FENCE = re.compile(r"^\s{0,3}(`{3,}|~{3,})")
 
 
 @dataclass(frozen=True)
-class Cut:
-    """Remove visible characters [start, stop) from the block at [line, end)."""
+class Span:
+    """Visible characters [start, stop) of the block at [line, end).
+
+    All the browser can say without knowing any markdown: a source-line range
+    it read off the markup, and offsets into the text it can actually see.
+    """
 
     line: int
     end: int
     start: int
     stop: int
+
+
+@dataclass(frozen=True)
+class Cut(Span):
+    """A span to remove from the document."""
 
 
 def block_source(markdown: str, line: int, end: int) -> str:
@@ -71,11 +83,28 @@ def rendered_text_in(markdown: str, line: int, end: int) -> str | None:
     later offset in the wrong place, so cuts resolve against the same render
     the browser is looking at.
     """
+    return rendered_texts_in(markdown, [(line, end)])[(line, end)]
+
+
+def rendered_texts_in(
+    markdown: str, blocks: list[tuple[int, int]]
+) -> dict[tuple[int, int], str | None]:
+    """`rendered_text_in` for several blocks, off a single render.
+
+    A selection touches one block per paragraph it crosses, and re-rendering
+    the whole document once per block would make copying a long selection cost
+    a dozen full renders.
+    """
     from .render import render_markdown
 
     soup = BeautifulSoup(render_markdown(markdown), "html.parser")
-    element = soup.find(attrs={"data-src-start": str(line), "data-src-end": str(end)})
-    return element.get_text() if element else None
+    found: dict[tuple[int, int], str | None] = {}
+    for line, end in blocks:
+        element = soup.find(
+            attrs={"data-src-start": str(line), "data-src-end": str(end)}
+        )
+        found[(line, end)] = element.get_text() if element else None
+    return found
 
 
 def _source_positions(rendered: str, source: str) -> list[int]:
@@ -139,6 +168,84 @@ def _tidy_empty_inline(source: str) -> str:
     return source
 
 
+# Characters that are only ever inline markup, never text a reader could have
+# selected -- so a slice may reach out over them looking for the rest of a
+# construct. `!` and `[` only open one; `](url)` closes one and is a regex.
+_MARKUP_BEFORE = "*_~`[!"
+_MARKUP_AFTER = "*_~`"
+_LINK_TAIL = re.compile(r"\]\([^)]*\)")
+
+
+def _candidates(source: str, first: int, last: int) -> list[tuple[int, int]]:
+    """Slices of the source worth offering for a selection, widest first.
+
+    Selecting the word in `**word**` selects four characters, and the four
+    characters of source beneath them are `word`: the emphasis sits outside the
+    selection and would be lost. So the slice is also offered grown over the
+    markup either side, and the caller keeps whichever candidate still renders
+    as the text that was actually selected.
+    """
+    left = first
+    while left > 0 and source[left - 1] in _MARKUP_BEFORE:
+        left -= 1
+
+    right = last
+    tail = _LINK_TAIL.match(source, right)
+    if tail:  # `](url)` -- the selection was the whole of a link's text
+        right = tail.end()
+    while right < len(source) and source[right] in _MARKUP_AFTER:
+        right += 1
+
+    grown = []
+    for pair in ((left, right), (first, right), (left, last), (first, last)):
+        if pair not in grown:
+            grown.append(pair)
+    return grown
+
+
+def extract_block(
+    block_md: str, start: int, stop: int, rendered: str | None = None
+) -> str:
+    """The markdown behind the visible span [start, stop) of one block.
+
+    The mirror of `cut_block`: same alignment, but it keeps what that one
+    throws away. `rendered` is the block's visible text; pass the one resolved
+    against the whole document, since that is what the browser measured.
+    """
+    if rendered is None:
+        rendered = rendered_text(block_md)
+    start = max(0, min(start, len(rendered)))
+    stop = max(start, min(stop, len(rendered)))
+
+    wanted = rendered[start:stop]
+    if not wanted.strip():
+        return ""
+
+    # Everything a reader could have reached is selected, so this is the whole
+    # block and the whole block comes back verbatim -- hashes, bullets, fences
+    # and all. Not `start == 0 and stop == len(rendered)`: a list's visible text
+    # opens with the newline before its first `<li>`, which no selection can
+    # start at, and a fence's ends with the one after the last line of code.
+    if not rendered[:start].strip() and not rendered[stop:].strip():
+        return block_md
+
+    positions = _source_positions(rendered, block_md)
+    first = positions[start]
+    last = max(positions[stop - 1] + 1, first)
+
+    # The widest slice that still renders as exactly what was selected. A wider
+    # one would be markup the selection cut through -- `bold** wo`, or a link's
+    # URL spilled out as literal text -- and pasting that is worse than pasting
+    # prose with no formatting at all, which is what the last line does.
+    # Compared stripped, because a slice that starts mid-line loses its leading
+    # space to the renderer while the clipboard should keep it.
+    for lo, hi in _candidates(block_md, first, last):
+        candidate = block_md[lo:hi]
+        if rendered_text(candidate).strip() == wanted.strip():
+            return candidate
+    return wanted
+
+
 def replace_block(markdown: str, line: int, end: int, text: str) -> str:
     """Put `text` in place of the block at [line, end)."""
     lines = markdown.splitlines()
@@ -158,10 +265,7 @@ def apply_cuts(markdown: str, cuts: list[Cut]) -> str:
 
     # Measure every block against the original document before touching any of
     # it -- once the first cut lands, the line numbers in the rest are stale.
-    visible = {
-        (cut.line, cut.end): rendered_text_in(markdown, cut.line, cut.end)
-        for cut in cuts
-    }
+    visible = rendered_texts_in(markdown, [(cut.line, cut.end) for cut in cuts])
 
     for cut in sorted(cuts, key=lambda c: c.line, reverse=True):
         if not 0 <= cut.line < len(lines) or cut.end <= cut.line:
@@ -173,6 +277,30 @@ def apply_cuts(markdown: str, cuts: list[Cut]) -> str:
         lines[cut.line : cut.end] = kept.splitlines() if kept.strip() else []
 
     return normalise("\n".join(lines))
+
+
+def extract_spans(markdown: str, spans: list[Span]) -> str:
+    """The markdown under a selection: `apply_cuts` read the other way round.
+
+    Blocks come back in document order, separated by the blank line that keeps
+    them separate blocks, so what lands on the clipboard is a small markdown
+    document rather than a run-on paragraph.
+    """
+    lines = markdown.splitlines()
+    visible = rendered_texts_in(markdown, [(span.line, span.end) for span in spans])
+
+    taken = []
+    for span in sorted(spans, key=lambda s: s.line):
+        if not 0 <= span.line < len(lines) or span.end <= span.line:
+            continue
+        block = "\n".join(lines[span.line : span.end]).rstrip("\n")
+        part = extract_block(
+            block, span.start, span.stop, rendered=visible.get((span.line, span.end))
+        )
+        if part.strip():
+            taken.append(part.strip("\n"))
+
+    return "\n\n".join(taken)
 
 
 def normalise(markdown: str) -> str:

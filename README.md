@@ -153,6 +153,43 @@ the stranded `**` is swept up; delete half of one and the emphasis correctly
 survives. Deleting *part* of a link's text leaves the link, which is usually
 right and occasionally not.
 
+## Copying
+
+Select prose and press `Cmd-C` and what lands on the clipboard is the
+**markdown**, not the flattened text — so a paste keeps the bold, the links,
+the bullets and the code. Same trick as cutting, run backwards: the browser
+sends the offsets it can see and the server returns the source underneath
+them.
+
+Select a whole block and you get that block verbatim, syntax and all: `##`
+before a heading, `-` before each list item, the fences around a code block.
+Select part of one and the rule is *all of a construct or none of it*:
+
+| selected in `a **bold** word` | copied         |
+| ----------------------------- | -------------- |
+| `bold`                        | `**bold**`     |
+| `a bold`                      | `a **bold**`   |
+| `bo`                          | `bo`           |
+
+Nothing half-formed ever reaches the clipboard — no stranded `**`, no link
+whose `](https://…)` has spilled out into the text. When the markdown cannot
+be preserved the plain words are copied instead, which is exactly what the
+browser would have done. `tests/test_copying.py` sweeps every span of several
+documents asserting those are the only two outcomes.
+
+The clipboard has to be written while the `copy` event is being handled, and
+the markdown is a fetch away, so `copy.js` writes the rendered text first —
+the copy the browser was about to make — and replaces it a moment later.
+Everything that can go wrong therefore degrades to that plain copy rather than
+to an empty clipboard: no server, no `navigator.clipboard`, a selection in a
+note card or an open block editor, a request that fails.
+
+Two things it does not preserve. A footnote reference inside a *partial*
+selection comes back as the `[1]` you can see rather than the `[^1]` behind
+it, since the definition is not in the selection either. And a selection that
+covers the whole of a code block brings the fences with it, which is right for
+pasting into a document and a nuisance for pasting into a shell.
+
 ## Refreshing
 
 This server is not the only thing that writes to `markdown_inputs/` — an
@@ -344,10 +381,12 @@ wins on conflict.
 - **Interactivity**: `mdweave/assets/` holds `ui.js` (toasts, the centred
   notice, the shared server probe), `sidebar.js` (tree state, importing),
   `notes.js` (sticky notes), `annotate.js` (selecting and commenting),
-  `edit.js` (editing prose in place), `refresh.js` (re-render from disk) and
-  `checkpoint.js` (commit and push). Plain ES5, no build step, copied verbatim
-  next to the output and loaded in that order. `ui.adopt` is the one place
-  that swaps new HTML into the page; both saving and refreshing go through it.
+  `edit.js` (editing prose in place), `copy.js` (copying it as markdown),
+  `refresh.js` (re-render from disk) and `checkpoint.js` (commit and push).
+  Plain ES5, no build step, copied verbatim next to the output and loaded in
+  that order. `ui.adopt` is the one place that swaps new HTML into the page;
+  both saving and refreshing go through it. `ui.blockRanges` is the one place
+  a selection is turned into per-block offsets; cutting and copying share it.
   `notes.js` publishes `window.mdweave` — `register`, `layout`, `setOpen`,
   `remove`, `resetPosition`, `setMoveHandler` — which is how `annotate.js` adds
   a note at runtime that behaves like a rendered one.
@@ -355,9 +394,10 @@ wins on conflict.
   access and is the path-traversal guard; handlers never join a client string
   onto a path.
 - **Editing**: `mdweave/edits.py` turns "characters 4 to 12 of the block at
-  lines 14-18" back into a slice of the markdown. The alignment between
-  visible text and source is the delicate part; `rendered_text_in` resolves a
-  block against the *whole* document, because a footnote reference renders
+  lines 14-18" back into a slice of the markdown — `apply_cuts` throws that
+  slice away, `extract_spans` keeps only it. The alignment between visible
+  text and source is the delicate part; `rendered_text_in` resolves a block
+  against the *whole* document, because a footnote reference renders
   differently without its definition and one character of drift puts every
   later offset in the wrong place.
 - **Git**: `mdweave/checkpoint.py`. Every command goes through one `_git`

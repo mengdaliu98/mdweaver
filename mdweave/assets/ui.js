@@ -95,6 +95,85 @@
     if (window.mdweave && window.mdweave.refresh) window.mdweave.refresh();
   }
 
+  /* --- describing a selection to the server --------------------------------
+   *
+   * Every top-level block is rendered carrying the source lines it came from
+   * (data-src-start/end, written by SourceMappedRenderer), so a selection can
+   * be described without any markdown crossing into the browser: a source-line
+   * range, plus offsets into the text the reader can actually see.
+   *
+   * Two features need exactly that -- cutting a selection out (edit.js) and
+   * copying it as markdown (copy.js) -- and one character of disagreement
+   * between them would land an edit in the wrong place, so there is one
+   * implementation and they share it. */
+
+  function article() {
+    return document.getElementById("doc");
+  }
+
+  function spanOf(block) {
+    var start = parseInt(block.getAttribute("data-src-start"), 10);
+    var end = parseInt(block.getAttribute("data-src-end"), 10);
+    return isNaN(start) || isNaN(end) ? null : { start: start, end: end };
+  }
+
+  /* The block a node sits in, or null if it is not prose from the document. */
+  function blockFor(node) {
+    var doc = article();
+    var el = node && node.nodeType === 3 ? node.parentNode : node;
+    if (!doc || !el || !el.closest) return null;
+    var block = el.closest("[data-src-start]");
+    return block && doc.contains(block) ? block : null;
+  }
+
+  /* How far into a block's visible text a boundary sits. Mirrors what the
+   * server computes with BeautifulSoup's get_text(), so the two agree on what
+   * "character 40 of this paragraph" means. */
+  function offsetIn(block, node, offset) {
+    var range = document.createRange();
+    range.selectNodeContents(block);
+    range.setEnd(node, offset);
+    return range.toString().length;
+  }
+
+  /* Break a selection into one {start, end, from, to} per block it touches. */
+  function blockRanges(range) {
+    var doc = article();
+    if (!doc) return null;
+
+    var startBlock = blockFor(range.startContainer);
+    var endBlock = blockFor(range.endContainer);
+    if (!startBlock || !endBlock) return null;
+
+    var blocks = Array.prototype.filter.call(
+      doc.querySelectorAll("[data-src-start]"),
+      function (block) {
+        return range.intersectsNode(block);
+      }
+    );
+    if (!blocks.length) blocks = [startBlock];
+
+    var ranges = [];
+    for (var i = 0; i < blocks.length; i++) {
+      var block = blocks[i];
+      var span = spanOf(block);
+      if (!span) continue;
+
+      var length = block.textContent.length;
+      var from = block === startBlock
+        ? offsetIn(block, range.startContainer, range.startOffset)
+        : 0;
+      var to = block === endBlock
+        ? offsetIn(block, range.endContainer, range.endOffset)
+        : length;
+
+      if (to > from) {
+        ranges.push({ start: span.start, end: span.end, from: from, to: to });
+      }
+    }
+    return ranges.length ? ranges : null;
+  }
+
   /* Resolves to the /api/health payload, or null when the page is static.
    * Memoised: opening a document must not cost several identical probes. */
   var probe = null;
@@ -147,6 +226,9 @@
     notice: notice,
     dismissNotice: dismissNotice,
     adopt: adopt,
+    blockFor: blockFor,
+    spanOf: spanOf,
+    blockRanges: blockRanges,
     api: api,
     reject: reject,
   };

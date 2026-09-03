@@ -401,6 +401,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self._api_block()
         if route.path == "/api/cut":
             return self._api_cut()
+        if route.path == "/api/extract":
+            return self._api_extract()
         if route.path == "/api/refresh":
             return self._api_refresh()
         if route.path == "/api/checkpoint":
@@ -492,27 +494,24 @@ class Handler(SimpleHTTPRequestHandler):
         """Remove a selection that may run across several blocks."""
         payload = self._json_body(limit=MAX_UPLOAD_BYTES)
         doc_id = _require(payload, "document")
-
-        raw = payload.get("cuts")
-        if not isinstance(raw, list) or not raw:
-            raise ApiError(HTTPStatus.BAD_REQUEST, "'cuts' must be a non-empty list")
-
-        cuts = []
-        for item in raw:
-            if not isinstance(item, dict):
-                raise ApiError(HTTPStatus.BAD_REQUEST, "each cut must be an object")
-            line, end = _line_range(item)
-            cuts.append(
-                edits.Cut(
-                    line=line,
-                    end=end,
-                    start=_int_field(item, "from"),
-                    stop=_int_field(item, "to"),
-                )
-            )
+        cuts = _spans(payload, "cuts", edits.Cut)
 
         source = self.workspace.source_of(doc_id)
         return self._rewrite(doc_id, source, edits.apply_cuts(source, cuts))
+
+    def _api_extract(self):
+        """The markdown under a selection -- what Cmd-C puts on the clipboard.
+
+        The only endpoint here that reads without writing: nothing is saved,
+        nothing is re-rendered, and a failure costs the reader nothing but the
+        formatting, since the browser has already copied the rendered text.
+        """
+        payload = self._json_body(limit=MAX_UPLOAD_BYTES)
+        doc_id = _require(payload, "document")
+        spans = _spans(payload, "spans", edits.Span)
+
+        source = self.workspace.source_of(doc_id)
+        return HTTPStatus.OK, {"markdown": edits.extract_spans(source, spans)}
 
     def _api_refresh(self):
         """Re-render from what is on disk now.
@@ -701,6 +700,33 @@ def _int_field(payload: dict, key: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise ApiError(HTTPStatus.BAD_REQUEST, f"{key!r} must be a non-negative integer")
     return value
+
+
+def _spans(payload: dict, key: str, make) -> list:
+    """Parse a list of per-block visible-text ranges.
+
+    One shape, two endpoints: cutting a selection and copying it both describe
+    it as "characters `from`..`to` of the block at lines `start`..`end`", which
+    is all the browser can say without knowing any markdown.
+    """
+    raw = payload.get(key)
+    if not isinstance(raw, list) or not raw:
+        raise ApiError(HTTPStatus.BAD_REQUEST, f"{key!r} must be a non-empty list")
+
+    spans = []
+    for item in raw:
+        if not isinstance(item, dict):
+            raise ApiError(HTTPStatus.BAD_REQUEST, f"each entry in {key!r} must be an object")
+        line, end = _line_range(item)
+        spans.append(
+            make(
+                line=line,
+                end=end,
+                start=_int_field(item, "from"),
+                stop=_int_field(item, "to"),
+            )
+        )
+    return spans
 
 
 def _line_range(payload: dict) -> tuple[int, int]:

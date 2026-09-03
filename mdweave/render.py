@@ -126,6 +126,7 @@ def render_document(
         "assets/notes.js",
         "assets/annotate.js",
         "assets/edit.js",
+        "assets/copy.js",
         "assets/refresh.js",
         "assets/checkpoint.js",
     ),
@@ -236,7 +237,7 @@ def write_assets(outdir: Path) -> None:
 
     scripts = (
         "ui.js", "sidebar.js", "notes.js", "annotate.js",
-        "edit.js", "refresh.js", "checkpoint.js",
+        "edit.js", "copy.js", "refresh.js", "checkpoint.js",
     )
     for script in scripts:
         (assets / script).write_text(

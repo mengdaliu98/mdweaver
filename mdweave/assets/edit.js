@@ -11,7 +11,9 @@
  *
  * Selecting across blocks and pressing Delete works too, and likewise never
  * shows markup: the browser sends offsets into the *visible* text and the
- * server maps them back onto the source.
+ * server maps them back onto the source. Working those offsets out is
+ * `ui.blockRanges`, shared with copy.js, which asks the same question of a
+ * selection and gets the markdown back instead of deleting it.
  *
  * Plain ES5, no build step, same as its neighbours.
  */
@@ -55,23 +57,9 @@
 
   /* --- one block at a time ------------------------------------------------ */
 
-  function spanOf(block) {
-    var start = parseInt(block.getAttribute("data-src-start"), 10);
-    var end = parseInt(block.getAttribute("data-src-end"), 10);
-    return isNaN(start) || isNaN(end) ? null : { start: start, end: end };
-  }
-
-  /* The block a node sits in, or null if it is not editable prose. */
-  function blockFor(node) {
-    var el = node && node.nodeType === 3 ? node.parentNode : node;
-    if (!el || !el.closest) return null;
-    var block = el.closest("[data-src-start]");
-    return block && doc.contains(block) ? block : null;
-  }
-
   function edit(block) {
     if (!ready || open || busy) return;
-    var span = spanOf(block);
+    var span = ui.spanOf(block);
     if (!span) return;
 
     var url =
@@ -181,51 +169,6 @@
 
   /* --- cutting a selection ------------------------------------------------ */
 
-  /* How far into a block's visible text a boundary sits. Mirrors what the
-   * server computes with BeautifulSoup's get_text(), so the two agree on what
-   * "character 40 of this paragraph" means. */
-  function offsetIn(block, node, offset) {
-    var range = document.createRange();
-    range.selectNodeContents(block);
-    range.setEnd(node, offset);
-    return range.toString().length;
-  }
-
-  /* Break a selection into one cut per block it touches. */
-  function cutsFor(range) {
-    var startBlock = blockFor(range.startContainer);
-    var endBlock = blockFor(range.endContainer);
-    if (!startBlock || !endBlock) return null;
-
-    var blocks = Array.prototype.filter.call(
-      doc.querySelectorAll("[data-src-start]"),
-      function (block) {
-        return range.intersectsNode(block);
-      }
-    );
-    if (!blocks.length) blocks = [startBlock];
-
-    var cuts = [];
-    for (var i = 0; i < blocks.length; i++) {
-      var block = blocks[i];
-      var span = spanOf(block);
-      if (!span) continue;
-
-      var length = block.textContent.length;
-      var from = block === startBlock
-        ? offsetIn(block, range.startContainer, range.startOffset)
-        : 0;
-      var to = block === endBlock
-        ? offsetIn(block, range.endContainer, range.endOffset)
-        : length;
-
-      if (to > from) {
-        cuts.push({ start: span.start, end: span.end, from: from, to: to });
-      }
-    }
-    return cuts.length ? cuts : null;
-  }
-
   function cutSelection() {
     var selection = window.getSelection();
     if (!selection || selection.isCollapsed || !selection.rangeCount) return false;
@@ -233,7 +176,7 @@
     var range = selection.getRangeAt(0);
     if (!doc.contains(range.commonAncestorContainer)) return false;
 
-    var cuts = cutsFor(range);
+    var cuts = ui.blockRanges(range);
     if (!cuts) return false;
 
     busy = true;
@@ -264,7 +207,7 @@
     // Links should navigate.
     if (event.target.closest && event.target.closest("a")) return;
 
-    var block = blockFor(event.target);
+    var block = ui.blockFor(event.target);
     if (block) edit(block);
   });
 
