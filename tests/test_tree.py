@@ -282,3 +282,32 @@ def test_double_click_restores_the_stylesheet_width():
     source = (ASSETS / "sidebar.js").read_text(encoding="utf-8")
     block = source.split('addEventListener("dblclick"')[1].split("});")[0]
     assert "removeProperty" in block
+
+
+def test_the_import_icon_is_an_upload_not_a_download():
+    """Arrow up out of a tray. Down into a tray means the opposite thing.
+
+    Asserted as geometry rather than as a literal path, so the icon can be
+    redrawn without the test going stale -- what must not change is which way
+    the arrow points.
+    """
+    import re
+
+    template = (TEMPLATES / "document.html.j2").read_text(encoding="utf-8")
+    button = template.split('data-action="import"')[1].split("</button>")[0]
+    path = re.search(r'\bd="([^"]+)"', button).group(1)
+
+    # The arrowhead: a move to one wing, a line to the apex, then out to the
+    # other wing. Apex above both wings is what makes it an upload.
+    # SVG lets a negative number follow without a separator (`l2.6-2.6`), so
+    # the gap between the two has to be optional or this misses the very shape
+    # it exists to reject.
+    head = re.search(
+        r"M([\d.]+) ([\d.]+) ([\d.]+) ([\d.]+)l(-?[\d.]+)[\s,]*(-?[\d.]+)", path
+    )
+    assert head, f"could not find an arrowhead in {path!r}"
+    wing_y, apex_y, rise = float(head.group(2)), float(head.group(4)), float(head.group(6))
+
+    # SVG y grows downward, so "above" is a smaller y.
+    assert apex_y < wing_y, "the arrowhead points down -- that is a download"
+    assert rise > 0, "the far wing must come back down from the apex"
