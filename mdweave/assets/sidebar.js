@@ -59,17 +59,30 @@
     return parts.join("/");
   }
 
-  sidebar.querySelectorAll(".tree__folder").forEach(function (details) {
-    var path = pathOf(details);
-    details.open = closed.indexOf(path) === -1;
+  /* Restore each folder's open state and remember any change to it.
+   *
+   * A function rather than a one-off, because the panel's contents are
+   * replaced whenever the tree changes: filetree.js delegates its listeners to
+   * the panel itself and survives that, but a `toggle` handler bound to one
+   * `<details>` goes with the element it was bound to. */
+  function wireFolders() {
+    sidebar.querySelectorAll(".tree__folder").forEach(function (details) {
+      if (details.dataset.wired === "1") return;
+      details.dataset.wired = "1";
 
-    details.addEventListener("toggle", function () {
-      var at = closed.indexOf(path);
-      if (details.open && at !== -1) closed.splice(at, 1);
-      else if (!details.open && at === -1) closed.push(path);
-      write(FOLDERS_KEY, closed);
+      var path = pathOf(details);
+      details.open = closed.indexOf(path) === -1;
+
+      details.addEventListener("toggle", function () {
+        var at = closed.indexOf(path);
+        if (details.open && at !== -1) closed.splice(at, 1);
+        else if (!details.open && at === -1) closed.push(path);
+        write(FOLDERS_KEY, closed);
+      });
     });
-  });
+  }
+
+  wireFolders();
 
   /* --- panel visibility --------------------------------------------------- */
 
@@ -85,11 +98,27 @@
 
   setHidden(read(PANEL_KEY, "shown") === "hidden");
 
-  if (collapse) {
-    collapse.addEventListener("click", function () {
-      setHidden(true);
-    });
+  /* The two controls that live inside the panel, and so are replaced with it.
+   * `show` sits outside and is wired once, below. */
+  function wireHead() {
+    if (collapse && collapse.dataset.wired !== "1") {
+      collapse.dataset.wired = "1";
+      collapse.setAttribute("aria-expanded", document.body.dataset.sidebar !== "hidden");
+      collapse.addEventListener("click", function () {
+        setHidden(true);
+      });
+    }
+    if (filePicker && filePicker.dataset.wired !== "1") {
+      filePicker.dataset.wired = "1";
+      filePicker.addEventListener("change", function () {
+        importFiles(filePicker.files, pendingFolder);
+        filePicker.value = ""; // so re-picking the same file fires change again
+      });
+    }
   }
+
+  // Not called here: `filePicker` is declared further down and would still be
+  // undefined. The one call at load happens once both controls exist.
   if (show) {
     show.addEventListener("click", function () {
       setHidden(false);
@@ -279,12 +308,9 @@
     filePicker.click();
   }
 
-  if (filePicker) {
-    filePicker.addEventListener("change", function () {
-      importFiles(filePicker.files, pendingFolder);
-      filePicker.value = ""; // so re-picking the same file fires change again
-    });
-  }
+  // Both in-panel controls, wired through the same function that re-wires them
+  // after the panel's contents are replaced.
+  wireHead();
 
   /* --- drag and drop ------------------------------------------------------ */
 
@@ -366,5 +392,19 @@
 
   /* filetree.js drives the per-row controls; importing stays here, so it hands
    * over the one entry point rather than a second copy of the upload dance. */
-  window.mdweaveSidebar = { importInto: importInto, folderAt: folderAt };
+  /* Re-adopt the panel after its contents have been replaced. The collapse
+   * button and the file input live inside it and are recreated with it, so the
+   * module's references to them go stale along with their listeners. */
+  function rewire() {
+    collapse = document.getElementById("sidebar-collapse");
+    filePicker = document.getElementById("sidebar-file");
+    wireFolders();
+    wireHead();
+  }
+
+  window.mdweaveSidebar = {
+    importInto: importInto,
+    folderAt: folderAt,
+    rewire: rewire,
+  };
 })();

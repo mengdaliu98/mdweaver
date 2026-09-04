@@ -552,20 +552,20 @@ def test_the_new_module_is_registered_in_both_places():
 
 def test_the_one_import_button_in_the_header_is_gone():
     """It could only ever mean the root; the row it hangs off says where now."""
-    template = (TEMPLATES / "document.html.j2").read_text(encoding="utf-8")
+    template = (TEMPLATES / "sidebar.html.j2").read_text(encoding="utf-8")
     assert 'id="sidebar-import"' not in template
     assert 'id="sidebar-file"' in template, "the picker is shared by every row"
 
 
 def test_every_row_carries_create_and_import():
-    template = (TEMPLATES / "document.html.j2").read_text(encoding="utf-8")
+    template = (TEMPLATES / "sidebar.html.j2").read_text(encoding="utf-8")
     assert 'data-action="create"' in template
     assert 'data-action="import"' in template
 
 
 def test_rename_and_delete_are_offered_on_rows_but_not_on_the_root():
     """Folders get them too now; the top level has no name and no self to drop."""
-    template = (TEMPLATES / "document.html.j2").read_text(encoding="utf-8")
+    template = (TEMPLATES / "sidebar.html.j2").read_text(encoding="utf-8")
     guarded = template.split('{% if what != "root" %}')[1].split("{% endif %}")[0]
 
     # One pair of buttons, switching action by what the row is.
@@ -576,7 +576,7 @@ def test_rename_and_delete_are_offered_on_rows_but_not_on_the_root():
 def test_the_root_can_make_the_first_folder():
     """Without this the nested tree is unreachable: every other way of getting
     a folder needs a folder to already exist."""
-    template = (TEMPLATES / "document.html.j2").read_text(encoding="utf-8")
+    template = (TEMPLATES / "sidebar.html.j2").read_text(encoding="utf-8")
     source = (ASSETS / "filetree.js").read_text(encoding="utf-8")
 
     assert '{{ row_actions("root", ' in template, "the root strip carries controls"
@@ -587,7 +587,7 @@ def test_the_root_can_make_the_first_folder():
 
 def test_the_controls_are_reachable_without_a_mouse():
     """`display: none` would take them out of the tab order entirely."""
-    template = (TEMPLATES / "document.html.j2").read_text(encoding="utf-8")
+    template = (TEMPLATES / "sidebar.html.j2").read_text(encoding="utf-8")
     css = (THEME / "sidebar.css").read_text(encoding="utf-8")
 
     assert 'tabindex="-1"' not in template
@@ -849,3 +849,117 @@ def test_an_empty_folder_survives_a_plain_build(tmp_path):
 
     assert main(["build", str(src), "-o", str(out)]) == 0
     assert "Empty one" in (out / "doc.html").read_text(encoding="utf-8")
+
+
+# --- keeping it quick ------------------------------------------------------
+#
+# A tree change alters the navigation on every page and none of their prose.
+# Re-rendering all of it took two seconds to move one row.
+
+def test_a_tree_change_does_not_re_render_the_prose(server):
+    """The give-away: an untouched page keeps its exact bytes but for the nav."""
+    base, workspace = server
+    page = workspace.outputs / "other.html"
+    before = page.read_text(encoding="utf-8")
+
+    call(base, "/api/tree/order", {"folder": "", "order": ["notes", "top", "other"]})
+
+    after = page.read_text(encoding="utf-8")
+    assert after != before, "the navigation should have moved"
+    assert after.split("</nav>")[1] == before.split("</nav>")[1], "prose was re-rendered"
+
+
+def test_a_page_without_the_markers_is_rebuilt_in_full(server):
+    """Written by an older version -- splicing has nothing to aim at."""
+    base, workspace = server
+    page = workspace.outputs / "other.html"
+    page.write_text("<html>ancient</html>", encoding="utf-8")
+
+    call(base, "/api/documents/create", {"path": "fresh"})
+
+    rebuilt = page.read_text(encoding="utf-8")
+    assert "Also at the root." in rebuilt
+    assert 'href="fresh.html"' in rebuilt
+
+
+def test_a_missing_page_is_written_rather_than_skipped(server):
+    base, workspace = server
+    (workspace.outputs / "other.html").unlink()
+
+    call(base, "/api/tree/order", {"folder": "", "order": ["top"]})
+
+    assert (workspace.outputs / "other.html").exists()
+
+
+def test_a_block_edit_leaves_every_other_page_alone(server):
+    """A label comes from the filename, so prose cannot change another page."""
+    base, workspace = server
+    untouched = workspace.outputs / "other.html"
+    before = untouched.read_text(encoding="utf-8")
+
+    status, _ = call(base, "/api/block", {
+        "document": "top", "start": 0, "end": 1, "text": "# Renamed heading",
+    })
+
+    assert status == 200
+    assert untouched.read_text(encoding="utf-8") == before
+    assert "Renamed heading" in (workspace.outputs / "top.html").read_text(encoding="utf-8")
+
+
+# --- swapping the panel instead of reloading -------------------------------
+
+def test_a_mutation_hands_back_the_caller_s_panel(server):
+    base, _ = server
+    _, payload = call(
+        base, "/api/documents/create", {"path": "fresh", "page": "top"}
+    )
+
+    assert 'href="fresh.html"' in payload["sidebar"]
+    assert "<!--mdweave:sidebar-->" in payload["sidebar"]
+
+
+def test_the_panel_is_rendered_for_the_page_that_asked(server):
+    """Each page's sidebar differs: the active row, and how far it has to climb."""
+    base, _ = server
+    _, root_page = call(base, "/api/tree/order", {"folder": "", "order": [], "page": "top"})
+    _, nested = call(base, "/api/tree/order", {"folder": "", "order": [], "page": "notes/weekly"})
+
+    assert 'href="top.html"' in root_page["sidebar"]
+    assert 'href="../top.html"' in nested["sidebar"], "a nested page climbs out"
+
+
+def test_no_panel_comes_back_for_a_page_that_just_went_away(server):
+    """The caller has to navigate, not swap -- and needs to be told so."""
+    base, _ = server
+    _, payload = call(
+        base, "/api/documents/delete", {"document": "top", "page": "top"}
+    )
+    assert payload["sidebar"] is None
+
+
+def test_a_caller_that_names_no_page_gets_no_panel(server):
+    base, _ = server
+    _, payload = call(base, "/api/tree/order", {"folder": "", "order": []})
+    assert "sidebar" not in payload
+
+
+def test_the_client_swaps_rather_than_reloading():
+    tree = (ASSETS / "filetree.js").read_text(encoding="utf-8")
+    ui = (ASSETS / "ui.js").read_text(encoding="utf-8")
+
+    assert "adoptSidebar" in ui and "adoptSidebar: adoptSidebar" in ui
+    assert "ui.adoptSidebar(payload && payload.sidebar)" in tree
+    assert "payload.page = CURRENT" in tree, "the server cannot guess the page"
+
+    # The one reload left is the fallback inside settle().
+    assert tree.count("window.location.reload()") == 1
+
+
+def test_the_panel_s_own_controls_are_re_wired_after_a_swap():
+    """filetree.js delegates to the panel and survives; these do not."""
+    sidebar = (ASSETS / "sidebar.js").read_text(encoding="utf-8")
+    ui = (ASSETS / "ui.js").read_text(encoding="utf-8")
+
+    assert "rewire: rewire" in sidebar
+    assert "wireFolders()" in sidebar and "wireHead()" in sidebar
+    assert "api.rewire()" in ui

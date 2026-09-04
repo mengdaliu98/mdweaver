@@ -140,6 +140,14 @@ anything into. Renaming a folder carries every document under it, and so
 changes their ids; deleting one refuses unless it is empty or the request says
 `recursive`.
 
+**Cost.** A tree change alters the navigation on every page and none of their
+prose, so only the one region that changed is rewritten: `render_sidebar`
+produces the panel and `splice_sidebar` swaps it between the markers each page
+carries, skipping the markdown parse and the syntax highlighting entirely. The
+browser is handed its own page's new panel and swaps that in rather than
+reloading. Rebuilding all of it took about two seconds to move one row; it is
+now about a fifth of a second, and nothing on screen flickers.
+
 **Resizing.** Drag the panel's right edge. The width persists across
 navigations, is clamped to 150–600px, and takes the arrow keys once the handle
 has focus (`Shift` for bigger steps). Double-click it to go back to the

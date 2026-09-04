@@ -73,6 +73,50 @@ class SourceMappedRenderer(RendererHTML):
         return _tag_first_tag(html, token.map) if token.level == 0 and token.map else html
 
 
+# The sidebar is written between these, so it can be replaced later without
+# touching anything else on the page. The macro emits them itself, so the
+# fragment and the region it replaces are the same bytes.
+SIDEBAR_OPEN = "<!--mdweave:sidebar-->"
+SIDEBAR_CLOSE = "<!--/mdweave:sidebar-->"
+
+
+def _environment() -> Environment:
+    # autoescape=True, not select_autoescape(): the latter keys off the file
+    # extension, and ".html.j2" reads as ".j2" -- which would leave comment
+    # bodies unescaped. The rendered markdown is the one trusted value, and it
+    # is marked `| safe` in the template.
+    return Environment(
+        loader=FileSystemLoader(TEMPLATES),
+        autoescape=True,
+        trim_blocks=True,
+        lstrip_blocks=True,
+    )
+
+
+def render_sidebar(tree: list[Node], doc_id: str) -> str:
+    """Just the navigation panel, for splicing into a page already written.
+
+    Rebuilding the tree used to mean re-rendering every document: 26 markdown
+    parses and 26 runs of Pygments to move one row. Nothing about the prose
+    changes when the tree does, so this renders the one part that did.
+    """
+    module = _environment().get_template("sidebar.html.j2").module
+    return str(module.sidebar(tree, relative_prefix(doc_id), doc_id))
+
+
+def splice_sidebar(html: str, sidebar: str) -> str:
+    """Replace a page's navigation, leaving every other byte alone.
+
+    A page without the markers is left untouched rather than guessed at -- it
+    was written by an older version, and a full render will replace it.
+    """
+    start = html.find(SIDEBAR_OPEN)
+    end = html.find(SIDEBAR_CLOSE)
+    if start == -1 or end == -1 or end < start:
+        return html
+    return html[:start] + sidebar.strip() + html[end + len(SIDEBAR_CLOSE) :]
+
+
 @dataclass
 class RenderResult:
     html: str
@@ -142,16 +186,7 @@ def render_document(
     placed = [p.annotation for p in placements if p.resolved]
     notes = [_note_context(a) for a in placed if a.has_card]
 
-    # autoescape=True, not select_autoescape(): the latter keys off the file
-    # extension, and ".html.j2" reads as ".j2" -- which would leave comment
-    # bodies unescaped. The rendered markdown is the one trusted value, and it
-    # is marked `| safe` in the template.
-    env = Environment(
-        loader=FileSystemLoader(TEMPLATES),
-        autoescape=True,
-        trim_blocks=True,
-        lstrip_blocks=True,
-    )
+    env = _environment()
     # A page nested under a folder has to climb back out to reach the shared
     # assets and its siblings' pages.
     prefix = relative_prefix(doc_id or "")

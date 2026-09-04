@@ -37,6 +37,9 @@
   /* --- talking to the server ---------------------------------------------- */
 
   function post(path, payload) {
+    // `page` tells the server which document is on screen, so it can hand back
+    // that page's freshly rendered panel -- it has no other way to know.
+    payload.page = CURRENT;
     return fetch(path, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -45,6 +48,14 @@
       if (!response.ok) return ui.reject(response);
       return response.json();
     });
+  }
+
+  /* Show a tree change without reloading. Falls back to a reload when the
+   * server sent no panel -- which happens when the page being read is the one
+   * that just stopped existing. */
+  function settle(payload) {
+    if (!ui.adoptSidebar(payload && payload.sidebar)) window.location.reload();
+    busy(false);
   }
 
   function busy(on) {
@@ -60,11 +71,13 @@
    * one. If the document being read is the one that moved, its URL moved with
    * it and a plain reload would land on a 404. */
   function land(docId, payload) {
+    // The page being read moved, so its address did too -- that one is a real
+    // navigation. Every other row change is just the panel.
     if (payload && payload.document && docId === CURRENT) {
       window.location.href = PREFIX + payload.document.href;
-    } else {
-      window.location.reload();
+      return;
     }
+    settle(payload);
   }
 
   function join(folder, name) {
@@ -169,11 +182,11 @@
     var docId = link.dataset.doc;
     busy(true);
     post("/api/documents/delete", { document: docId })
-      .then(function () {
+      .then(function (payload) {
         // There is no page left to go back to when it was this one; the root
         // hands out whatever document is first.
         if (docId === CURRENT) window.location.href = "/";
-        else window.location.reload();
+        else settle(payload);
       })
       .catch(fail);
   }
@@ -193,9 +206,7 @@
 
     busy(true);
     post("/api/folders/create", { path: join(parent, name) })
-      .then(function () {
-        window.location.reload(); // the tree is baked into the page
-      })
+      .then(settle)
       .catch(fail);
   }
 
@@ -222,11 +233,11 @@
       from: path,
       to: join(path.split("/").slice(0, -1).join("/"), name),
     })
-      .then(function () {
+      .then(function (payload) {
         // Every document under it has a new id, so the page being read is at
         // an address that no longer exists; the root hands out another.
         if (CURRENT.indexOf(path + "/") === 0) window.location.href = "/";
-        else window.location.reload();
+        else settle(payload);
       })
       .catch(fail);
   }
@@ -245,9 +256,9 @@
 
     busy(true);
     post("/api/folders/delete", { folder: path, recursive: inside > 0 })
-      .then(function () {
+      .then(function (payload) {
         if (CURRENT.indexOf(path + "/") === 0) window.location.href = "/";
-        else window.location.reload();
+        else settle(payload);
       })
       .catch(fail);
   }
@@ -378,7 +389,12 @@
         return post("/api/tree/order", {
           folder: place.parent,
           order: names,
-        }).then(function () {
+        }).then(function (ordered) {
+          // Two writes, so two panels came back. The move's was rendered
+          // before the arrangement was applied and is already out of date;
+          // keep its `document`, which says where the page went, and take the
+          // later panel.
+          payload.sidebar = ordered.sidebar;
           return payload;
         });
       })

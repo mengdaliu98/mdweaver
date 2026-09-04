@@ -29,7 +29,13 @@ from urllib.parse import parse_qs, quote, urlparse
 from . import checkpoint as git_checkpoint
 from . import edits
 from .model import COLOR_TOKENS, DEFAULT_COLOR, Annotation, Comment, Offset, TextTarget
-from .render import render_document, write_assets
+from .render import (
+    SIDEBAR_OPEN,
+    render_document,
+    render_sidebar,
+    splice_sidebar,
+    write_assets,
+)
 from .sources import obsidian_inline, sidecar
 from .tree import (
     build_tree,
@@ -195,6 +201,46 @@ class Workspace:
         documents = self.documents()
         tree = self.tree()
         for doc_id in documents:
+            self.write_html(doc_id, self.annotations_for(doc_id), tree=tree)
+
+    def sidebar_for(self, doc_id: str) -> str | None:
+        """The freshly rendered navigation for one page, or None if it is gone.
+
+        Handed back after a tree change so the browser can swap the panel in
+        place. A full reload would re-fetch the page, re-run every script and
+        re-lay out the notes to move one row.
+        """
+        if doc_id not in self.documents():
+            return None
+        return render_sidebar(self.tree(), doc_id)
+
+    def rebuild_tree(self, render_ids: set[str] = frozenset()) -> None:
+        """Refresh the navigation everywhere, re-rendering as little as possible.
+
+        A change to the tree -- a new document, a rename, a drag -- alters the
+        sidebar on every page and none of their prose. `rebuild_all` re-parsed
+        all of it anyway, which cost two seconds to move one row. Only the
+        documents named in `render_ids` are rendered in full; the rest have the
+        one region that changed spliced in.
+
+        A page that is missing, or was written before the markers existed, falls
+        back to a full render rather than being left stale.
+        """
+        tree = self.tree()
+        for doc_id in self.documents():
+            page = self.outputs / f"{doc_id}.html"
+            html = page.read_text(encoding="utf-8") if page.exists() else ""
+
+            # Look for the markers rather than comparing the result: a splice
+            # that changes nothing is the common case -- most pages' navigation
+            # is identical after a reorder -- and treating that as "no markers"
+            # sent every one of them through a full render.
+            if doc_id not in render_ids and SIDEBAR_OPEN in html:
+                spliced = splice_sidebar(html, render_sidebar(tree, doc_id))
+                if spliced != html:
+                    page.write_text(spliced, encoding="utf-8")
+                continue
+
             self.write_html(doc_id, self.annotations_for(doc_id), tree=tree)
 
     def add_document(
@@ -461,13 +507,16 @@ class Workspace:
             raise ApiError(HTTPStatus.BAD_REQUEST, str(exc))
 
     def write_source(self, doc_id: str, markdown: str) -> None:
-        """Replace a document's markdown and re-render everything.
+        """Replace a document's markdown and re-render its page.
 
-        The whole set is rebuilt rather than just this page because a heading
-        edit changes the sidebar label, which every other page has baked in.
+        Only this page. A sidebar label comes from the *filename*, so no edit
+        to the prose can change any other page -- the whole set used to be
+        rebuilt on the belief that a heading edit moved the label, which it
+        never did.
         """
-        self.markdown_for(doc_id).write_text(markdown, encoding="utf-8")
-        self.rebuild_all()
+        path = self.markdown_for(doc_id)
+        path.write_text(markdown, encoding="utf-8")
+        self.write_html(doc_id, self.annotations_for(doc_id))
 
     def body_of(self, doc_id: str) -> tuple[str, str]:
         """The rendered document and its notes, without the page around them.
@@ -767,9 +816,9 @@ class Handler(SimpleHTTPRequestHandler):
 
         # Every page carries its own sidebar, so they all need regenerating for
         # the new document to be reachable -- no restart involved.
-        self.workspace.rebuild_all()
+        self.workspace.rebuild_tree({doc_id})
 
-        return HTTPStatus.CREATED, _described(doc_id)
+        return HTTPStatus.CREATED, _with_panel(self, payload, _described(doc_id))
 
     def _api_folder_create(self):
         """Make an empty folder. Without this the tree can never be nested."""
@@ -777,10 +826,10 @@ class Handler(SimpleHTTPRequestHandler):
         folder = self.workspace.create_folder(_require(payload, "path"))
         # An empty folder holds no documents, so no page's content changes --
         # but every page draws the tree, and the tree just gained a row.
-        self.workspace.rebuild_all()
-        return HTTPStatus.CREATED, {"folder": {"path": folder, "label": humanize(
-            folder.rpartition("/")[2]
-        )}}
+        self.workspace.rebuild_tree()
+        return HTTPStatus.CREATED, _with_panel(self, payload, {"folder": {
+            "path": folder, "label": humanize(folder.rpartition("/")[2])
+        }})
 
     def _api_folder_rename(self):
         """Rename a folder, carrying everything under it."""
@@ -788,10 +837,10 @@ class Handler(SimpleHTTPRequestHandler):
         folder = self.workspace.rename_folder(
             _require(payload, "from"), _require(payload, "to")
         )
-        self.workspace.rebuild_all()
-        return HTTPStatus.OK, {"folder": {"path": folder, "label": humanize(
-            folder.rpartition("/")[2]
-        )}}
+        self.workspace.rebuild_tree()
+        return HTTPStatus.OK, _with_panel(self, payload, {"folder": {
+            "path": folder, "label": humanize(folder.rpartition("/")[2])
+        }})
 
     def _api_folder_delete(self):
         """Remove a folder, and say how many documents went with it."""
@@ -799,15 +848,15 @@ class Handler(SimpleHTTPRequestHandler):
         removed = self.workspace.delete_folder(
             _require(payload, "folder"), bool(payload.get("recursive"))
         )
-        self.workspace.rebuild_all()
-        return HTTPStatus.OK, {"removed": removed}
+        self.workspace.rebuild_tree()
+        return HTTPStatus.OK, _with_panel(self, payload, {"removed": removed})
 
     def _api_create(self):
         """Make a new, empty document where the reader asked for one."""
         payload = self._json_body()
         doc_id = self.workspace.create_document(_require(payload, "path"))
-        self.workspace.rebuild_all()
-        return HTTPStatus.CREATED, _described(doc_id)
+        self.workspace.rebuild_tree({doc_id})
+        return HTTPStatus.CREATED, _with_panel(self, payload, _described(doc_id))
 
     def _api_move(self):
         """Move a document into another folder, or rename it -- one operation.
@@ -819,8 +868,8 @@ class Handler(SimpleHTTPRequestHandler):
         doc_id = self.workspace.move_document(
             _require(payload, "from"), _require(payload, "to")
         )
-        self.workspace.rebuild_all()
-        return HTTPStatus.OK, _described(doc_id)
+        self.workspace.rebuild_tree({doc_id})
+        return HTTPStatus.OK, _with_panel(self, payload, _described(doc_id))
 
     def _api_delete_document(self):
         """Throw a document away -- the prose, its annotations, and its page."""
@@ -828,8 +877,8 @@ class Handler(SimpleHTTPRequestHandler):
         doc_id = _require(payload, "document")
 
         self.workspace.delete_document(doc_id)
-        self.workspace.rebuild_all()
-        return HTTPStatus.OK, {"deleted": doc_id}
+        self.workspace.rebuild_tree()
+        return HTTPStatus.OK, _with_panel(self, payload, {"deleted": doc_id})
 
     def _api_order(self):
         """Persist the order the reader dragged one folder's children into."""
@@ -845,8 +894,8 @@ class Handler(SimpleHTTPRequestHandler):
         kept = self.workspace.set_order(folder, names)
         # The arrangement is baked into every page's sidebar, same as the set
         # of documents is.
-        self.workspace.rebuild_all()
-        return HTTPStatus.OK, {"folder": folder, "order": kept}
+        self.workspace.rebuild_tree()
+        return HTTPStatus.OK, _with_panel(self, payload, {"folder": folder, "order": kept})
 
     def _api_block(self):
         """Replace one block's markdown -- clicking a paragraph and typing."""
@@ -1125,6 +1174,18 @@ def _line_range(payload: dict) -> tuple[int, int]:
     if end <= line:
         raise ApiError(HTTPStatus.BAD_REQUEST, f"bad line range {line}-{end}")
     return line, end
+
+
+def _with_panel(handler, payload: dict, body: dict) -> dict:
+    """Add the caller's freshly rendered sidebar to a response.
+
+    The page the reader is on is theirs to name -- the server has no idea which
+    of the documents it just re-indexed is on screen.
+    """
+    page = payload.get("page")
+    if isinstance(page, str) and page:
+        body["sidebar"] = handler.workspace.sidebar_for(page)
+    return body
 
 
 def _described(doc_id: str) -> dict:

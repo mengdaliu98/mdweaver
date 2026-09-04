@@ -95,6 +95,35 @@
     if (window.mdweave && window.mdweave.refresh) window.mdweave.refresh();
   }
 
+  /* Swap the navigation panel, leaving the page it sits beside alone.
+   *
+   * A tree change alters the sidebar on every page and none of their prose, so
+   * reloading to see a moved row costs a page fetch, nine scripts and a full
+   * note re-layout for nothing. Only the panel's *contents* are replaced:
+   * filetree.js delegates its listeners to the panel element itself and so
+   * survives, while sidebar.js re-adopts the handful of controls inside it.
+   *
+   * Returns false when there was no panel to swap, so the caller can fall back
+   * to a reload rather than silently showing a stale tree. */
+  function adoptSidebar(html) {
+    if (typeof html !== "string" || !html) return false;
+
+    var panel = document.getElementById("sidebar");
+    if (!panel) return false;
+
+    // The fragment is a whole <nav> between markers; take its innards so the
+    // element carrying the delegated listeners stays put.
+    var holder = document.createElement("div");
+    holder.innerHTML = html;
+    var fresh = holder.querySelector("#sidebar");
+    if (!fresh) return false;
+
+    panel.innerHTML = fresh.innerHTML;
+    var api = window.mdweaveSidebar;
+    if (api && api.rewire) api.rewire();
+    return true;
+  }
+
   /* --- describing a selection to the server --------------------------------
    *
    * Every top-level block is rendered carrying the source lines it came from
@@ -226,6 +255,7 @@
     notice: notice,
     dismissNotice: dismissNotice,
     adopt: adopt,
+    adoptSidebar: adoptSidebar,
     blockFor: blockFor,
     spanOf: spanOf,
     blockRanges: blockRanges,

@@ -293,7 +293,7 @@ def test_the_import_icon_is_an_upload_not_a_download():
     """
     import re
 
-    template = (TEMPLATES / "document.html.j2").read_text(encoding="utf-8")
+    template = (TEMPLATES / "sidebar.html.j2").read_text(encoding="utf-8")
     button = template.split('data-action="import"')[1].split("</button>")[0]
     path = re.search(r'\bd="([^"]+)"', button).group(1)
 
