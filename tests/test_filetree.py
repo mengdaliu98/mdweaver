@@ -9,6 +9,7 @@ so they share one fixture and one set of traversal tests.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import threading
@@ -562,12 +563,26 @@ def test_every_row_carries_create_and_import():
     assert 'data-action="import"' in template
 
 
-def test_only_a_document_row_offers_rename_and_delete():
-    """Renaming a folder is a bulk move of everything under it -- not this."""
+def test_rename_and_delete_are_offered_on_rows_but_not_on_the_root():
+    """Folders get them too now; the top level has no name and no self to drop."""
     template = (TEMPLATES / "document.html.j2").read_text(encoding="utf-8")
-    guarded = template.split('{% if what == "file" %}')[1].split("{% endif %}")[0]
-    assert 'data-action="rename"' in guarded
-    assert 'data-action="delete"' in guarded
+    guarded = template.split('{% if what != "root" %}')[1].split("{% endif %}")[0]
+
+    # One pair of buttons, switching action by what the row is.
+    assert '"rename" if what == "file" else "rename-folder"' in guarded
+    assert '"delete" if what == "file" else "delete-folder"' in guarded
+
+
+def test_the_root_can_make_the_first_folder():
+    """Without this the nested tree is unreachable: every other way of getting
+    a folder needs a folder to already exist."""
+    template = (TEMPLATES / "document.html.j2").read_text(encoding="utf-8")
+    source = (ASSETS / "filetree.js").read_text(encoding="utf-8")
+
+    assert '{{ row_actions("root", ' in template, "the root strip carries controls"
+    assert 'data-action="new-folder"' in template
+    assert '"new-folder": newFolder' in source
+    assert '"/api/folders/create"' in source
 
 
 def test_the_controls_are_reachable_without_a_mouse():
@@ -578,9 +593,12 @@ def test_the_controls_are_reachable_without_a_mouse():
     assert 'tabindex="-1"' not in template
     assert "aria-label=" in template.split('data-action="create"')[1].split(">")[0]
 
-    block = css.split(".tree__actions {")[1].split("}")[0]
-    assert "opacity: 0" in block
-    assert "display: none" not in block
+    # The base rule specifically -- other rules reveal the set on hover, and a
+    # plain "first .tree__actions {" would read whichever came first in the file.
+    block = re.search(r"(?m)^\.tree__actions \{([^}]*)\}", css)
+    assert block, "no base .tree__actions rule"
+    assert "opacity: 0" in block.group(1)
+    assert "display: none" not in block.group(1)
     assert ":focus-within > .tree__actions" in css
 
 
@@ -662,3 +680,172 @@ def test_every_browser_asset_is_valid_javascript():
     for path in sorted(ASSETS.glob("*.js")):
         done = subprocess.run([node, "--check", str(path)], capture_output=True)
         assert done.returncode == 0, f"{path.name}: {done.stderr.decode()}"
+
+
+# --- making folders --------------------------------------------------------
+#
+# The gap that made everything above unreachable: every other folder operation
+# needs a folder to already exist, and a fresh knowledge base has none.
+
+def test_a_folder_can_be_created(server):
+    base, workspace = server
+    status, payload = call(base, "/api/folders/create", {"path": "research"})
+
+    assert status == 201
+    assert payload["folder"]["path"] == "research"
+    assert (workspace.inputs / "research").is_dir()
+
+
+def test_a_folder_can_be_created_inside_another(server):
+    base, workspace = server
+    assert call(base, "/api/folders/create", {"path": "notes/2026"})[0] == 201
+    assert (workspace.inputs / "notes" / "2026").is_dir()
+
+
+def test_a_new_folder_becomes_a_drop_target(server):
+    """Creating one is only useful if a document can then be moved into it."""
+    base, workspace = server
+    call(base, "/api/folders/create", {"path": "research"})
+
+    assert call(base, "/api/documents/move", {"from": "top", "to": "research/top"})[0] == 200
+    assert (workspace.inputs / "research" / "top.md").exists()
+    assert not (workspace.inputs / "top.md").exists()
+
+
+def test_a_new_folder_shows_up_in_every_sidebar(server):
+    base, workspace = server
+    call(base, "/api/folders/create", {"path": "research"})
+    assert "Research" in (workspace.outputs / "other.html").read_text(encoding="utf-8")
+
+
+def test_creating_a_folder_that_exists_is_a_conflict(server):
+    base, _ = server
+    assert call(base, "/api/folders/create", {"path": "notes"})[0] == 409
+
+
+def test_a_folder_name_is_sanitised(server):
+    base, workspace = server
+    _, payload = call(base, "/api/folders/create", {"path": "My Research Notes"})
+    assert payload["folder"]["path"] == "My_Research_Notes"
+    assert (workspace.inputs / "My_Research_Notes").is_dir()
+
+
+@pytest.mark.parametrize(
+    "path", ["../escape", "/etc/escape", "..\\escape", "notes/../../escape", "."]
+)
+def test_a_folder_cannot_be_created_outside_the_root(server, path):
+    base, workspace = server
+    before = sorted(p.name for p in workspace.inputs.parent.iterdir())
+
+    call(base, "/api/folders/create", {"path": path})
+
+    assert sorted(p.name for p in workspace.inputs.parent.iterdir()) == before
+    assert not (workspace.inputs.parent / "escape").exists()
+
+
+def test_a_leading_dot_is_stripped_rather_than_honoured(server):
+    """A dotted directory is skipped by document_ids, so honouring the name
+    would create a folder that could never appear. The dot goes instead."""
+    base, workspace = server
+    _, payload = call(base, "/api/folders/create", {"path": ".hidden"})
+
+    assert payload["folder"]["path"] == "hidden"
+    assert not (workspace.inputs / ".hidden").exists()
+    assert (workspace.inputs / "hidden").is_dir()
+
+
+# --- renaming and deleting folders -----------------------------------------
+
+def test_renaming_a_folder_carries_its_documents(server):
+    base, workspace = server
+    status, payload = call(base, "/api/folders/rename", {"from": "notes", "to": "journal"})
+
+    assert status == 200 and payload["folder"]["path"] == "journal"
+    assert (workspace.inputs / "journal" / "weekly.md").exists()
+    assert not (workspace.inputs / "notes").exists()
+    assert "journal/weekly" in workspace.documents()
+    # The page under the old id would otherwise be served forever.
+    assert not (workspace.outputs / "notes" / "weekly.html").exists()
+
+
+def test_renaming_a_folder_moves_its_arrangement(server):
+    base, workspace = server
+    call(base, "/api/tree/order", {"folder": "notes", "order": ["weekly"]})
+    call(base, "/api/folders/rename", {"from": "notes", "to": "journal"})
+
+    from mdweave.tree import load_order
+
+    order = load_order(workspace.inputs)
+    assert "notes" not in order
+    assert order.get("journal") == ["weekly"]
+
+
+def test_a_folder_cannot_be_renamed_into_itself(server):
+    base, _ = server
+    assert call(base, "/api/folders/rename", {"from": "notes", "to": "notes/inner"})[0] == 400
+
+
+def test_the_root_cannot_be_renamed_or_deleted(server):
+    base, _ = server
+    assert call(base, "/api/folders/rename", {"from": "", "to": "x"})[0] == 400
+    assert call(base, "/api/folders/delete", {"folder": ""})[0] == 400
+
+
+def test_an_empty_folder_deletes_without_ceremony(server):
+    base, workspace = server
+    status, payload = call(base, "/api/folders/delete", {"folder": "archive"})
+
+    assert status == 200 and payload["removed"] == 0
+    assert not (workspace.inputs / "archive").exists()
+
+
+def test_a_folder_with_documents_refuses_a_plain_delete(server):
+    """A mis-aimed request must not take a subtree with it."""
+    base, workspace = server
+    status, payload = call(base, "/api/folders/delete", {"folder": "notes"})
+
+    assert status == 409
+    assert "recursive" in payload["error"]
+    assert (workspace.inputs / "notes" / "weekly.md").exists()
+
+
+def test_a_recursive_delete_says_what_it_took(server):
+    base, workspace = server
+    status, payload = call(
+        base, "/api/folders/delete", {"folder": "notes", "recursive": True}
+    )
+
+    assert status == 200 and payload["removed"] == 1
+    assert not (workspace.inputs / "notes").exists()
+    assert not (workspace.outputs / "notes" / "weekly.html").exists()
+    assert "top" in workspace.documents(), "the rest of the base is untouched"
+
+
+def test_an_unknown_folder_is_a_404(server):
+    base, _ = server
+    assert call(base, "/api/folders/rename", {"from": "ghost", "to": "x"})[0] == 404
+    assert call(base, "/api/folders/delete", {"folder": "ghost"})[0] == 404
+
+
+def test_an_empty_folder_is_still_drawn(server):
+    """Otherwise a new folder is invisible, and the only way to put a document
+    in one is to drag onto its row -- so it could never stop being empty."""
+    base, workspace = server
+    call(base, "/api/folders/create", {"path": "research"})
+
+    tree = workspace.tree()
+    assert "research" in [n.name for n in tree if n.is_dir]
+    assert "Research" in (workspace.outputs / "top.html").read_text(encoding="utf-8")
+
+
+def test_an_empty_folder_survives_a_plain_build(tmp_path):
+    """`mdweave build` renders from the same tree the server does."""
+    from mdweave.cli import main
+
+    src = tmp_path / "markdown_inputs"
+    (src / "empty_one").mkdir(parents=True)
+    (src / "doc.md").write_text("# Doc\n", encoding="utf-8")
+    out = tmp_path / "html_outputs"
+
+    assert main(["build", str(src), "-o", str(out)]) == 0
+    assert "Empty one" in (out / "doc.html").read_text(encoding="utf-8")

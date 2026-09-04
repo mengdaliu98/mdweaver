@@ -16,6 +16,7 @@ import json
 import math
 import os
 import random
+import shutil
 import string
 import sys
 from dataclasses import dataclass
@@ -33,9 +34,11 @@ from .sources import obsidian_inline, sidecar
 from .tree import (
     build_tree,
     document_ids,
+    folder_paths,
     humanize,
     load_order,
     safe_document_name,
+    safe_folder_name,
     save_order,
 )
 
@@ -115,18 +118,10 @@ class Workspace:
         there, rather than handing over a string to be joined onto a path.
         """
         found: dict[str, Path] = {"": self.inputs}
-        if not self.inputs.is_dir():
-            return found
-
-        for path in sorted(self.inputs.rglob("*")):
-            if not path.is_dir():
-                continue
-            relative = path.relative_to(self.inputs)
-            # .obsidian and friends are not part of the navigation, so they are
-            # not somewhere a document can be dropped either.
-            if any(part.startswith(".") for part in relative.parts):
-                continue
-            found[relative.as_posix()] = path
+        # One discovery rule, shared with the tree: a folder that is drawn must
+        # be one a document can be dropped into, and the other way round.
+        for folder in folder_paths(self.inputs):
+            found[folder] = self.inputs / folder
         return found
 
     def folder_for(self, folder: str) -> Path:
@@ -165,8 +160,17 @@ class Workspace:
         )
 
     def tree(self):
-        """The sidebar, arranged the way the reader last dragged it."""
-        return build_tree(list(self.documents()), load_order(self.inputs))
+        """The sidebar, arranged the way the reader last dragged it.
+
+        Folders are passed explicitly, not inferred from the document ids: an
+        empty one has no documents to infer it from, and a folder you cannot
+        see is a folder you cannot drop anything into.
+        """
+        return build_tree(
+            list(self.documents()),
+            load_order(self.inputs),
+            [f for f in self.folders() if f],
+        )
 
     def write_html(self, doc_id: str, annotations: list[Annotation], tree=None):
         result = self.render(doc_id, annotations, tree=tree)
@@ -298,6 +302,112 @@ class Workspace:
         (self.outputs / f"{doc_id}.html").unlink(missing_ok=True)
 
         self._reindex(doc_id, None)
+
+    # --- folders ----------------------------------------------------------
+
+    def folder_destination(self, target: str) -> tuple[str, Path]:
+        """Split a proposed folder path into a parent that exists and a safe leaf.
+
+        Guarded exactly as `destination` is, and for the same reason: the
+        parent is looked up in `folders()` and never joined, the leaf goes
+        through `safe_folder_name`, and so neither half can name a directory
+        outside the markdown root.
+        """
+        cleaned = target.replace("\\", "/").strip("/")
+        parent, _, leaf = cleaned.rpartition("/")
+        directory = self.folder_for(parent)
+        try:
+            name = safe_folder_name(leaf)
+        except ValueError as exc:
+            raise ApiError(HTTPStatus.BAD_REQUEST, str(exc))
+        return (f"{parent}/{name}" if parent else name), directory / name
+
+    def create_folder(self, target: str) -> str:
+        """Make an empty folder, and return its path.
+
+        The one operation the tree could not do without. Everything else here
+        moves documents *into* folders, which is unreachable while there is no
+        way to get a first one.
+        """
+        path_id, path = self.folder_destination(target)
+        if path.exists():
+            raise ApiError(HTTPStatus.CONFLICT, f"{path_id!r} already exists")
+        path.mkdir(parents=True)
+        return path_id
+
+    def rename_folder(self, folder: str, target: str) -> str:
+        """Rename a folder, carrying every document under it to the new path."""
+        source = self.folder_for(folder)
+        if not folder:
+            raise ApiError(HTTPStatus.BAD_REQUEST, "the root cannot be renamed")
+
+        new_id, path = self.folder_destination(target)
+        if new_id == folder:
+            return folder
+        if path.exists():
+            raise ApiError(HTTPStatus.CONFLICT, f"{new_id!r} already exists")
+        if f"{new_id}/".startswith(f"{folder}/"):
+            raise ApiError(HTTPStatus.BAD_REQUEST, "a folder cannot move inside itself")
+
+        # Every id beneath this folder changes, so every page built from one is
+        # named after something that no longer exists.
+        moving = [d for d in self.documents() if d.startswith(f"{folder}/")]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        source.rename(path)
+        for doc_id in moving:
+            (self.outputs / f"{doc_id}.html").unlink(missing_ok=True)
+
+        self._reindex_folder(folder, new_id)
+        return new_id
+
+    def delete_folder(self, folder: str, recursive: bool) -> int:
+        """Remove a folder. Returns how many documents went with it.
+
+        A non-empty folder needs `recursive`, so a mis-aimed drop or a stray
+        request cannot take a subtree with it.
+        """
+        directory = self.folder_for(folder)
+        if not folder:
+            raise ApiError(HTTPStatus.BAD_REQUEST, "the root cannot be deleted")
+
+        inside = [d for d in self.documents() if d.startswith(f"{folder}/")]
+        if inside and not recursive:
+            raise ApiError(
+                HTTPStatus.CONFLICT,
+                f"{folder!r} still holds {len(inside)} document(s); "
+                "pass recursive to remove them too",
+            )
+
+        for doc_id in inside:
+            (self.outputs / f"{doc_id}.html").unlink(missing_ok=True)
+        shutil.rmtree(directory)
+
+        self._reindex_folder(folder, None)
+        return len(inside)
+
+    def _reindex_folder(self, old: str, new: str | None) -> None:
+        """Follow a folder move or delete through the hand-arranged order.
+
+        Two things move: the folder's own name in its parent's list, and every
+        order key recorded for it or anything beneath it.
+        """
+        order = load_order(self.inputs)
+
+        parent, _, name = old.rpartition("/")
+        listed = order.get(parent)
+        if listed and name in listed:
+            at = listed.index(name)
+            listed.pop(at)
+            if new is not None:
+                listed.insert(at, new.rpartition("/")[2])
+            order[parent] = listed
+
+        for key in [k for k in order if k == old or k.startswith(f"{old}/")]:
+            names = order.pop(key)
+            if new is not None:
+                order[new + key[len(old) :]] = names
+
+        save_order(self.inputs, order)
 
     def set_order(self, folder: str, names: list[str]) -> list[str]:
         """Remember the order of one folder's children."""
@@ -573,6 +683,12 @@ class Handler(SimpleHTTPRequestHandler):
         route = urlparse(self.path)
         if route.path == "/api/documents":
             return self._api_import()
+        if route.path == "/api/folders/create":
+            return self._api_folder_create()
+        if route.path == "/api/folders/rename":
+            return self._api_folder_rename()
+        if route.path == "/api/folders/delete":
+            return self._api_folder_delete()
         if route.path == "/api/documents/create":
             return self._api_create()
         if route.path == "/api/documents/move":
@@ -654,6 +770,37 @@ class Handler(SimpleHTTPRequestHandler):
         self.workspace.rebuild_all()
 
         return HTTPStatus.CREATED, _described(doc_id)
+
+    def _api_folder_create(self):
+        """Make an empty folder. Without this the tree can never be nested."""
+        payload = self._json_body()
+        folder = self.workspace.create_folder(_require(payload, "path"))
+        # An empty folder holds no documents, so no page's content changes --
+        # but every page draws the tree, and the tree just gained a row.
+        self.workspace.rebuild_all()
+        return HTTPStatus.CREATED, {"folder": {"path": folder, "label": humanize(
+            folder.rpartition("/")[2]
+        )}}
+
+    def _api_folder_rename(self):
+        """Rename a folder, carrying everything under it."""
+        payload = self._json_body()
+        folder = self.workspace.rename_folder(
+            _require(payload, "from"), _require(payload, "to")
+        )
+        self.workspace.rebuild_all()
+        return HTTPStatus.OK, {"folder": {"path": folder, "label": humanize(
+            folder.rpartition("/")[2]
+        )}}
+
+    def _api_folder_delete(self):
+        """Remove a folder, and say how many documents went with it."""
+        payload = self._json_body()
+        removed = self.workspace.delete_folder(
+            _require(payload, "folder"), bool(payload.get("recursive"))
+        )
+        self.workspace.rebuild_all()
+        return HTTPStatus.OK, {"removed": removed}
 
     def _api_create(self):
         """Make a new, empty document where the reader asked for one."""

@@ -23,7 +23,7 @@ from pathlib import Path
 
 from .render import render_document, write_assets
 from .sources import obsidian_inline, sidecar
-from .tree import build_tree, document_ids, humanize, load_order
+from .tree import build_tree, document_ids, folder_paths, humanize, load_order
 
 
 def contents_root() -> Path:
@@ -195,7 +195,9 @@ def cmd_build(args) -> int:
         print(f"error: no markdown found under {root}", file=sys.stderr)
         return 1
 
-    tree = build_tree(list(documents), load_order(root))
+    # Folders explicitly, so an empty one is still a row -- the server builds
+    # the same tree, and a page built here must not disagree with one it writes.
+    tree = build_tree(list(documents), load_order(root), folder_paths(root))
     selected = (
         documents
         if target.is_dir()

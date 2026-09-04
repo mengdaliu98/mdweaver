@@ -178,14 +178,91 @@
       .catch(fail);
   }
 
+  /* --- folders -------------------------------------------------------------
+   *
+   * A folder row's buttons act *inside* it; the root's act at the top level.
+   * `folderAt` already draws that distinction, so these read the same as their
+   * document counterparts. */
+
+  function newFolder(button) {
+    var parent = folderAt(button);
+    var name = window.prompt("Name for the new folder", "");
+    if (name === null) return;
+    name = name.trim();
+    if (!name) return;
+
+    busy(true);
+    post("/api/folders/create", { path: join(parent, name) })
+      .then(function () {
+        window.location.reload(); // the tree is baked into the page
+      })
+      .catch(fail);
+  }
+
+  /* The folder this button belongs to, or null at the root -- which has no
+   * name to change and nothing to delete. */
+  function folderRow(button) {
+    var details = button.closest ? button.closest(".tree__folder") : null;
+    return details && details.dataset.path ? details : null;
+  }
+
+  function renameFolder(button) {
+    var details = folderRow(button);
+    if (!details) return;
+
+    var was = details.dataset.folder || "";
+    var name = window.prompt("Rename this folder", was);
+    if (name === null) return;
+    name = name.trim();
+    if (!name || name === was) return;
+
+    var path = details.dataset.path;
+    busy(true);
+    post("/api/folders/rename", {
+      from: path,
+      to: join(path.split("/").slice(0, -1).join("/"), name),
+    })
+      .then(function () {
+        // Every document under it has a new id, so the page being read is at
+        // an address that no longer exists; the root hands out another.
+        if (CURRENT.indexOf(path + "/") === 0) window.location.href = "/";
+        else window.location.reload();
+      })
+      .catch(fail);
+  }
+
+  function removeFolder(button) {
+    var details = folderRow(button);
+    if (!details) return;
+
+    var path = details.dataset.path;
+    var inside = details.querySelectorAll(".tree__row--file").length;
+    var warning = inside
+      ? '"' + path + '" holds ' + inside + " document(s).\n\nDeleting it removes " +
+        "them, their comments, and their pages. This cannot be undone."
+      : 'Delete the empty folder "' + path + '"?';
+    if (!window.confirm(warning)) return;
+
+    busy(true);
+    post("/api/folders/delete", { folder: path, recursive: inside > 0 })
+      .then(function () {
+        if (CURRENT.indexOf(path + "/") === 0) window.location.href = "/";
+        else window.location.reload();
+      })
+      .catch(fail);
+  }
+
   var ACTIONS = {
     create: create,
+    "new-folder": newFolder,
     import: function (button) {
       var api = window.mdweaveSidebar;
       if (api) api.importInto(folderAt(button));
     },
     rename: rename,
+    "rename-folder": renameFolder,
     delete: remove,
+    "delete-folder": removeFolder,
   };
 
   function onClick(event) {

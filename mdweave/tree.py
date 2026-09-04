@@ -60,6 +60,24 @@ def safe_document_name(raw: str) -> str:
     return stem + ".md"
 
 
+def safe_folder_name(raw: str) -> str:
+    """Reduce a proposed folder name to one safe to write and to link to.
+
+    The same reduction as `safe_document_name` without the `.md`: any path is
+    thrown away down to the bare name, so a client cannot steer a directory out
+    of the markdown root however it spells the request. A leading dot goes with
+    it -- `document_ids` skips dotted directories, so a folder named that way
+    would be created and then never appear.
+
+    Raises ValueError if nothing usable is left.
+    """
+    name = "_".join(_UNSAFE.sub("", raw.replace("\\", "/").rsplit("/", 1)[-1]).split())
+    name = name.strip("._")
+    if not name:
+        raise ValueError(f"{raw!r} leaves no usable folder name")
+    return name
+
+
 @dataclass
 class Node:
     """One row in the sidebar: a folder, or a document."""
@@ -83,6 +101,25 @@ def document_ids(root: Path) -> dict[str, Path]:
         if any(part.startswith(".") for part in relative.parts):
             continue
         found[relative.with_suffix("").as_posix()] = path
+    return found
+
+
+def folder_paths(root: Path) -> list[str]:
+    """Every folder under `root`, as sidebar paths. The root itself is not one.
+
+    Same exclusions as `document_ids`: a dotted directory is not part of the
+    navigation, so it is not a place a document can be dropped either.
+    """
+    if not root.is_dir():
+        return []
+    found = []
+    for path in sorted(root.rglob("*")):
+        if not path.is_dir():
+            continue
+        relative = path.relative_to(root)
+        if any(part.startswith(".") for part in relative.parts):
+            continue
+        found.append(relative.as_posix())
     return found
 
 
@@ -120,8 +157,18 @@ def save_order(root: Path, order: dict[str, list[str]]) -> None:
     )
 
 
-def build_tree(doc_ids: list[str], order: dict[str, list[str]] | None = None) -> list[Node]:
-    """Assemble a nested tree from flat document ids."""
+def build_tree(
+    doc_ids: list[str],
+    order: dict[str, list[str]] | None = None,
+    folders: list[str] | None = None,
+) -> list[Node]:
+    """Assemble a nested tree from flat document ids.
+
+    `folders` names directories that must appear whether or not anything is in
+    them. Without it a freshly made folder is invisible until it holds a
+    document -- and since the only way to put one there is to drag it onto the
+    row, it would never hold one.
+    """
     root = Node(name="", label="", is_dir=True)
 
     for doc_id in sorted(doc_ids):
@@ -141,6 +188,19 @@ def build_tree(doc_ids: list[str], order: dict[str, list[str]] | None = None) ->
                     is_dir=not is_file,
                     doc_id=doc_id if is_file else None,
                 )
+                cursor.children.append(match)
+            cursor = match
+
+    for folder in sorted(folders or []):
+        cursor = root
+        for part in folder.split("/"):
+            if not part:
+                continue
+            match = next(
+                (c for c in cursor.children if c.name == part and c.is_dir), None
+            )
+            if match is None:
+                match = Node(name=part, label=humanize(part), is_dir=True)
                 cursor.children.append(match)
             cursor = match
 

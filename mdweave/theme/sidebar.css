@@ -319,6 +319,21 @@ body.sidebar-resizing {
    is the only way to get a document back out of a folder. */
 .sidebar__root { min-height: 6rem; }
 
+/* The top level's own row: no label, just the controls. It is the only place
+   the first folder can be made, so unlike the rows above it the buttons show
+   whenever the pointer is anywhere in the strip -- there is no name to aim at.
+   `position: relative` because .tree__actions is laid out against its row. */
+.tree__row--root {
+  position: relative;
+  min-height: var(--tree-row-h);
+  cursor: default;
+}
+
+.tree__row--root:hover { background: none; }
+
+.sidebar__root:hover .tree__row--root .tree__actions,
+.tree__row--root:focus-within .tree__actions { opacity: 1; }
+
 /* A document row and the controls laid over its right-hand end. */
 .tree__file { position: relative; }
 

@@ -132,6 +132,14 @@ capitals, because nothing distinguishes it from an ordinary word. The document
 keeps whatever title its own `# heading` gives it. `humanize` in
 `mdweave/tree.py` is the one place to change if that trade stops being worth it.
 
+**Folders.** The `+`-in-a-folder button makes one: on a folder row it nests
+inside, on the strip below the tree it lands at the top level — which is the
+only way to get a first folder in a knowledge base that has none. An empty
+folder is still drawn, because a folder you cannot see is one you cannot drop
+anything into. Renaming a folder carries every document under it, and so
+changes their ids; deleting one refuses unless it is empty or the request says
+`recursive`.
+
 **Resizing.** Drag the panel's right edge. The width persists across
 navigations, is clamped to 150–600px, and takes the arrow keys once the handle
 has focus (`Shift` for bigger steps). Double-click it to go back to the
