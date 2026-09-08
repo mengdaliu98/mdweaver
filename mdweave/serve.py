@@ -28,6 +28,7 @@ from urllib.parse import parse_qs, quote, urlparse
 
 from . import checkpoint as git_checkpoint
 from . import edits
+from .autosave import DEFAULT_DELAY, AutoCommit
 from .model import COLOR_TOKENS, DEFAULT_COLOR, Annotation, Comment, Offset, TextTarget
 from .render import (
     SIDEBAR_OPEN,
@@ -56,6 +57,9 @@ MAX_BODY_BYTES = 256 * 1024
 MAX_UPLOAD_BYTES = 8 * 1024 * 1024
 # How much of an over-sized body is worth reading just to answer politely.
 DRAIN_LIMIT = 64 * 1024 * 1024
+
+# POSTs that only read. Everything else that succeeds has changed something.
+READ_ONLY_POSTS = {"/api/extract"}
 
 # A dragged note may not be flung arbitrarily far from its anchor.
 OFFSET_LIMIT = 4000
@@ -598,8 +602,9 @@ class Handler(SimpleHTTPRequestHandler):
 
     workspace: Workspace
 
-    def __init__(self, *args, workspace: Workspace, **kwargs) -> None:
+    def __init__(self, *args, workspace: Workspace, autosave=None, **kwargs) -> None:
         self.workspace = workspace
+        self.autosave = autosave or AutoCommit(workspace.inputs, workspace.outputs)
         super().__init__(*args, directory=str(workspace.outputs), **kwargs)
 
     # --- authentication ----------------------------------------------------
@@ -702,6 +707,13 @@ class Handler(SimpleHTTPRequestHandler):
             payload = {"error": f"{type(exc).__name__}: {exc}"}
         self._respond(status, payload)
 
+        # One choke point rather than a call in each of thirteen handlers, so a
+        # new endpoint cannot forget to arm it. After the response, so arming
+        # never costs the request anything.
+        if self.command != "GET" and 200 <= int(status) < 300:
+            if urlparse(self.path).path not in READ_ONLY_POSTS:
+                self.autosave.touch()
+
     # --- endpoints -------------------------------------------------------
 
     def _api_get(self):
@@ -711,6 +723,7 @@ class Handler(SimpleHTTPRequestHandler):
                 "ok": True,
                 "pid": os.getpid(),  # how `mdweave stop` finds this process
                 "fingerprint": RUNNING_FINGERPRINT,
+                "autosave": self.autosave.status(),
                 "documents": sorted(self.workspace.documents()),
             }
 
@@ -1214,9 +1227,34 @@ def _require(payload: dict, key: str) -> str:
     return value
 
 
-def make_server(workspace: Workspace, host: str, port: int) -> ThreadingHTTPServer:
+def autocommit_for(workspace: Workspace) -> AutoCommit:
+    """Read the auto-commit setting from the environment.
+
+    Off unless MDWEAVE_AUTOCOMMIT names a number of seconds -- opt-in, because
+    committing on somebody's behalf is not a default worth assuming. The
+    deployed container sets it; a checkout on your own machine need not.
+    """
+    raw = os.environ.get("MDWEAVE_AUTOCOMMIT", "").strip()
+    try:
+        delay = float(raw)
+    except ValueError:
+        delay = 0.0
+    return AutoCommit(
+        inputs=workspace.inputs,
+        outputs=workspace.outputs,
+        delay=delay or DEFAULT_DELAY,
+        enabled=delay > 0,
+    )
+
+
+def make_server(
+    workspace: Workspace, host: str, port: int, autosave: AutoCommit | None = None
+) -> ThreadingHTTPServer:
     workspace.outputs.mkdir(parents=True, exist_ok=True)
-    return ThreadingHTTPServer((host, port), partial(Handler, workspace=workspace))
+    return ThreadingHTTPServer(
+        (host, port),
+        partial(Handler, workspace=workspace, autosave=autosave),
+    )
 
 
 def serve(inputs: Path, outputs: Path, host: str = "127.0.0.1", port: int = 8765) -> int:
@@ -1226,11 +1264,14 @@ def serve(inputs: Path, outputs: Path, host: str = "127.0.0.1", port: int = 8765
         return 1
 
     workspace = Workspace(inputs=inputs, outputs=outputs)
-    httpd = make_server(workspace, host, port)
+    autosave = autocommit_for(workspace)
+    httpd = make_server(workspace, host, port, autosave)
+
     guarded = " [password required]" if credentials() else ""
+    saving = f"  [auto-commit after {autosave.delay:g}s]" if autosave.enabled else ""
     print(
         f"mdweave serving http://{host}:{httpd.server_port}/  "
-        f"[{RUNNING_FINGERPRINT}]{guarded}  (Ctrl-C to stop)"
+        f"[{RUNNING_FINGERPRINT}]{guarded}{saving}  (Ctrl-C to stop)"
     )
     for name in workspace.documents():
         print(f"  http://{host}:{httpd.server_port}/{name}.html")
@@ -1239,5 +1280,10 @@ def serve(inputs: Path, outputs: Path, host: str = "127.0.0.1", port: int = 8765
     except KeyboardInterrupt:
         print("\nstopped")
     finally:
+        # Anything written in the last few seconds has an armed timer that will
+        # never fire now. Commit it rather than leaving it on the disk only.
+        autosave.cancel()
+        if autosave.enabled:
+            autosave.run_now()
         httpd.server_close()
     return 0

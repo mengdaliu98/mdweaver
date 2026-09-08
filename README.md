@@ -251,6 +251,30 @@ into this page is wrong too, so the button falls back to a real reload rather
 than leaving you with a navigation that lies. It also waits for an edit that
 is still saving, instead of replacing the prose out from under it.
 
+## Saving on its own
+
+Set `MDWEAVE_AUTOCOMMIT` to a number of seconds and the server commits and
+pushes by itself once the writing stops. Off unless it is set — committing on
+someone's behalf is not a default worth assuming.
+
+Nothing waits on it. A write arms a timer and returns; the git work happens
+later on the timer's own thread, so an edit costs the same whether this is on
+or off. Each further write pushes the deadline back, so a burst of nine
+paragraph edits is one commit rather than nine.
+
+Unlike **Checkpoint**, which is scoped to one article, this commits the whole
+of `markdown_inputs` and `html_outputs` — which is the only way the tree
+arrangement gets saved at all. A folder, a move and `.mdweave-order.json`
+belong to no article, so no per-document button can ever capture them.
+
+Failures are recorded rather than raised: the commit is already made, and the
+next run pushes it, so an unreachable remote costs nothing but a delay. The
+last outcome is on `/api/health`, and a failed push is mentioned once in the
+page rather than left to the logs.
+
+The two are complementary. Auto-commit means work is never only on one
+machine; Checkpoint is for when you want to say *why* in the message.
+
 ## Checkpointing
 
 **Checkpoint** in the top right commits and pushes the document you are

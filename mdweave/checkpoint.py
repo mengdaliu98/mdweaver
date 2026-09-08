@@ -73,6 +73,18 @@ def _tracked_or_present(repo: Path, paths: list[Path]) -> list[str]:
     known = set()
     for path in paths:
         relative = path.relative_to(repo).as_posix()
+
+        if path.is_dir():
+            # A directory is only a usable pathspec once something under it
+            # exists or is tracked. Naming an empty one makes `git commit`
+            # fail with "did not match any file(s) known to git", and makes
+            # the staged-check above it read that error as "there are
+            # changes" -- so an empty html_outputs took the whole run down.
+            has_file = any(child.is_file() for child in path.rglob("*"))
+            if has_file or _tracked_under(repo, relative):
+                known.add(relative)
+            continue
+
         if path.exists():
             known.add(relative)
             continue
@@ -82,6 +94,13 @@ def _tracked_or_present(repo: Path, paths: list[Path]) -> list[str]:
         except GitError:
             pass  # git has never heard of it and it is not there: nothing to do
     return sorted(known)
+
+
+def _tracked_under(repo: Path, relative: str) -> bool:
+    try:
+        return bool(_git(repo, "ls-files", "--", relative).strip())
+    except GitError:
+        return False
 
 
 def checkpoint(repo: Path, paths: list[Path], message: str) -> Checkpoint:

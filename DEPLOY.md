@@ -28,6 +28,7 @@ generated domain, so that is fine there; do not put this on plain HTTP.
 | `MDWEAVE_PASSWORD` | yes | the password the browser will ask for |
 | `KNOWLEDGE_BASE_REPO` | yes | content repo, no scheme: `github.com/<you>/knowledge_base.git` |
 | `GITHUB_TOKEN` | yes | a token that can **read and push** that repo |
+| `MDWEAVE_AUTOCOMMIT` | no | seconds of quiet before committing and pushing by itself; unset = off |
 | `MDWEAVE_USER` | no | username for the prompt (default `mdweave`) |
 | `MDWEAVE_CONTENTS` | no | where the clone lives (default `/data/knowledge_base`) |
 | `GIT_AUTHOR_NAME` | no | what checkpoint commits are attributed to |

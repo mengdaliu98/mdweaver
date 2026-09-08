@@ -123,6 +123,16 @@
 
   /* Committing needs the server, like everything else that writes. */
   ui.api().then(function (health) {
-    if (health) button.hidden = false;
+    if (!health) return;
+    button.hidden = false;
+
+    /* Auto-commit runs on a timer with nobody watching it, so a failure --
+     * an expired token, an unreachable remote -- would otherwise be invisible
+     * until someone went looking in the logs. Say it once, quietly; it does
+     * not block anything, and the work is still committed locally. */
+    var saving = health.autosave;
+    if (saving && saving.enabled && saving.error) {
+      ui.toast("Auto-save could not push: " + saving.error, "warn");
+    }
   });
 })();
