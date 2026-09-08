@@ -977,6 +977,7 @@ class Handler(SimpleHTTPRequestHandler):
         return HTTPStatus.OK, {
             "committed": result.committed,
             "pushed": result.pushed,
+            "sent": result.sent,
             "revision": result.revision,
             "detail": result.detail,
         }

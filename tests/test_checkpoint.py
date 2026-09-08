@@ -288,3 +288,48 @@ def test_a_failure_stays_in_the_dialog():
     body = source.split(".catch(")[1]
     assert "showError" in body
     assert "close()" not in body.split("});")[0]
+
+
+def test_a_recovered_push_is_not_reported_as_a_no_op(repo):
+    """Regression: a push that failed left the commit behind, and the retry --
+    which had nothing new to commit but did send that commit -- reported
+    "nothing had changed; the remote is up to date"."""
+    (repo / "markdown_inputs" / "alpha.md").write_text("# Alpha\n\nEdited.\n", encoding="utf-8")
+
+    # First attempt: the commit lands, the push cannot.
+    git(repo, "remote", "set-url", "origin", str(repo / "gone.git"))
+    with pytest.raises(git_checkpoint.GitError):
+        git_checkpoint.checkpoint(repo, [repo / "markdown_inputs" / "alpha.md"], "first try")
+    assert git(repo, "log", "-1", "--pretty=%s").strip() == "first try"
+
+    # Second attempt, once the remote is reachable again.
+    git(repo, "remote", "set-url", "origin", str(repo.parent / "remote.git"))
+    result = git_checkpoint.checkpoint(
+        repo, [repo / "markdown_inputs" / "alpha.md"], "second try"
+    )
+
+    assert result.committed is False, "there was nothing new to commit"
+    assert result.sent == 1, "but a commit was sent, and saying otherwise is a lie"
+    assert git(repo, "rev-parse", "HEAD").strip() == git(repo, "rev-parse", "origin/main").strip()
+
+
+def test_a_genuine_no_op_sends_nothing(repo):
+    result = git_checkpoint.checkpoint(
+        repo, [repo / "markdown_inputs" / "alpha.md"], "nothing doing"
+    )
+    assert result.committed is False and result.sent == 0
+
+
+def test_a_fresh_commit_counts_as_sent(repo):
+    (repo / "markdown_inputs" / "alpha.md").write_text("# Alpha\n\nEdited.\n", encoding="utf-8")
+    result = git_checkpoint.checkpoint(
+        repo, [repo / "markdown_inputs" / "alpha.md"], "one change"
+    )
+    assert result.committed is True and result.sent == 1
+
+
+def test_the_message_distinguishes_the_three_outcomes():
+    source = (ASSETS / "checkpoint.js").read_text(encoding="utf-8")
+    assert "payload.committed" in source
+    assert "payload.sent" in source
+    assert "Nothing had changed" not in source, "the wording that hid a real push"

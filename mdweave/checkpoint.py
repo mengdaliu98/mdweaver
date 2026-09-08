@@ -29,6 +29,7 @@ class Checkpoint:
     pushed: bool
     revision: str
     detail: str
+    sent: int = 0  # commits the push actually carried to the remote
 
 
 def _git(repo: Path, *args: str, timeout: int = TIMEOUT) -> str:
@@ -111,7 +112,11 @@ def checkpoint(repo: Path, paths: list[Path], message: str) -> Checkpoint:
         _git(repo, "commit", "-m", message, "--", *targets)
 
     # Push regardless: a previous checkpoint may have committed and then failed
-    # to reach the remote, and this is the natural moment to catch up.
+    # to reach the remote, and this is the natural moment to catch up. Counted
+    # first, because after the push there is nothing left to count -- and
+    # "committed nothing" is not the same as "sent nothing", which is exactly
+    # what a failed push followed by a retry looks like.
+    sent = _unpushed(repo)
     push = _git(repo, "push", timeout=PUSH_TIMEOUT)
     revision = _git(repo, "rev-parse", "--short", "HEAD").strip()
 
@@ -120,4 +125,17 @@ def checkpoint(repo: Path, paths: list[Path], message: str) -> Checkpoint:
         pushed=True,
         revision=revision,
         detail=(push.strip() or "pushed"),
+        sent=sent,
     )
+
+
+def _unpushed(repo: Path) -> int:
+    """How many commits the next push will carry.
+
+    Zero when there is no upstream to compare against -- an unknown count is
+    better reported as nothing than guessed at.
+    """
+    try:
+        return int(_git(repo, "rev-list", "--count", "@{u}..HEAD").strip() or 0)
+    except (GitError, ValueError):
+        return 0

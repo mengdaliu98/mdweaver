@@ -35,8 +35,18 @@ if [ -d "$CONTENTS/.git" ]; then
   # the remote since, but never clobber an edit that has not been checkpointed.
   echo "mdweave-start: reusing the checkout at $CONTENTS"
   git -C "$CONTENTS" remote set-url origin "$REMOTE"
+
+  # Generated pages are not work. They are rewritten a few seconds from now by
+  # the build below, and leaving them modified is enough on its own to make
+  # `pull --ff-only` refuse -- which strands the container on an old commit
+  # while the prose it should be showing sits on the remote. Discarding them
+  # cannot lose anything; a modified file under markdown_inputs still can, and
+  # still blocks the pull, which is the behaviour worth keeping.
+  git -C "$CONTENTS" checkout -- html_outputs 2>/dev/null || true
+  git -C "$CONTENTS" clean -qfd html_outputs 2>/dev/null || true
+
   git -C "$CONTENTS" pull --ff-only || \
-    echo "mdweave-start: pull skipped (local changes or diverged history)" >&2
+    echo "mdweave-start: pull skipped (local changes under markdown_inputs)" >&2
 else
   echo "mdweave-start: cloning into $CONTENTS"
   mkdir -p "$(dirname "$CONTENTS")"

@@ -81,11 +81,21 @@
       })
       .then(function (payload) {
         close();
-        ui.toast(
-          payload.committed
-            ? "Checkpointed and pushed (" + payload.revision + ")"
-            : "Nothing had changed; the remote is up to date"
-        );
+        // "Nothing to commit" and "nothing pushed" are different answers, and
+        // saying the first when the second is false is how a recovered push
+        // came to look like a no-op.
+        var note;
+        if (payload.committed) {
+          note = "Checkpointed and pushed (" + payload.revision + ")";
+        } else if (payload.sent) {
+          note =
+            "Nothing new to commit — pushed " +
+            payload.sent +
+            (payload.sent === 1 ? " earlier commit" : " earlier commits");
+        } else {
+          note = "Already up to date — nothing to commit or push";
+        }
+        ui.toast(note);
       })
       .catch(function (err) {
         setBusy(false);
