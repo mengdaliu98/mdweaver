@@ -403,10 +403,15 @@
           folder: place.parent,
           order: names,
         }).then(function (ordered) {
-          // Two writes, so two panels came back. The move's was rendered
-          // before the arrangement was applied and is already out of date;
-          // keep its `document`, which says where the page went, and take the
-          // later panel.
+          // Moving a row up or down inside its own folder is an order and
+          // nothing else, so there was no move and no earlier payload: the
+          // order response is the whole answer.
+          if (!payload) return ordered;
+
+          // Otherwise two writes, so two panels came back. The move's was
+          // rendered before the arrangement was applied and is already out of
+          // date; keep its `document`, which says where the page went, and
+          // take the later panel.
           payload.sidebar = ordered.sidebar;
           return payload;
         });

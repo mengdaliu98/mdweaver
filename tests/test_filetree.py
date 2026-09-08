@@ -1004,3 +1004,86 @@ def test_the_panel_s_own_controls_are_re_wired_after_a_swap():
     assert "rewire: rewire" in sidebar
     assert "wireFolders()" in sidebar and "wireHead()" in sidebar
     assert "api.rewire()" in ui
+
+
+def test_a_reorder_within_a_folder_does_not_touch_a_null_payload(tmp_path):
+    """Regression: moving a row up or down threw "Cannot set properties of
+    null (setting 'sidebar')".
+
+    A pure reorder issues no move, so the move's promise resolves to null --
+    and the code that merges the two responses wrote to it anyway. It hit
+    documents as well as folders; folders were simply where it was noticed.
+
+    Executed rather than read: the source-level tests around this all passed
+    while it was broken, because the shape of the code was right and only the
+    null case was wrong.
+    """
+    import re
+    import subprocess
+
+    source = (ASSETS / "filetree.js").read_text(encoding="utf-8")
+    # From the start of the chain to *its* .catch -- the earlier handlers have
+    # one too, and searching from zero produced an empty slice that passed.
+    begin = source.index("    var moving =")
+    end = source.index(".catch(fail);", begin) + len(".catch(fail);")
+    chain = source[begin:end]
+    assert "api/tree/order" in chain, "the wrong region was extracted"
+
+    program = """
+const results = [];
+function post(path, payload) {
+  results.push(path);
+  return Promise.resolve(
+    path.indexOf("order") !== -1
+      ? { sidebar: "PANEL-AFTER-ORDER" }
+      : { sidebar: "PANEL-BEFORE-ORDER", document: { id: "moved", href: "moved.html" } }
+  );
+}
+function land(id, payload) { results.push(["land", payload && payload.sidebar]); }
+function fail(error) { results.push(["fail", error.message]); }
+function join(folder, name) { return folder ? folder + "/" + name : name; }
+const CURRENT = "elsewhere";
+const window = { location: { href: "", reload() { results.push(["reload"]); } } };
+
+function run(moved, place, names) {
+  results.length = 0;
+__CHAIN__
+  return new Promise(function (done) { setTimeout(function () { done(results.slice()); }, 20); });
+}
+
+(async () => {
+  const out = {};
+  // Up or down inside the same folder: an order and nothing else.
+  out.reorderFolder = await run(
+    { folder: true, id: "notes", name: "notes", parent: "" },
+    { parent: "", index: 0 }, ["notes", "other"]);
+  out.reorderFile = await run(
+    { folder: false, id: "alpha", name: "alpha", parent: "" },
+    { parent: "", index: 1 }, ["other", "alpha"]);
+  // Into a different folder: a move, then an order.
+  out.intoFolder = await run(
+    { folder: false, id: "alpha", name: "alpha", parent: "" },
+    { parent: "notes", index: 0 }, ["alpha"]);
+  console.log(JSON.stringify(out));
+})();
+"""
+    program = program.replace("__CHAIN__", chain)
+    script = tmp_path / "drop.js"
+    script.write_text(program, encoding="utf-8")
+
+    done = subprocess.run(["node", str(script)], capture_output=True, text=True, timeout=30)
+    assert done.returncode == 0, done.stderr
+    out = json.loads(done.stdout)
+
+    # A reorder: one request, no failure, and the panel it landed with is the
+    # one the order returned.
+    for case in ("reorderFolder", "reorderFile"):
+        calls = [c for c in out[case] if isinstance(c, str)]
+        assert calls == ["/api/tree/order"], f"{case}: {out[case]}"
+        assert ["land", "PANEL-AFTER-ORDER"] in out[case], f"{case} did not land: {out[case]}"
+        assert not any(c[0] == "fail" for c in out[case] if isinstance(c, list)), out[case]
+
+    # A move: both requests, and the *later* panel wins.
+    calls = [c for c in out["intoFolder"] if isinstance(c, str)]
+    assert calls == ["/api/documents/move", "/api/tree/order"]
+    assert ["land", "PANEL-AFTER-ORDER"] in out["intoFolder"], out["intoFolder"]
