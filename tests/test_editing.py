@@ -612,7 +612,7 @@ def test_the_pending_highlight_is_created_before_the_composer_opens():
     source = strip_js_comments((ASSETS / "annotate.js").read_text(encoding="utf-8"))
     # The semicolon distinguishes the call site from the declaration.
     wrap_at = source.index('hl--pending", PENDING)')
-    open_at = source.index("openComposer(selector);")
+    open_at = source.index("openComposer(selector, color);")
     assert wrap_at < open_at, "the pending highlight must exist before the panel opens"
 
 
@@ -654,3 +654,52 @@ def test_the_card_offsets_in_css_are_expressed_with_the_shared_variables():
     body = css[css.index(".note__body {") : css.index(".note--open .note__body")]
     assert "var(--card-gap)" in body
     assert "6px" not in body
+
+
+# --- the selection menu ----------------------------------------------------
+
+def test_the_menu_offers_both_kinds_in_every_colour():
+    """One click, not two: the colour and the kind are chosen together."""
+    source = (ASSETS / "annotate.js").read_text(encoding="utf-8")
+
+    assert 'toolbarRow("comment"' in source and 'toolbarRow("highlight"' in source
+    assert 'data-kind="' in source and 'data-color="' in source
+    # The swatch carries the colour class, so it is painted as what it makes.
+    assert '"swatch swatch--" + color' in source or "swatch--' + color" in source
+
+
+def test_a_highlight_skips_the_composer_entirely():
+    """There is nothing to type, so asking for a message would be a step for
+    its own sake."""
+    source = (ASSETS / "annotate.js").read_text(encoding="utf-8")
+    body = source.split("function saveHighlight(")[1].split("\n  }")[0]
+    assert '"kind": "highlight"' in body or 'kind: "highlight"' in body
+    assert "openComposer" not in body
+    assert "hl--has-note" not in body, "a highlight has no card to point at"
+
+
+def test_the_chosen_colour_reaches_the_composer():
+    source = (ASSETS / "annotate.js").read_text(encoding="utf-8")
+    assert "function openComposer(selector, chosen)" in source
+    assert "chosen || DEFAULT_COLOR" in source
+
+
+# --- clicking away puts the cards away -------------------------------------
+
+def test_a_click_elsewhere_closes_every_open_card():
+    source = (ASSETS / "notes.js").read_text(encoding="utf-8")
+    assert "function closeAll()" in source
+
+    handler = source.split('document.addEventListener(\n    "click",')[1].split("true\n  );")[0]
+    assert "closeAll()" in handler
+    # Capture phase, or it would close the card the same click just opened.
+    assert source.split("function closeAll()")[1].count("true\n  );") >= 1
+
+
+def test_clicking_inside_a_card_does_not_dismiss_it():
+    """Selecting its text or pressing Delete is not a request to close."""
+    source = (ASSETS / "notes.js").read_text(encoding="utf-8")
+    handler = source.split('document.addEventListener(\n    "click",')[1].split("true\n  );")[0]
+    assert 'closest(".note")' in handler
+    assert 'closest("mark.hl--has-note")' in handler
+    assert "composer" in handler

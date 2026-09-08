@@ -326,12 +326,35 @@
     }
   });
 
-  document.addEventListener("keydown", function (event) {
-    if (event.key !== "Escape") return;
+  function closeAll() {
     notes.forEach(function (note) {
       if (note.classList.contains("note--open")) setOpen(note, false);
     });
+  }
+
+  document.addEventListener("keydown", function (event) {
+    if (event.key === "Escape") closeAll();
   });
+
+  /* A click anywhere else puts the cards away.
+   *
+   * On the capture phase, so it runs before the handlers that open one: the
+   * pin's own click and a click on highlighted text both bubble up to here,
+   * and closing afterwards would shut the card that click had just opened.
+   * A click inside a card is left alone -- selecting its text, or pressing
+   * one of its buttons, is not a request to dismiss it. */
+  document.addEventListener(
+    "click",
+    function (event) {
+      var target = event.target;
+      if (!target || !target.closest) return;
+      if (target.closest(".note")) return; // working inside a card
+      if (target.closest("mark.hl--has-note")) return; // the toggle handles it
+      if (target.closest(".composer, .selection-toolbar")) return;
+      closeAll();
+    },
+    true
+  );
 
   /* --- wide tables ------------------------------------------------------ */
 

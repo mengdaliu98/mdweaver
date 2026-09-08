@@ -775,7 +775,14 @@ class Handler(SimpleHTTPRequestHandler):
         payload = self._json_body()
         doc_id = _require(payload, "document")
         quote = _require(payload, "quote")
-        body = _require(payload, "body")
+
+        # A highlight is a comment with nothing to say: the same anchor and the
+        # same colour, no thread, and so no card. Its body is not merely
+        # optional -- it must be absent, or the card would come back.
+        kind = str(payload.get("kind", "comment"))
+        if kind not in ("comment", "highlight"):
+            raise ApiError(HTTPStatus.BAD_REQUEST, f"unknown kind: {kind!r}")
+        body = "" if kind == "highlight" else _require(payload, "body")
 
         annotations = self.workspace.annotations_for(doc_id)
         annotation = Annotation(
@@ -786,9 +793,9 @@ class Handler(SimpleHTTPRequestHandler):
                 suffix=str(payload.get("suffix", "")),
                 occurrence=int(payload.get("occurrence", 0)),
             ),
-            kind="comment",
+            kind=kind,
             color=_parse_color(payload.get("color", DEFAULT_COLOR)),
-            thread=[
+            thread=[] if kind == "highlight" else [
                 Comment(
                     body=body,
                     author=str(payload.get("author", "me")),

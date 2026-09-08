@@ -14,22 +14,23 @@ from typing import Any
 # Colour tokens defined in theme/annotations.css. A colour that is not one of
 # these, and not a legacy alias below, is treated as a raw CSS colour and
 # emitted as an inline custom property.
-COLOR_TOKENS = ("yellow", "orange", "green", "pink", "purple")
+COLOR_TOKENS = ("yellow", "green", "blue", "pink", "purple")
 DEFAULT_COLOR = "yellow"
 
 # The palette these five replaced. Sidecars written before the change still
 # carry the old names, and a render is no place to rewrite a user's .ann.json
 # -- so the old names are resolved on the way out and the files are left alone.
 #
-# `sky` and `slate` have no counterpart among the five and fold onto the
-# nearest survivor: two annotations that used to be told apart by colour now
-# look the same. Recolour them in the browser to get the distinction back.
+# `sky` has a proper home again now that the palette carries a blue. `slate`
+# is the one without a counterpart -- it was the only desaturated token -- and
+# folds onto yellow, so a note that meant "low priority" now shouts. Recolour
+# it in the browser to get the distinction back.
 LEGACY_COLOR_ALIASES = {
     "amber": "yellow",
     "rose": "pink",
     "mint": "green",
     "violet": "purple",
-    "sky": "purple",
+    "sky": "blue",
     "slate": "yellow",
 }
 

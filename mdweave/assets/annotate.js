@@ -27,7 +27,7 @@
   var PENDING = "__pending__";
   // Keep in step with model.COLOR_TOKENS and model.DEFAULT_COLOR; a drift
   // offers a swatch the server will refuse.
-  var COLORS = ["yellow", "orange", "green", "pink", "purple"];
+  var COLORS = ["yellow", "green", "blue", "pink", "purple"];
   var DEFAULT_COLOR = "yellow";
   var DOC_ID = document.body.dataset.document || "";
   var API = "/api/annotations";
@@ -185,17 +185,39 @@
 
   /* --- small UI pieces --------------------------------------------------- */
 
+  /* Two rows, five colours each. Picking a colour *is* the action, so a
+   * highlight is one click rather than "highlight, then recolour" -- and the
+   * colour you are choosing is shown in the colour it will be. */
+  var COMMENT_ICON =
+    '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">' +
+    '<path fill="currentColor" d="M8 1.5c-3.6 0-6.5 2.4-6.5 5.4 0 1.7.9 3.2 2.4 4.2l-.6 2.6a.4.4 0 0 0 .6.4l2.9-1.6c.4.05.8.08 1.2.08 3.6 0 6.5-2.4 6.5-5.4S11.6 1.5 8 1.5Z"/></svg>';
+  var HIGHLIGHT_ICON =
+    '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">' +
+    '<path fill="currentColor" d="M10.6 1.9 14.1 5.4 7.4 12.1H3.9V8.6zM2.4 13.4h11.2v1.4H2.4z"/></svg>';
+
+  function toolbarRow(kind, icon, label) {
+    var dots = COLORS.map(function (color) {
+      return (
+        '<button type="button" class="selection-toolbar__swatch swatch swatch--' + color +
+        '" data-kind="' + kind + '" data-color="' + color + '"' +
+        ' title="' + label + " in " + color + '"' +
+        ' aria-label="' + label + " in " + color + '"></button>'
+      );
+    }).join("");
+    return (
+      '<div class="selection-toolbar__row" role="group" aria-label="' + label + '">' +
+      '<span class="selection-toolbar__what">' + icon + " " + label + "</span>" +
+      '<span class="selection-toolbar__swatches">' + dots + "</span></div>"
+    );
+  }
+
   var toolbar = document.createElement("div");
   toolbar.className = "selection-toolbar";
   toolbar.hidden = true;
   toolbar.innerHTML =
-    '<button type="button" class="selection-toolbar__button">' +
-    '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">' +
-    '<path fill="currentColor" d="M8 1.5c-3.6 0-6.5 2.4-6.5 5.4 0 1.7.9 3.2 2.4 4.2l-.6 2.6a.4.4 0 0 0 .6.4l2.9-1.6c.4.05.8.08 1.2.08 3.6 0 6.5-2.4 6.5-5.4S11.6 1.5 8 1.5Z"/>' +
-    "</svg> Comment</button>";
+    toolbarRow("comment", COMMENT_ICON, "Comment") +
+    toolbarRow("highlight", HIGHLIGHT_ICON, "Highlight");
   document.body.appendChild(toolbar);
-
-  var toolbarButton = toolbar.querySelector("button");
 
   function hideToolbar() {
     toolbar.hidden = true;
@@ -327,7 +349,7 @@
     mdw.layout();
   }
 
-  function openComposer(selector) {
+  function openComposer(selector, chosen) {
     // Deliberately NOT closeComposer(): the pending highlight has already been
     // put in place by the caller and is what the composer anchors to. Unwrapping
     // it here left the panel with no anchor, so it fell back to the top-left
@@ -337,7 +359,8 @@
     composer = document.createElement("div");
     // The composer stands in for the card the annotation is about to get, so
     // it wears the same colour class and reads the same four variables.
-    composer.className = "composer note--" + DEFAULT_COLOR;
+    // The colour was already chosen by the swatch that opened this.
+    composer.className = "composer note--" + (chosen || DEFAULT_COLOR);
     composer.dataset.ann = PENDING;
     composer.innerHTML =
       '<blockquote class="composer__quote"></blockquote>' +
@@ -349,7 +372,7 @@
     composer.querySelector(".composer__quote").textContent = selector.quote;
 
     var actions = composer.querySelector(".composer__actions");
-    var color = DEFAULT_COLOR;
+    var color = chosen || DEFAULT_COLOR;
     actions.insertBefore(
       colorPicker(color, function (picked) {
         color = picked;
@@ -661,12 +684,17 @@
     showToolbarAt(range.getBoundingClientRect());
   });
 
-  toolbarButton.addEventListener("mousedown", function (event) {
+  toolbar.addEventListener("mousedown", function (event) {
     // Keep the selection alive: the default mousedown would collapse it.
     event.preventDefault();
   });
 
-  toolbarButton.addEventListener("click", function () {
+  toolbar.addEventListener("click", function (event) {
+    var swatch = event.target.closest
+      ? event.target.closest(".selection-toolbar__swatch")
+      : null;
+    if (!swatch) return;
+
     var selection = window.getSelection();
     if (!selection || selection.rangeCount === 0) return;
 
@@ -686,16 +714,61 @@
       return;
     }
 
+    var color = swatch.dataset.color;
+
     // Clear any previous session first, so its stale pending highlight cannot
     // be mistaken for this one's anchor.
     closeComposer();
 
+    if (swatch.dataset.kind === "highlight") {
+      selection.removeAllRanges();
+      saveHighlight(selector, color);
+      return;
+    }
+
     // Provisional highlight, so the target stays visible while typing -- and so
-    // the composer has something to position itself against.
-    wrapSpan(index, span[0], span[1], "hl hl--" + DEFAULT_COLOR + " hl--pending", PENDING);
+    // the composer has something to position itself against. In the colour that
+    // was picked, since the pick already chose it.
+    wrapSpan(index, span[0], span[1], "hl hl--" + color + " hl--pending", PENDING);
     selection.removeAllRanges();
-    openComposer(selector);
+    openComposer(selector, color);
   });
+
+  /* A highlight has nothing to type, so there is no composer step: the click
+   * that chose the colour is the whole interaction. */
+  function saveHighlight(selector, color) {
+    fetch(API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        document: DOC_ID,
+        kind: "highlight",
+        quote: selector.quote,
+        prefix: selector.prefix,
+        suffix: selector.suffix,
+        occurrence: selector.occurrence,
+        color: color,
+      }),
+    })
+      .then(function (response) {
+        if (!response.ok) return reject(response);
+        return response.json().then(function (payload) {
+          return payload.annotation;
+        });
+      })
+      .then(function (annotation) {
+        var index = buildIndex(doc);
+        var span = locate(index, annotation.target);
+        if (span) {
+          wrapSpan(index, span[0], span[1], "hl hl--" + annotation.color, annotation.id);
+        } else {
+          toast("Saved, but could not place it here — reload to see it.", "warn");
+        }
+      })
+      .catch(function (error) {
+        toast(error.message, "error");
+      });
+  }
 
   document.addEventListener("mousedown", function (event) {
     if (toolbar.contains(event.target)) return;

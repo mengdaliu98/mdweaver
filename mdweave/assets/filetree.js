@@ -351,7 +351,20 @@
     marked.classList.add("tree__row--" + place.where);
   }
 
+  /* A folder cannot become its own descendant. The server refuses it too, but
+   * offering the drop and then failing it is a worse way to say so. */
+  function swallowsItself(moved, place) {
+    if (!moved.folder) return false;
+    var target = place.parent;
+    return target === moved.id || target.indexOf(moved.id + "/") === 0;
+  }
+
   function apply(moved, place) {
+    if (swallowsItself(moved, place)) {
+      ui.toast("A folder cannot be moved inside itself", "error");
+      return;
+    }
+
     var names = namesIn(place.parent);
     var before = names.join("\n");
     var at = names.indexOf(moved.name);
@@ -379,10 +392,10 @@
     var moving =
       place.parent === moved.parent
         ? Promise.resolve(null)
-        : post("/api/documents/move", {
-            from: moved.id,
-            to: join(place.parent, moved.name),
-          });
+        : post(
+            moved.folder ? "/api/folders/rename" : "/api/documents/move",
+            { from: moved.id, to: join(place.parent, moved.name) }
+          );
 
     moving
       .then(function (payload) {
@@ -399,26 +412,37 @@
         });
       })
       .then(function (payload) {
+        // Moving a folder renames every document under it, so the page being
+        // read may have just changed address -- and unlike a document move
+        // there is no `payload.document` naming where it went.
+        if (moved.folder && CURRENT.indexOf(moved.id + "/") === 0) {
+          window.location.href = "/";
+          return;
+        }
         land(moved.id, payload);
       })
       .catch(fail);
   }
 
   function onDragStart(event) {
-    var link = event.target.closest
-      ? event.target.closest(".tree__row--file")
+    var row = event.target.closest
+      ? event.target.closest(".tree__row--file, .tree__row--folder")
       : null;
-    if (!link) return;
+    if (!row) return;
 
+    var isFolder = row.classList.contains("tree__row--folder");
     dragged = {
-      id: link.dataset.doc,
-      name: link.dataset.name,
-      parent: link.dataset.parent || "",
+      folder: isFolder,
+      // A folder's id is its path, a document's is its path without the
+      // suffix. Both are "where it lives", which is all a move needs.
+      id: isFolder ? row.parentNode.dataset.path : row.dataset.doc,
+      name: row.dataset.name,
+      parent: row.dataset.parent || "",
     };
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData(ROW_TYPE, dragged.id);
     event.dataTransfer.setData("text/plain", dragged.id);
-    link.classList.add("tree__row--dragging");
+    row.classList.add("tree__row--dragging");
   }
 
   function onDragEnd() {

@@ -557,10 +557,51 @@ def test_the_one_import_button_in_the_header_is_gone():
     assert 'id="sidebar-file"' in template, "the picker is shared by every row"
 
 
-def test_every_row_carries_create_and_import():
-    template = (TEMPLATES / "sidebar.html.j2").read_text(encoding="utf-8")
-    assert 'data-action="create"' in template
-    assert 'data-action="import"' in template
+def _actions_on(html: str, marker: str, until: str = "</li>") -> set[str]:
+    """The data-action values in the row `marker` identifies.
+
+    `until` matters for a folder: its <li> wraps the whole subtree, so
+    stopping at </li> would sweep in every child row's buttons too.
+    """
+    import re
+
+    row = html.split(marker)[1].split(until)[0]
+    return set(re.findall(r'data-action="([a-z-]+)"', row))
+
+
+def test_a_document_row_offers_only_rename_and_delete():
+    """A document has nothing inside it, so create/new-folder/import there
+    never meant anything -- they belonged to the folder it sits in."""
+    from mdweave.render import render_sidebar
+    from mdweave.tree import build_tree
+
+    html = render_sidebar(build_tree(["alpha", "notes/inner"], None, ["notes"]), "alpha")
+    assert _actions_on(html, 'data-doc="alpha"') == {"rename", "delete"}
+
+
+def test_a_folder_row_offers_the_full_set():
+    from mdweave.render import render_sidebar
+    from mdweave.tree import build_tree
+
+    html = render_sidebar(build_tree(["notes/inner"], None, ["notes"]), "notes/inner")
+    assert _actions_on(html, 'data-folder="notes"', "</summary>") == {
+        "create", "new-folder", "import", "rename-folder", "delete-folder"
+    }
+
+
+def test_the_top_level_controls_sit_beside_the_title():
+    """Not on a strip below the tree: the thing they act on is what you are
+    looking at, and the header is where "the top level" reads as a place."""
+    from mdweave.render import render_sidebar
+    from mdweave.tree import build_tree
+
+    html = render_sidebar(build_tree(["alpha"], None, []), "alpha")
+    head = html.split('class="sidebar__head"')[1].split("</div>")[0]
+    assert _actions_on(html, 'class="sidebar__head"', "</span>\n    </div>") >= {
+        "create", "new-folder", "import"
+    }
+    # And nothing destructive up there -- there is no root to rename or delete.
+    assert "rename-folder" not in head and "delete-folder" not in head
 
 
 def test_rename_and_delete_are_offered_on_rows_but_not_on_the_root():

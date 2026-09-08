@@ -319,20 +319,9 @@ body.sidebar-resizing {
    is the only way to get a document back out of a folder. */
 .sidebar__root { min-height: 6rem; }
 
-/* The top level's own row: no label, just the controls. It is the only place
-   the first folder can be made, so unlike the rows above it the buttons show
-   whenever the pointer is anywhere in the strip -- there is no name to aim at.
-   `position: relative` because .tree__actions is laid out against its row. */
-.tree__row--root {
-  position: relative;
-  min-height: var(--tree-row-h);
-  cursor: default;
-}
-
-.tree__row--root:hover { background: none; }
-
-.sidebar__root:hover .tree__row--root .tree__actions,
-.tree__row--root:focus-within .tree__actions { opacity: 1; }
+/* The strip below the tree is a drop target and nothing else now: a drop that
+   lands here means "the top level". Its controls moved up beside the title,
+   where the thing they act on is the thing you are looking at. */
 
 /* A document row and the controls laid over its right-hand end. */
 .tree__file { position: relative; }
@@ -346,6 +335,17 @@ body.sidebar-resizing {
    hidden button is not in the tab order -- and these have to be reachable
    without a mouse. Out of flow so they cost the label no width until they are
    actually showing. */
+/* Beside the title, these are the primary way to add anything, so they are
+   always there rather than revealed on hover -- and they sit in the flow
+   instead of being laid over a row that does not exist up here. */
+.sidebar__actions .tree__actions {
+  position: static;
+  opacity: 1;
+  pointer-events: auto;
+  padding-left: 0;
+  background: none;
+}
+
 .tree__actions {
   position: absolute;
   top: 0;

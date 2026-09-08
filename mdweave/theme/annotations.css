@@ -2,7 +2,7 @@
    mdweave -- highlights and sticky-note comment cards
 
    ┌─ COLOUR TOKENS ──────────────────────────────────────────────────────────┐
-   │ Five colours -- yellow, orange, green, pink, purple -- each defined      │
+   │ Five colours -- yellow, green, blue, pink, purple -- each defined       │
    │ once, right below, and each offered as a swatch in the browser. To       │
    │ restyle a colour everywhere it is used, edit its four values here --     │
    │ nothing else in this file or in the HTML needs to change.                │
@@ -28,43 +28,43 @@
 
 :root {
   /* yellow -- the default */
-  --hl-yellow-bg:     rgb(255 224 102 / 0.40);
-  --hl-yellow-edge:   rgb(150 105   4);
-  --note-yellow-bg:   rgb(255 250 231);
-  --note-yellow-ink:  rgb( 66  47   6);
-
-  /* orange */
-  --hl-orange-bg:     rgb(255 176 102 / 0.45);
-  --hl-orange-edge:   rgb(180  78  10);
-  --note-orange-bg:   rgb(255 244 235);
-  --note-orange-ink:  rgb( 76  32   5);
+  --hl-yellow-bg:     rgb(255 252 136);
+  --hl-yellow-edge:   rgb(121 119  15);
+  --note-yellow-bg:   rgb(255 255 237);
+  --note-yellow-ink:  rgb( 63  62   5);
 
   /* green */
-  --hl-green-bg:      rgb(134 231 160 / 0.42);
-  --hl-green-edge:    rgb( 21 128  61);
-  --note-green-bg:    rgb(240 253 244);
-  --note-green-ink:   rgb(  5  62  30);
+  --hl-green-bg:      rgb(203 244 130);
+  --hl-green-edge:    rgb( 91 126  26);
+  --note-green-bg:    rgb(247 253 236);
+  --note-green-ink:   rgb( 46  66  11);
+
+  /* blue */
+  --hl-blue-bg:       rgb(173 225 236);
+  --hl-blue-edge:     rgb( 49 125 142);
+  --note-blue-bg:     rgb(243 250 252);
+  --note-blue-ink:    rgb( 23  65  74);
 
   /* pink */
-  --hl-pink-bg:       rgb(255 138 190 / 0.38);
-  --hl-pink-edge:     rgb(206  32 122);
-  --note-pink-bg:     rgb(255 241 248);
-  --note-pink-ink:    rgb( 76  10  45);
+  --hl-pink-bg:       rgb(255 173 177);
+  --hl-pink-edge:     rgb(227  28  38);
+  --note-pink-bg:     rgb(255 243 243);
+  --note-pink-ink:    rgb(124  10  16);
 
   /* purple */
-  --hl-purple-bg:     rgb(196 168 255 / 0.42);
-  --hl-purple-edge:   rgb(124  58 237);
-  --note-purple-bg:   rgb(248 245 255);
-  --note-purple-ink:  rgb( 46  16 101);
+  --hl-purple-bg:     rgb(204 204 255);
+  --hl-purple-edge:   rgb( 97  97 236);
+  --note-purple-bg:   rgb(243 243 255);
+  --note-purple-ink:  rgb( 16  16 197);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --note-yellow-bg:  rgb( 48  38  10);  --note-yellow-ink: rgb(253 230 138);
-    --note-orange-bg:  rgb( 56  28  10);  --note-orange-ink: rgb(253 213 170);
-    --note-green-bg:   rgb(  9  47  30);  --note-green-ink:  rgb(167 243 200);
-    --note-pink-bg:    rgb( 52  16  34);  --note-pink-ink:   rgb(252 205 228);
-    --note-purple-bg:  rgb( 36  22  66);  --note-purple-ink: rgb(221 214 254);
+    --note-yellow-bg: rgb( 51  50  15);  --note-yellow-ink: rgb(250 248 158);
+    --note-green-bg: rgb( 37  48  18);  --note-green-ink: rgb(215 242 166);
+    --note-blue-bg: rgb( 22  41  45);  --note-blue-ink: rgb(175 223 233);
+    --note-pink-bg: rgb( 51  15  17);  --note-pink-ink: rgb(250 158 163);
+    --note-purple-bg: rgb( 15  15  51);  --note-purple-ink: rgb(158 158 250);
   }
 }
 
@@ -72,9 +72,9 @@
    picker's swatches are on this list too, so a swatch cannot end up
    advertising a colour the highlight it sets does not actually use. */
 .hl--yellow, .note--yellow, .swatch--yellow { --hl-bg: var(--hl-yellow-bg); --hl-edge: var(--hl-yellow-edge); --note-bg: var(--note-yellow-bg); --note-ink: var(--note-yellow-ink); }
-.hl--orange, .note--orange, .swatch--orange { --hl-bg: var(--hl-orange-bg); --hl-edge: var(--hl-orange-edge); --note-bg: var(--note-orange-bg); --note-ink: var(--note-orange-ink); }
-.hl--green,  .note--green,  .swatch--green  { --hl-bg: var(--hl-green-bg);  --hl-edge: var(--hl-green-edge);  --note-bg: var(--note-green-bg);  --note-ink: var(--note-green-ink); }
-.hl--pink,   .note--pink,   .swatch--pink   { --hl-bg: var(--hl-pink-bg);   --hl-edge: var(--hl-pink-edge);   --note-bg: var(--note-pink-bg);   --note-ink: var(--note-pink-ink); }
+.hl--green, .note--green, .swatch--green { --hl-bg: var(--hl-green-bg); --hl-edge: var(--hl-green-edge); --note-bg: var(--note-green-bg); --note-ink: var(--note-green-ink); }
+.hl--blue, .note--blue, .swatch--blue { --hl-bg: var(--hl-blue-bg); --hl-edge: var(--hl-blue-edge); --note-bg: var(--note-blue-bg); --note-ink: var(--note-blue-ink); }
+.hl--pink, .note--pink, .swatch--pink { --hl-bg: var(--hl-pink-bg); --hl-edge: var(--hl-pink-edge); --note-bg: var(--note-pink-bg); --note-ink: var(--note-pink-ink); }
 .hl--purple, .note--purple, .swatch--purple { --hl-bg: var(--hl-purple-bg); --hl-edge: var(--hl-purple-edge); --note-bg: var(--note-purple-bg); --note-ink: var(--note-purple-ink); }
 
 /* Per-annotation colour, derived from one raw CSS colour. */

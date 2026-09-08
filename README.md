@@ -109,6 +109,10 @@ document someone else adds appears at the end rather than in the middle of an
 arrangement it was never part of. Delete the file and the tree goes back to
 being sorted.
 
+**Folders.** A folder row is draggable like a document row: dropping it
+between two rows reorders it, dropping it onto another folder nests it inside.
+A folder cannot be dropped into itself or anything beneath it.
+
 Anything that is not a `.md` is refused with **only markdown files are
 supported**, centred on the page rather than tucked into the corner a toast
 lives in — mid-drag your eye is on the cursor, not down there. Click it,
@@ -297,8 +301,11 @@ turn into arguments.
 
 ## Adding comments in the browser
 
-Select any text and a **Comment** pill appears; click it, type, and press
-`Comment` (or `Cmd-Enter`). The comment is written straight into the
+Select any text and a menu appears with two rows — **Comment** and
+**Highlight** — each showing the five colours. The colour *is* the button, so
+either is one click rather than "make it, then recolour it". A highlight has
+nothing to type and so skips the composer entirely; a comment opens one,
+already in the colour you picked. The comment is written straight into the
 document's `.ann.json` sidecar and the HTML is regenerated, so a reload shows
 exactly what you just made. Open a note and `Delete` removes it again.
 

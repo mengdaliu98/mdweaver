@@ -15,22 +15,60 @@
 
 .selection-toolbar[hidden] { display: none; }
 
-.selection-toolbar__button {
-  display: flex;
-  align-items: center;
-  gap: 0.4em;
-  padding: 0.42rem 0.8rem;
-  border: 0;
-  border-radius: 8px;
+/* Two rows -- comment and highlight -- each offering the five colours. The
+   colour is the button: picking one is the whole action, so neither is two
+   clicks. */
+.selection-toolbar {
+  padding: 0.3rem;
+  border-radius: 10px;
   background: var(--ink);
   color: var(--surface);
-  font: 600 0.8rem/1 var(--font-body);
-  cursor: pointer;
   box-shadow: var(--shadow-md);
 }
 
-.selection-toolbar__button:hover { filter: brightness(1.18); }
-.selection-toolbar__button:active { transform: translateY(1px); }
+.selection-toolbar__row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.2rem 0.35rem;
+  border-radius: 7px;
+}
+
+.selection-toolbar__row + .selection-toolbar__row {
+  border-top: 1px solid color-mix(in srgb, var(--surface) 18%, transparent);
+  margin-top: 0.15rem;
+  padding-top: 0.3rem;
+}
+
+.selection-toolbar__what {
+  display: flex;
+  align-items: center;
+  gap: 0.35em;
+  margin-right: auto;
+  font: 600 0.76rem/1 var(--font-body);
+  white-space: nowrap;
+}
+
+.selection-toolbar__swatches { display: flex; gap: 0.24rem; }
+
+/* Filled with the colour it makes, so the row reads as a palette rather than
+   as five identical buttons. */
+.selection-toolbar__swatch {
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--hl-edge) 55%, transparent);
+  border-radius: 50%;
+  background: var(--hl-bg);
+  cursor: pointer;
+}
+
+.selection-toolbar__swatch:hover { transform: scale(1.22); }
+
+.selection-toolbar__swatch:focus-visible {
+  outline: 2px solid var(--surface);
+  outline-offset: 2px;
+}
 
 @keyframes mdweave-pop {
   from { opacity: 0; transform: translateY(3px); }

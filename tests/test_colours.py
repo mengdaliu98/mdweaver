@@ -47,7 +47,7 @@ def ann(**kw) -> Annotation:
 # --- the palette ----------------------------------------------------------
 
 def test_the_palette_is_five_colours():
-    assert COLOR_TOKENS == ("yellow", "orange", "green", "pink", "purple")
+    assert COLOR_TOKENS == ("yellow", "green", "blue", "pink", "purple")
     assert DEFAULT_COLOR in COLOR_TOKENS
 
 
@@ -144,7 +144,7 @@ def test_a_card_is_readable_against_its_own_background(token):
         ("rose", "pink"),
         ("mint", "green"),
         ("violet", "purple"),
-        ("sky", "purple"),
+        ("sky", "blue"),
         ("slate", "yellow"),
     ],
 )
@@ -153,13 +153,15 @@ def test_a_legacy_colour_name_resolves_to_its_replacement(legacy, token):
     assert ann(color=legacy).color_token == token
 
 
-def test_two_of_the_legacy_names_lose_a_distinction():
-    """Deliberate: `sky` and `slate` have no counterpart among the five.
+def test_only_slate_loses_its_distinction_now():
+    """`sky` has a proper home again: the palette carries a blue.
 
-    Annotations that used to be told apart by colour now look the same. The
-    only way back is to recolour them, which the picker can do.
+    `slate` is the one without a counterpart -- it was the only desaturated
+    token -- so it folds onto yellow and a note that meant "low priority" now
+    shouts. The way back is to recolour it, which the picker can do.
     """
-    assert resolve_color_token("sky") == resolve_color_token("violet") == "purple"
+    assert resolve_color_token("sky") == "blue"
+    assert resolve_color_token("violet") == "purple", "no longer collides with sky"
     assert resolve_color_token("slate") == resolve_color_token("amber") == "yellow"
 
 
@@ -184,8 +186,8 @@ def test_a_legacy_colour_is_not_rewritten_in_the_sidecar(tmp_path):
 def test_a_legacy_colour_renders_as_its_replacement():
     html = render_document("Serve over CRAM/BAM.", [ann(color="sky")]).html
 
-    assert "hl--purple" in html
-    assert "note--purple" in html
+    assert "hl--blue" in html
+    assert "note--blue" in html
     assert "sky" not in html
 
 
@@ -294,7 +296,7 @@ def test_recolouring_disturbs_nothing_else_about_the_annotation(server):
     call(base, "PATCH", f"/api/annotations/{before['id']}",
          {"document": "doc", "offset": {"dx": 40, "dy": 8}})
     _, body = call(base, "PATCH", f"/api/annotations/{before['id']}",
-                   {"document": "doc", "color": "orange"})
+                   {"document": "doc", "color": "blue"})
     after = body["annotation"]
 
     assert after["target"] == before["target"]
@@ -511,19 +513,20 @@ def test_the_swatches_are_one_tab_stop_the_arrow_keys_move_within(tmp_path):
     assert done.returncode == 0, done.stderr
     result = json.loads(done.stdout)
 
-    assert result["names"] == ["Yellow", "Orange", "Green", "Pink", "Purple"]
+    assert result["names"] == ["Yellow", "Green", "Blue", "Pink", "Purple"]
     assert result["roles"] == ["radio"] * 5
 
     # One tab stop, and it is always the current colour -- never none, and
     # never five.
     assert result["before"] == {"checked": ["green"], "stops": ["green"]}
+    # Right from green is blue in this order, not pink.
     assert result["arrowed"] == {
-        "checked": ["pink"],
-        "stops": ["pink"],
-        "focused": "pink",
+        "checked": ["blue"],
+        "stops": ["blue"],
+        "focused": "blue",
     }
     assert result["clicked"] == {"checked": ["yellow"], "stops": ["yellow"]}
-    assert result["picked"] == ["pink", "yellow"]
+    assert result["picked"] == ["blue", "yellow"]
 
 
 def test_note_actions_survive_an_in_place_swap():
@@ -543,3 +546,34 @@ def test_note_actions_survive_an_in_place_swap():
     assert "refreshHandler()" in body
     assert body.index("refreshHandler()") < body.index("layout()"), \
         "a card measured without its footer is placed as though it were shorter"
+
+
+# --- the exact palette that was asked for ----------------------------------
+
+REQUESTED = {
+    "pink":   (255, 173, 177),
+    "yellow": (255, 252, 136),
+    "green":  (203, 244, 130),
+    "blue":   (173, 225, 236),
+    "purple": (204, 204, 255),
+}
+
+
+@pytest.mark.parametrize("token, rgb", sorted(REQUESTED.items()))
+def test_the_fill_is_the_colour_that_was_specified(token, rgb):
+    """Opaque, not tinted: these are already pastels, and putting them behind
+    an alpha would show something other than the colour that was chosen."""
+    values = palette()
+    fill = values[f"hl-{token}-bg"]
+    assert tuple(int(c) for c in fill[:3]) == rgb
+    assert fill[3] == 1.0, "an alpha here would change the colour on screen"
+
+
+def test_the_palette_has_no_orange_and_does_have_a_blue():
+    assert "blue" in COLOR_TOKENS and "orange" not in COLOR_TOKENS
+
+
+def test_sky_has_a_home_again():
+    """It used to fold onto purple and collide with violet; there is a blue now."""
+    assert resolve_color_token("sky") == "blue"
+    assert resolve_color_token("violet") == "purple"
