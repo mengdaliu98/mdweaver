@@ -90,13 +90,16 @@
 
 /* --- the highlight ------------------------------------------------------ */
 
+/* No underline: the fill is an opaque pastel and carries the colour on its
+   own, so the rule beneath it was a second signal for the same thing. The
+   edge colour still earns its keep on the pin, and on the two states below
+   where the fill alone cannot say what it needs to. */
 mark.hl {
   background: var(--hl-bg);
   color: inherit;
   border-radius: 3px;
   padding: 0.06em 0.1em;
   margin: 0 -0.1em;
-  box-shadow: inset 0 -2px 0 var(--hl-edge);
   transition: background 0.15s ease, box-shadow 0.15s ease;
 }
 
@@ -105,10 +108,11 @@ mark.hl--has-note { cursor: pointer; }
 /* Applied by notes.js while the matching note is open or hovered. */
 mark.hl--active {
   background: color-mix(in srgb, var(--hl-edge) 34%, transparent);
-  box-shadow: inset 0 -2px 0 var(--hl-edge),
-              0 0 0 2px color-mix(in srgb, var(--hl-edge) 30%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--hl-edge) 30%, transparent);
 }
 
+/* Resolved keeps a rule, and it is the only one left: the fill is gone, so
+   without it a resolved annotation would be invisible rather than quiet. */
 mark.hl--resolved {
   background: none;
   box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--hl-edge) 45%, transparent);

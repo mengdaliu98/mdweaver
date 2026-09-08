@@ -553,6 +553,97 @@ class Workspace:
             self.outputs / f"{doc_id}.html",
         ]
 
+    # --- highlighting over what is already there --------------------------
+
+    def spans_in(self, doc_id: str):
+        """Every annotation that anchors, with where it lands, and the index.
+
+        Flattened coordinates, the same ones the anchor machinery uses, so two
+        annotations can be compared for overlap without going near the DOM.
+        The index comes back too: the caller needs it to place the selection
+        on the same ruler.
+        """
+        from bs4 import BeautifulSoup
+
+        from .anchors import TextIndex
+        from .render import render_markdown
+
+        markdown = self.markdown_for(doc_id).read_text(encoding="utf-8")
+        cleaned, _ = obsidian_inline.extract(markdown)
+        index = TextIndex(BeautifulSoup(render_markdown(cleaned), "html.parser"))
+
+        found = []
+        for annotation in self.annotations_for(doc_id):
+            where = index.find(annotation.target)
+            if where is not None:
+                found.append((annotation, where))
+        return found, index
+
+    def apply_highlight(self, doc_id: str, target: TextTarget, color: str) -> dict:
+        """Paint a selection, or -- if it is already exactly this colour -- clear it.
+
+        One rule underneath all the cases: picking a colour means "make the
+        whole selection this colour", except when the selection is *already*
+        entirely and only this colour, which is the only reading of a second
+        press that is not a no-op.
+
+        Anything highlighted underneath is absorbed, so re-colouring part of a
+        highlight, or a patch of mixed colours, both end up with one clean
+        highlight over the selection.
+        """
+        placed, index = self.spans_in(doc_id)
+        span = index.find(target)
+        if span is None:
+            raise ApiError(
+                HTTPStatus.CONFLICT, f"could not anchor the selection: {target.quote!r}"
+            )
+
+        touching = [
+            (a, where) for a, where in placed
+            if where[0] < span[1] and span[0] < where[1]
+        ]
+
+        # A comment's highlight is the handle for a thread. Absorbing it would
+        # delete the conversation, which no colour press should ever mean.
+        commented = [a for a, _ in touching if a.has_card]
+        if commented:
+            raise ApiError(
+                HTTPStatus.CONFLICT,
+                "that text carries a comment — change its colour from its own card",
+            )
+
+        same = [a for a, _ in touching if a.color_token == color]
+        clearing = (
+            bool(touching)
+            and len(same) == len(touching)
+            and _covers(span, [where for _, where in touching], index.text)
+        )
+
+        absorbed = {a.id for a, _ in touching}
+        keep = [a for a in self.annotations_for(doc_id) if a.id not in absorbed]
+        if clearing:
+            self.save(doc_id, keep)
+            return {"cleared": [a.id for a, _ in touching]}
+
+        fresh = Annotation(
+            id=self.new_id({a.id for a in self.annotations_for(doc_id)} | absorbed),
+            target=target,
+            kind="highlight",
+            color=color,
+        )
+        candidate = keep + [fresh]
+        failures = self.check_anchors(doc_id, candidate)
+        if fresh.id in failures:
+            raise ApiError(
+                HTTPStatus.CONFLICT,
+                f"could not anchor the selection: {failures[fresh.id]}",
+            )
+        self.save(doc_id, candidate)
+        return {
+            "annotation": fresh.to_dict(),
+            "replaced": [a.id for a, _ in touching],
+        }
+
     def check_anchors(self, doc_id: str, annotations: list[Annotation]) -> dict[str, str]:
         """Render without saving; report which annotations fail to anchor."""
         result = self.render(doc_id, annotations)
@@ -782,20 +873,31 @@ class Handler(SimpleHTTPRequestHandler):
         kind = str(payload.get("kind", "comment"))
         if kind not in ("comment", "highlight"):
             raise ApiError(HTTPStatus.BAD_REQUEST, f"unknown kind: {kind!r}")
-        body = "" if kind == "highlight" else _require(payload, "body")
+
+        target = TextTarget(
+            quote=quote,
+            prefix=str(payload.get("prefix", "")),
+            suffix=str(payload.get("suffix", "")),
+            occurrence=int(payload.get("occurrence", 0)),
+        )
+
+        # A highlight goes through the painting rule rather than being appended:
+        # a colour pressed over an existing highlight means recolour it, or --
+        # when it is already exactly that colour -- take it off.
+        if kind == "highlight":
+            return HTTPStatus.OK, self.workspace.apply_highlight(
+                doc_id, target, _parse_color(payload.get("color", DEFAULT_COLOR))
+            )
+
+        body = _require(payload, "body")
 
         annotations = self.workspace.annotations_for(doc_id)
         annotation = Annotation(
             id=self.workspace.new_id({a.id for a in annotations}),
-            target=TextTarget(
-                quote=quote,
-                prefix=str(payload.get("prefix", "")),
-                suffix=str(payload.get("suffix", "")),
-                occurrence=int(payload.get("occurrence", 0)),
-            ),
-            kind=kind,
+            target=target,
+            kind="comment",
             color=_parse_color(payload.get("color", DEFAULT_COLOR)),
-            thread=[] if kind == "highlight" else [
+            thread=[
                 Comment(
                     body=body,
                     author=str(payload.get("author", "me")),
@@ -1154,6 +1256,22 @@ def _parse_offset(raw) -> Offset | None:
     dy = max(-OFFSET_LIMIT, min(OFFSET_LIMIT, dy))
     offset = Offset(dx=dx, dy=dy)
     return offset if offset else None
+
+
+def _covers(span: tuple[int, int], others: list[tuple[int, int]], text: str) -> bool:
+    """Is every character of `span` that a reader could see inside one of `others`?
+
+    Whitespace is skipped. Two highlights sitting either side of a space do
+    cover the phrase they spell out, and treating that space as a hole would
+    make pressing their colour repaint rather than clear -- a distinction with
+    nothing behind it, since a space carries no highlight to speak of.
+    """
+    inside = set()
+    for start, end in others:
+        inside.update(range(max(start, span[0]), min(end, span[1])))
+    return all(
+        at in inside or text[at].isspace() for at in range(span[0], span[1])
+    )
 
 
 def _int_field(payload: dict, key: str) -> int:

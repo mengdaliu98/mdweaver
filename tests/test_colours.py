@@ -577,3 +577,193 @@ def test_sky_has_a_home_again():
     """It used to fold onto purple and collide with violet; there is a blue now."""
     assert resolve_color_token("sky") == "blue"
     assert resolve_color_token("violet") == "purple"
+
+
+# --- painting over what is already there -----------------------------------
+#
+# One rule underneath every case: pressing a colour means "make the selection
+# this colour", except when it is already entirely and only that colour, which
+# is the only reading of a second press that is not a no-op.
+
+@pytest.fixture()
+def painting(tmp_path):
+    """A served document with room to overlap things."""
+    import threading
+    from mdweave.serve import Workspace, make_server
+
+    inputs, outputs = tmp_path / "markdown_inputs", tmp_path / "html_outputs"
+    inputs.mkdir()
+    (inputs / "doc.md").write_text(
+        "# Doc\n\nalpha bravo charlie delta echo foxtrot golf hotel.\n", encoding="utf-8"
+    )
+    workspace = Workspace(inputs=inputs, outputs=outputs)
+    workspace.rebuild_all()
+
+    httpd = make_server(workspace, "127.0.0.1", 0)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{httpd.server_port}", workspace
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+
+
+def paint(base, quote, color):
+    return _post(base, "/api/annotations", {
+        "document": "doc", "kind": "highlight", "quote": quote, "color": color
+    })
+
+
+def comment_on(base, quote, color="green"):
+    return _post(base, "/api/annotations", {
+        "document": "doc", "quote": quote, "body": "a real thread", "color": color
+    })
+
+
+def state(workspace):
+    return [
+        (a.target.quote, a.color_token, a.kind)
+        for a in workspace.annotations_for("doc")
+    ]
+
+
+def _post(base, path, payload):
+    import json, urllib.error, urllib.request
+
+    request = urllib.request.Request(
+        base + path, data=json.dumps(payload).encode(), method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            return response.status, json.loads(response.read())
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read())
+
+
+def test_a_fresh_selection_is_simply_highlighted(painting):
+    base, workspace = painting
+    status, payload = paint(base, "bravo charlie", "yellow")
+
+    assert status == 200 and payload["annotation"]["color"] == "yellow"
+    assert state(workspace) == [("bravo charlie", "yellow", "highlight")]
+
+
+def test_the_same_colour_over_the_same_span_takes_it_off(painting):
+    """The only reading of a second press that is not a no-op."""
+    base, workspace = painting
+    _, first = paint(base, "bravo charlie", "yellow")
+
+    status, payload = paint(base, "bravo charlie", "yellow")
+
+    assert status == 200
+    assert payload["cleared"] == [first["annotation"]["id"]]
+    assert state(workspace) == []
+
+
+def test_a_different_colour_repaints_rather_than_refusing(painting):
+    """It used to be rejected as an overlap, which is not what a reader means."""
+    base, workspace = painting
+    paint(base, "bravo charlie", "yellow")
+
+    status, payload = paint(base, "bravo charlie", "pink")
+
+    assert status == 200
+    assert payload["replaced"], "the yellow one should have been absorbed"
+    assert state(workspace) == [("bravo charlie", "pink", "highlight")]
+
+
+def test_a_partly_covered_selection_is_painted_not_cleared(painting):
+    """Same colour, but only part of the selection had it -- so the press
+    means "make all of this that colour", and clearing would lose the rest."""
+    base, workspace = painting
+    paint(base, "bravo charlie", "pink")
+
+    status, payload = paint(base, "bravo charlie delta", "pink")
+
+    assert status == 200 and "annotation" in payload
+    assert state(workspace) == [("bravo charlie delta", "pink", "highlight")]
+
+
+def test_mixed_colours_underneath_become_one_clean_highlight(painting):
+    base, workspace = painting
+    paint(base, "bravo", "yellow")
+    paint(base, "delta", "green")
+
+    status, payload = paint(base, "bravo charlie delta", "purple")
+
+    assert status == 200
+    assert len(payload["replaced"]) == 2
+    assert state(workspace) == [("bravo charlie delta", "purple", "highlight")]
+
+
+def test_two_adjacent_highlights_together_count_as_covering(painting):
+    """Neither covers the selection alone; between them they do, so pressing
+    their shared colour clears rather than repaints."""
+    base, workspace = painting
+    paint(base, "bravo", "yellow")
+    paint(base, "charlie", "yellow")
+
+    status, payload = paint(base, "bravo charlie", "yellow")
+
+    assert status == 200
+    assert len(payload.get("cleared", [])) == 2
+    assert state(workspace) == []
+
+
+def test_part_of_a_larger_highlight_clears_the_whole_of_it(painting):
+    """A highlight is one thing; splitting it in two would be a stranger
+    answer than removing what was pressed."""
+    base, workspace = painting
+    paint(base, "golf hotel", "blue")
+
+    status, payload = paint(base, "golf", "blue")
+
+    assert status == 200 and payload["cleared"]
+    assert state(workspace) == []
+
+
+def test_a_comment_is_never_absorbed(painting):
+    """Its highlight is the handle for a thread; no colour press means delete."""
+    base, workspace = painting
+    comment_on(base, "echo foxtrot")
+
+    status, payload = paint(base, "echo foxtrot", "pink")
+
+    assert status == 409
+    assert "comment" in payload["error"]
+    assert state(workspace) == [("echo foxtrot", "green", "comment")]
+
+
+def test_a_selection_merely_touching_a_comment_is_refused_too(painting):
+    base, workspace = painting
+    comment_on(base, "echo foxtrot")
+
+    status, _ = paint(base, "delta echo", "pink")
+
+    assert status == 409
+    assert len(state(workspace)) == 1, "nothing added, nothing removed"
+
+
+def test_a_highlight_carries_no_card(painting):
+    base, workspace = painting
+    paint(base, "bravo", "yellow")
+    (annotation,) = workspace.annotations_for("doc")
+    assert annotation.thread == [] and not annotation.has_card
+
+
+# --- no underline ----------------------------------------------------------
+
+def test_a_highlight_has_no_rule_under_it():
+    """The fill is an opaque pastel and says the colour on its own."""
+    block = ANNOTATIONS_CSS.split("mark.hl {")[1].split("}")[0]
+    # A declaration, not the word: `transition` names box-shadow too.
+    assert not re.search(r"(?m)^\s*box-shadow\s*:", block)
+
+
+def test_resolved_keeps_its_rule():
+    """Its fill is gone, so without one it would be invisible, not quiet."""
+    block = ANNOTATIONS_CSS.split("mark.hl--resolved {")[1].split("}")[0]
+    assert "box-shadow" in block and "background: none" in block

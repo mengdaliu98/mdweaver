@@ -305,7 +305,19 @@ Select any text and a menu appears with two rows — **Comment** and
 **Highlight** — each showing the five colours. The colour *is* the button, so
 either is one click rather than "make it, then recolour it". A highlight has
 nothing to type and so skips the composer entirely; a comment opens one,
-already in the colour you picked. The comment is written straight into the
+already in the colour you picked.
+
+Pressing a colour means *make this selection that colour*, whatever is already
+underneath — so re-colouring a highlight, or painting over a patch of mixed
+ones, both leave a single clean highlight. The one exception is a selection
+that is already entirely and only that colour, where a second press is the
+only gesture that could mean anything else: it takes the highlight off.
+Whitespace does not count against "entirely", so two highlights either side of
+a space still cover the phrase they spell out.
+
+Text carrying a **comment** is never absorbed — its highlight is the handle for
+a thread, and no colour press should mean *delete that*. Recolour it from its
+own card instead. The comment is written straight into the
 document's `.ann.json` sidecar and the HTML is regenerated, so a reload shows
 exactly what you just made. Open a note and `Delete` removes it again.
 

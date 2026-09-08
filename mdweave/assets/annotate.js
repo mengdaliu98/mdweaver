@@ -752,11 +752,22 @@
     })
       .then(function (response) {
         if (!response.ok) return reject(response);
-        return response.json().then(function (payload) {
-          return payload.annotation;
-        });
+        // The whole payload, not just `annotation`: which highlights were
+        // cleared or replaced is the rest of the answer, and a clear has no
+        // annotation at all.
+        return response.json();
       })
-      .then(function (annotation) {
+      .then(function (result) {
+        // Three outcomes, because a colour pressed over a highlight means
+        // something different depending on what was already there: the same
+        // colour over exactly that span clears it, a different one repaints
+        // it, and anything else is simply new.
+        (result.cleared || []).forEach(unwrapAnnotation);
+        (result.replaced || []).forEach(unwrapAnnotation);
+
+        var annotation = result.annotation;
+        if (!annotation) return; // cleared: there is nothing to draw
+
         var index = buildIndex(doc);
         var span = locate(index, annotation.target);
         if (span) {
@@ -768,6 +779,11 @@
       .catch(function (error) {
         toast(error.message, "error");
       });
+  }
+
+  /* Take one annotation's marks back out of the page, leaving the text. */
+  function unwrapAnnotation(id) {
+    unwrap('mark.hl[data-ann="' + (window.CSS ? CSS.escape(id) : id) + '"]');
   }
 
   document.addEventListener("mousedown", function (event) {
