@@ -607,6 +607,38 @@ def test_the_paper_and_the_panel_are_far_enough_apart_to_see():
     assert contrast(paper, panel) >= 1.2
 
 
+def test_the_panel_is_black_text_on_its_own_background():
+    """No grey in the panel: the ink ramp de-emphasised against near-white,
+    and on #D1C7B7 its faint end reads as muddy rather than quiet."""
+    assert "--sidebar-ink: rgb(0, 0, 0);" in SIDEBAR_CSS
+    assert "--ink-muted" not in SIDEBAR_CSS
+    assert "--ink-faint" not in SIDEBAR_CSS
+
+    # A black icon drawn at 0.65 is a grey icon.
+    icon = SIDEBAR_CSS.split(".tree__icon {")[1].split("}")[0]
+    chevron = SIDEBAR_CSS.split(".tree__chevron {")[1].split("}")[0]
+    assert "opacity" not in icon and "opacity" not in chevron
+
+
+def test_the_open_document_row_is_painted_in_the_page_colour():
+    """The row for what is on screen carries the pane's own background, so the
+    panel reads as having a piece cut out of it rather than as a blue stripe."""
+    active = SIDEBAR_CSS.split(".tree__row--active {")[1].split("}")[0]
+    assert "background: var(--paper);" in active
+    assert "--accent" not in active, "the accent was what made it blue"
+
+    # The controls laid over that row's right-hand end are opaque, so a
+    # mismatch here shows up as a rectangle of the wrong colour on the row.
+    strip = SIDEBAR_CSS.split(".tree__row--active ~ .tree__actions {")[1].split("}")[0]
+    assert "background: var(--paper);" in strip
+
+
+def test_black_is_only_the_light_scheme():
+    """Black on the dark panel would be unreadable."""
+    dark = SIDEBAR_CSS.split("prefers-color-scheme: dark")[1]
+    assert "--sidebar-ink: var(--ink);" in dark
+
+
 def test_the_swatches_are_offered_in_the_order_they_were_given():
     """The menu is read left to right, so the list is part of what was asked
     for and not just the set of colours in it."""

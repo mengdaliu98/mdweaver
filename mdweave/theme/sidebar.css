@@ -11,10 +11,19 @@
      base.css so the one destructive control in the tree does not need a
      site-wide token invented for it. */
   --tree-danger: rgb(192, 57, 43);
+  /* Every label, chevron and icon in the panel, flat black. The three-step
+     ink ramp the rest of the page uses -- ink, muted, faint -- was doing its
+     de-emphasis against a near-white panel; on #D1C7B7 the faint end went
+     muddy rather than quiet. Hierarchy here is weight and indentation. */
+  --sidebar-ink: rgb(0, 0, 0);
 }
 
 @media (prefers-color-scheme: dark) {
-  :root { --tree-danger: rgb(248, 130, 118); }
+  :root {
+    --tree-danger: rgb(248, 130, 118);
+    /* Black on a dark panel is unreadable; the ramp still works there. */
+    --sidebar-ink: var(--ink);
+  }
 }
 
 .shell {
@@ -106,7 +115,7 @@ body.sidebar-resizing {
   font-weight: 650;
   letter-spacing: 0.075em;
   text-transform: uppercase;
-  color: var(--ink-faint);
+  color: var(--sidebar-ink);
 }
 
 .sidebar__collapse,
@@ -120,14 +129,14 @@ body.sidebar-resizing {
   border: 0;
   border-radius: 5px;
   background: transparent;
-  color: var(--ink-faint);
+  color: var(--sidebar-ink);
   cursor: pointer;
 }
 
 .sidebar__collapse:hover,
 .sidebar-show:hover {
   background: color-mix(in srgb, var(--ink) 8%, transparent);
-  color: var(--ink);
+  color: var(--sidebar-ink);
 }
 
 .sidebar__collapse svg,
@@ -151,7 +160,7 @@ body.sidebar-resizing {
 .sidebar__empty {
   margin: 0;
   padding: 0.5rem 0.9rem;
-  color: var(--ink-faint);
+  color: var(--sidebar-ink);
   font-style: italic;
 }
 
@@ -173,7 +182,7 @@ body.sidebar-resizing {
   gap: 0.32rem;
   min-height: var(--tree-row-h);
   padding: 0.1rem 0.6rem 0.1rem calc(0.55rem + var(--depth, 0) * var(--tree-indent));
-  color: var(--ink-muted);
+  color: var(--sidebar-ink);
   text-decoration: none;
   border: 0;
   cursor: pointer;
@@ -181,19 +190,23 @@ body.sidebar-resizing {
 
 .tree__row:hover {
   background: color-mix(in srgb, var(--ink) 6%, transparent);
-  color: var(--ink);
+  color: var(--sidebar-ink);
 }
 
+/* The row for the document on screen is painted in the page's own colour, so
+   the panel reads as having a piece cut out of it and the open document runs
+   from its row straight into the prose. It is the one row that does not need
+   an accent to be found: it is the only light shape on a darker panel. */
 .tree__row--active {
-  background: color-mix(in srgb, var(--accent) 13%, transparent);
-  color: var(--accent);
+  background: var(--paper);
+  color: var(--sidebar-ink);
   font-weight: 600;
-  box-shadow: inset 2px 0 0 var(--accent);
+  box-shadow: inset 2px 0 0 var(--sidebar-ink);
 }
 
 .tree__row--active:hover {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-  color: var(--accent);
+  background: color-mix(in srgb, var(--ink) 5%, var(--paper));
+  color: var(--sidebar-ink);
 }
 
 .tree__row:focus-visible {
@@ -208,11 +221,11 @@ body.sidebar-resizing {
   white-space: nowrap;
 }
 
+/* Full strength: an icon at 0.65 over the panel is grey, not black. */
 .tree__icon {
   flex: none;
   width: 13px;
   height: 13px;
-  opacity: 0.65;
 }
 
 /* --- folders ------------------------------------------------------------- */
@@ -225,14 +238,13 @@ body.sidebar-resizing {
 
 .tree__row--folder {
   font-weight: 560;
-  color: var(--ink);
+  color: var(--sidebar-ink);
 }
 
 .tree__chevron {
   flex: none;
   width: 11px;
   height: 11px;
-  opacity: 0.7;
   transition: transform 0.13s ease;
 }
 
@@ -298,7 +310,7 @@ body.sidebar-resizing {
   text-align: center;
   background: color-mix(in srgb, var(--accent) 12%, var(--sidebar-bg));
   border-top: 2px dashed var(--accent);
-  color: var(--accent);
+  color: var(--sidebar-ink);
   font-weight: 600;
   pointer-events: none;
 }
@@ -328,7 +340,7 @@ body.sidebar-resizing {
 
 .tree__file:hover > .tree__row--file {
   background: color-mix(in srgb, var(--ink) 6%, transparent);
-  color: var(--ink);
+  color: var(--sidebar-ink);
 }
 
 /* Absolutely positioned and faded out rather than `display: none`, because a
@@ -369,11 +381,11 @@ body.sidebar-resizing {
 }
 
 .tree__row--active ~ .tree__actions {
-  background: color-mix(in srgb, var(--accent) 13%, var(--sidebar-bg));
+  background: var(--paper);
 }
 
 .tree__file:hover > .tree__row--active ~ .tree__actions {
-  background: color-mix(in srgb, var(--accent) 18%, var(--sidebar-bg));
+  background: color-mix(in srgb, var(--ink) 5%, var(--paper));
 }
 
 /* Only once a server has answered: all four write to disk. */
@@ -396,15 +408,15 @@ body.sidebar-resizing {
   border: 0;
   border-radius: 4px;
   background: transparent;
-  color: var(--ink-faint);
+  color: var(--sidebar-ink);
   cursor: pointer;
 }
 
 .tree__action svg { width: 12px; height: 12px; }
 
 .tree__action:hover {
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-  color: var(--accent);
+  background: color-mix(in srgb, var(--ink) 12%, transparent);
+  color: var(--sidebar-ink);
 }
 
 .tree__action--danger:hover {

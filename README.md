@@ -153,7 +153,14 @@ drag, where both halves name rows that exist, and wrong for a typed name, where
 the reader never named a parent at all.
 
 **Colours.** The panel is `#D1C7B7` and the reading pane `#F2EFE4`, as
-`--sidebar-bg` and `--paper` in `mdweave/theme/base.css`. They are deliberately
+`--sidebar-bg` and `--paper` in `mdweave/theme/base.css`. Every label,
+chevron and icon in the panel is flat black (`--sidebar-ink`): the page's
+three-step ink ramp was de-emphasising against near-white, and on `#D1C7B7`
+its faint end reads muddy rather than quiet, so hierarchy here is weight and
+indentation instead. The row for the document on screen is painted in
+`--paper`, the pane's own colour, so the panel reads as having a piece cut out
+of it — it is the only light shape on a darker panel and needs no accent to be
+found. They are deliberately
 not `--surface`, which is still white: that token is also the colour of the
 text on a dark chip and the fill of the floating re-open button, neither of
 which wants warm paper. Code blocks, table heads and hairlines were warmed to
