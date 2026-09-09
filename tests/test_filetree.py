@@ -176,9 +176,34 @@ def test_creating_over_an_existing_document_is_refused(server):
     assert "At the root." in (workspace.inputs / "top.md").read_text()
 
 
-def test_creating_in_a_folder_that_is_not_there_is_a_404(server):
+def test_creating_in_a_folder_that_is_not_there_makes_it(server):
+    """Typing `notes/2026/draft` should not need the folders made first.
+
+    This used to 404 on the intermediate -- the report was "unknown folder
+    'x'" when creating `x/y` -- even though `create_folder` already passed
+    `parents=True`. Creating is the one operation where inventing a folder is
+    what was asked for; a *move* into one that is not there is still a 404.
+    """
+    base, workspace = server
+    status, payload = call(base, "/api/documents/create", {"path": "nowhere/doc"})
+
+    assert status == 201
+    assert payload["document"]["id"] == "nowhere/doc"
+    assert (workspace.inputs / "nowhere" / "doc.md").exists()
+
+
+def test_creating_a_folder_makes_its_parents_too(server):
+    base, workspace = server
+    status, payload = call(base, "/api/folders/create", {"path": "x/y/z"})
+
+    assert status == 201 and payload["folder"]["path"] == "x/y/z"
+    assert (workspace.inputs / "x" / "y" / "z").is_dir()
+
+
+def test_a_move_into_a_folder_that_is_not_there_is_still_a_404(server):
+    """Inventing a folder is what create means; it is not what move means."""
     base, _ = server
-    assert call(base, "/api/documents/create", {"path": "nowhere/doc"})[0] == 404
+    assert call(base, "/api/documents/move", {"from": "top", "to": "nowhere/top"})[0] == 404
 
 
 def test_creating_needs_a_path(server):
@@ -466,15 +491,28 @@ ESCAPES = [
 
 @pytest.mark.parametrize("target", ESCAPES)
 def test_no_create_can_write_outside_the_markdown_root(server, target):
-    """Every path a client sends is either looked up or reduced to a bare name."""
+    """The property that matters, whatever the status: nothing lands outside.
+
+    Creation makes intermediate folders now, so a path is no longer looked up
+    -- each segment is sanitised instead. `..` has nothing left after that and
+    is refused rather than dropped, so `../escape` cannot quietly become
+    `escape`. A leading slash is stripped, as `safe_document_name` has always
+    done, so `/etc/escape` is the one input here that legitimately succeeds --
+    inside the root, where `etc` is just a folder name.
+    """
     base, workspace = server
-    before = _snapshot(workspace)
 
     status, _ = call(base, "/api/documents/create", {"path": target})
 
-    assert status in (400, 404, 409)
-    assert _snapshot(workspace) == before
+    outside = sorted(p.name for p in workspace.inputs.parent.iterdir())
+    assert outside == ["html_outputs", "markdown_inputs"], f"{target} escaped"
     assert not (workspace.inputs.parent / "escape.md").exists()
+
+    if target == "/etc/escape":
+        assert status == 201, "a leading slash is stripped, not an escape"
+        assert (workspace.inputs / "etc" / "escape.md").exists()
+    else:
+        assert status in (400, 404, 409), f"{target} should have been refused"
 
 
 @pytest.mark.parametrize("target", ESCAPES)

@@ -144,6 +144,13 @@ anything into. Renaming a folder carries every document under it, and so
 changes their ids; deleting one refuses unless it is empty or the request says
 `recursive`.
 
+A new name may itself be a path: `notes/2026/q1` makes all three, so the
+intermediates need not exist first, and the same goes for a new document.
+Every segment is reduced to something safe to write; one with nothing usable
+left, like `..`, is refused rather than dropped, so `../notes` cannot quietly
+become `notes`. A *move* into a folder that is not there is still a 404 —
+inventing one is what create means and not what move means.
+
 **Cost.** A tree change alters the navigation on every page and none of their
 prose, so only the one region that changed is rewritten: `render_sidebar`
 produces the panel and `splice_sidebar` swaps it between the markers each page
