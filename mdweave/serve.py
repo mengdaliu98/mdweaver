@@ -272,57 +272,18 @@ class Workspace:
     def _id_of(self, path: Path) -> str:
         return path.relative_to(self.inputs).with_suffix("").as_posix()
 
-    def safe_segments(self, target: str) -> list[str]:
-        """Every folder segment of a proposed path, each reduced to something safe.
+    def destination(self, target: str) -> tuple[str, Path]:
+        """Split a proposed document id into a folder that exists and a safe name.
 
-        The alternative to looking a folder up: sanitise each segment on its
-        own, so `notes/2026` can make both without a lookup that would refuse
-        the intermediate.
-
-        A segment with nothing usable left -- `..`, `.` -- is refused rather
-        than dropped. Dropping it would keep the write inside the root, which
-        is the property that matters, but `../notes` would then quietly become
-        `notes`, and silently doing something adjacent to what was asked is a
-        worse answer than saying no.
-        """
-        parts = []
-        for raw in target.replace("\\", "/").strip("/").split("/"):
-            if not raw:
-                continue  # a doubled slash means nothing either way
-            try:
-                parts.append(safe_folder_name(raw))
-            except ValueError:
-                raise ApiError(
-                    HTTPStatus.BAD_REQUEST,
-                    f"{raw!r} is not a usable folder name, in {target!r}",
-                )
-        return parts
-
-    def destination(self, target: str, make_parents: bool = False) -> tuple[str, Path]:
-        """Split a proposed document id into a folder and a safe name.
-
-        Both halves are guarded, and differently. The leaf goes through
-        `safe_document_name`, which throws away any path it is given. The
-        folder half is either looked up in `folders()` and never joined -- so
-        `../escape` asks for a folder called `..` and gets a 404 -- or, when
-        the caller is creating something, sanitised segment by segment and
-        made. Neither route can name a file outside the markdown root, which
-        is the property every write here depends on.
-
-        `make_parents` is for creation only. A *move* into a folder that is
-        not there is a mistake worth reporting, not an instruction to invent
-        one; typing a new document as `notes/2026/draft` is not.
+        Both halves are guarded, and differently. The folder is looked up in
+        `folders()` and never joined, so `../escape` asks for a folder called
+        `..` and gets a 404. The leaf goes through `safe_document_name`, which
+        throws away any path it is given. Neither half can name a file outside
+        the markdown root, which is the property every write here depends on.
         """
         cleaned = target.replace("\\", "/").strip("/")
         folder, _, leaf = cleaned.rpartition("/")
-
-        if make_parents and folder:
-            parts = self.safe_segments(folder)
-            folder = "/".join(parts)
-            directory = self.inputs.joinpath(*parts) if parts else self.inputs
-            directory.mkdir(parents=True, exist_ok=True)
-        else:
-            directory = self.folder_for(folder)
+        directory = self.folder_for(folder)
 
         # The client sends an id, which has no suffix -- but tolerate one, so
         # that a rename typed as "weekly.md" does not become "weekly.md.md".
@@ -338,7 +299,7 @@ class Workspace:
 
     def create_document(self, target: str) -> str:
         """Make a new document, and return its id."""
-        doc_id, path = self.destination(target, make_parents=True)
+        doc_id, path = self.destination(target)
         if path.exists():
             raise ApiError(
                 HTTPStatus.CONFLICT, f"a document called {doc_id!r} already exists"
@@ -395,20 +356,21 @@ class Workspace:
     # --- folders ----------------------------------------------------------
 
     def folder_destination(self, target: str) -> tuple[str, Path]:
-        """Where a proposed folder path lands, with every segment made safe.
+        """Split a proposed folder path into a parent that exists and a safe leaf.
 
-        Not a lookup: creating `notes/2026` when only `notes` exists should
-        make both, and `create_folder` was always written to (`parents=True`)
-        -- the lookup in front of it simply refused first, with an "unknown
-        folder" about the intermediate. Sanitising each segment keeps the same
-        guarantee the lookup gave: no segment can climb out of the root.
+        Guarded exactly as `destination` is, and for the same reason: the
+        parent is looked up in `folders()` and never joined, the leaf goes
+        through `safe_folder_name`, and so neither half can name a directory
+        outside the markdown root.
         """
-        parts = self.safe_segments(target)
-        if not parts:
-            raise ApiError(
-                HTTPStatus.BAD_REQUEST, f"{target!r} leaves no usable folder name"
-            )
-        return "/".join(parts), self.inputs.joinpath(*parts)
+        cleaned = target.replace("\\", "/").strip("/")
+        parent, _, leaf = cleaned.rpartition("/")
+        directory = self.folder_for(parent)
+        try:
+            name = safe_folder_name(leaf)
+        except ValueError as exc:
+            raise ApiError(HTTPStatus.BAD_REQUEST, str(exc))
+        return (f"{parent}/{name}" if parent else name), directory / name
 
     def create_folder(self, target: str) -> str:
         """Make an empty folder, and return its path.

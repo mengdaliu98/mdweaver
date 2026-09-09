@@ -15,7 +15,7 @@
 
 .selection-toolbar[hidden] { display: none; }
 
-/* Two rows -- comment and highlight -- each offering the five colours. The
+/* Two rows -- comment and highlight -- each offering the whole palette. The
    colour is the button: picking one is the whole action, so neither is two
    clicks. */
 .selection-toolbar {
@@ -52,7 +52,7 @@
 .selection-toolbar__swatches { display: flex; gap: 0.24rem; }
 
 /* Filled with the colour it makes, so the row reads as a palette rather than
-   as five identical buttons. */
+   as a row of identical buttons. */
 .selection-toolbar__swatch {
   width: 15px;
   height: 15px;
@@ -163,7 +163,7 @@ mark.hl--pending {
 
 /* --- colour picker -------------------------------------------------------- */
 
-/* Five swatches, in the composer and in every note's card. Each one carries
+/* One swatch per colour, in the composer and in every note's card. Each one carries
    its own token class, so a swatch is painted with exactly the fill and edge
    the highlight will get -- there is no second copy of the palette here. */
 .swatches {
@@ -182,8 +182,8 @@ mark.hl--pending {
   cursor: pointer;
 }
 
-/* The current colour is filled in, not merely ringed: among five dots of one
-   size an outline alone is too quiet to find. */
+/* The current colour is filled in, not merely ringed: among identical dots of
+   one size an outline alone is too quiet to find. */
 .swatch[aria-checked="true"] {
   background: var(--hl-edge);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--hl-edge) 30%, transparent);

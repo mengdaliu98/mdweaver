@@ -11,10 +11,19 @@
   --ink:          rgb( 24,  27,  33);
   --ink-muted:    rgb( 99, 108, 124);
   --ink-faint:    rgb(148, 157, 172);
-  --rule:         rgb(226, 230, 237);
-  --rule-strong:  rgb(203, 209, 219);
+  /* The two backgrounds the reader actually looks at, kept apart from
+     `--surface`: that one is still white, because it is also the colour of
+     the text on a dark chip and the fill of a floating control, and warm
+     paper is not what either of those wants. */
+  --paper:        rgb(242, 239, 228);   /* #F2EFE4 -- the reading pane */
+  --sidebar-bg:   rgb(209, 199, 183);   /* #D1C7B7 -- the panel beside it */
+
+  /* Warm, because they sit *on* the paper: a code block, a table head and a
+     hairline in the old cool grey read as patches of a different page. */
+  --rule:         rgb(219, 214, 199);
+  --rule-strong:  rgb(197, 191, 174);
   --surface:      rgb(255, 255, 255);
-  --surface-sunk: rgb(247, 248, 251);
+  --surface-sunk: rgb(233, 229, 215);
   --accent:       rgb( 34,  99, 219);
 
   --measure: 46rem;      /* body text column        */
@@ -37,6 +46,10 @@
     --surface:      rgb( 20,  22,  28);
     --surface-sunk: rgb( 27,  30,  38);
     --accent:       rgb(120, 168, 255);
+    /* Warm paper is a light-scheme idea; here the two keep the tonal step
+       they had, which is the part that was doing the work. */
+    --paper:        rgb( 20,  22,  28);
+    --sidebar-bg:   rgb( 27,  30,  38);
   }
 }
 
@@ -46,7 +59,7 @@ html { -webkit-text-size-adjust: 100%; }
 
 body {
   margin: 0;
-  background: var(--surface);
+  background: var(--paper);
   color: var(--ink);
   font-family: var(--font-body);
   font-size: 16px;

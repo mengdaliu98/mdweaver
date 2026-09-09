@@ -144,12 +144,21 @@ anything into. Renaming a folder carries every document under it, and so
 changes their ids; deleting one refuses unless it is empty or the request says
 `recursive`.
 
-A new name may itself be a path: `notes/2026/q1` makes all three, so the
-intermediates need not exist first, and the same goes for a new document.
-Every segment is reduced to something safe to write; one with nothing usable
-left, like `..`, is refused rather than dropped, so `../notes` cannot quietly
-become `notes`. A *move* into a folder that is not there is still a 404 —
-inventing one is what create means and not what move means.
+**A name is a name, not a path.** The prompts ask for one name, so a `/` in
+what you type is escaped rather than obeyed: `Research/Papers` makes a single
+folder, `Research_Papers`. Where it goes is the row the button hangs off, and
+never something you typed. Typing a slash used to answer `unknown folder:
+'Research'` — the server reads its `path` field as a path, which is right for a
+drag, where both halves name rows that exist, and wrong for a typed name, where
+the reader never named a parent at all.
+
+**Colours.** The panel is `#D1C7B7` and the reading pane `#F2EFE4`, as
+`--sidebar-bg` and `--paper` in `mdweave/theme/base.css`. They are deliberately
+not `--surface`, which is still white: that token is also the colour of the
+text on a dark chip and the fill of the floating re-open button, neither of
+which wants warm paper. Code blocks, table heads and hairlines were warmed to
+match, or they read as patches of a different page. The dark scheme keeps its
+own two tones — warm paper is a light-scheme idea.
 
 **Cost.** A tree change alters the navigation on every page and none of their
 prose, so only the one region that changed is rewritten: `render_sidebar`
@@ -309,7 +318,7 @@ turn into arguments.
 ## Adding comments in the browser
 
 Select any text and a menu appears with two rows — **Comment** and
-**Highlight** — each showing the five colours. The colour *is* the button, so
+**Highlight** — each showing the six colours. The colour *is* the button, so
 either is one click rather than "make it, then recolour it". A highlight has
 nothing to type and so skips the composer entirely; a comment opens one,
 already in the colour you picked.
@@ -328,7 +337,7 @@ own card instead. The comment is written straight into the
 document's `.ann.json` sidecar and the HTML is regenerated, so a reload shows
 exactly what you just made. Open a note and `Delete` removes it again.
 
-Five swatches beside the buttons choose the colour, before or after the fact —
+The swatches beside the buttons choose the colour, before or after the fact —
 see [Colours](#colours).
 
 This needs the page to be served, because a `file://` page has no API to write
@@ -399,26 +408,38 @@ new features do not need a schema migration.
 
 ## Colours
 
-Five: **yellow**, **orange**, **green**, **pink**, **purple**. Pick one while
-writing a comment — the swatches sit in the composer, next to `Comment` — and
-the highlight and the card take it straight away. Open an existing note and the
-same five are in its card; clicking one recolours it and saves. The swatches are
-a radio group, so `Tab` reaches them as one stop and the arrow keys move
-between them.
+Six, in the order the swatches appear:
+
+| token      | fill      |
+| ---------- | --------- |
+| **pink**   | `#d4b0b5` |
+| **purple** | `#c3b0d4` |
+| **blue**   | `#b0b2d4` |
+| **green**  | `#b0d4b1` |
+| **yellow** | `#eddf91` |
+| **orange** | `#face98` |
+
+Pick one while writing a comment — the swatches sit in the composer, next to
+`Comment` — and the highlight and the card take it straight away. Open an
+existing note and the same six are in its card; clicking one recolours it and
+saves. The swatches are a radio group, so `Tab` reaches them as one stop and
+the arrow keys move between them.
 
 Each token is defined in one block at the top of
 `mdweave/theme/annotations.css`, as four values:
 
 ```css
---hl-yellow-bg:     rgb(255 224 102 / 0.40);   /* fill behind the text   */
---hl-yellow-edge:   rgb(150 105   4);          /* underline and note pin */
---note-yellow-bg:   rgb(255 250 231);          /* card background        */
---note-yellow-ink:  rgb( 66  47   6);          /* card text              */
+--hl-yellow-bg:     rgb(237 223 145);   /* fill behind the text      */
+--hl-yellow-edge:   rgb(128 109   2);   /* note pin, and two states  */
+--note-yellow-bg:   rgb(252 250 240);   /* card background           */
+--note-yellow-ink:  rgb( 88  75   6);   /* card text                 */
 ```
 
-Edit those and rebuild — every yellow annotation follows. The four have to stay
-legible together; `tests/test_colours.py` computes the contrast of each pair and
-fails below WCAG AA, so a change that looks nice and reads badly does not get
+Only the fill is chosen; the other three are derived from it by hue, so
+swapping a colour does not mean picking three companions by hand. Edit those
+and rebuild — every yellow annotation follows. The four have to stay legible
+together; `tests/test_colours.py` computes the contrast of each pair and fails
+below WCAG AA, so a change that looks nice and reads badly does not get
 through.
 
 To recolour a single annotation instead, put a raw colour in its sidecar entry;
@@ -435,21 +456,24 @@ attribute and is not something to accept from a browser.
 
 **The palette before this one.** Sidecars written earlier say `amber`, `rose`,
 `mint`, `sky`, `violet` or `slate`. Those files are left exactly as they are;
-the names are resolved to the five when the page is built:
+the names are resolved to the six when the page is built:
 
 | was      | renders as |
 | -------- | ---------- |
-| `amber`  | yellow     |
+| `amber`  | orange     |
 | `rose`   | pink       |
 | `mint`   | green      |
 | `violet` | purple     |
-| `sky`    | purple     |
+| `sky`    | blue       |
 | `slate`  | yellow     |
 
-The last two lose something: `sky` and `violet` now look the same, and so do
-`slate` and `amber`. Recolouring those notes in the browser is what gets the
-distinction back — and writes a current token into the sidecar while it is
-there. `LEGACY_COLOR_ALIASES` in `mdweave/model.py` is the map.
+Six names onto six tokens, one each — which matters more than getting every
+hue right, since two old names sharing a token makes two notes that were
+deliberately different look identical. `slate` is the one still in the wrong
+place: there is no grey to send it to and every other token is spoken for. The
+palette is muted throughout now, so it lands as a soft sand rather than the
+shout it used to be. Recolouring it in the browser writes a current token into
+the sidecar. `LEGACY_COLOR_ALIASES` in `mdweave/model.py` is the map.
 
 `knowledge_base/markdown_inputs/mdweave_style_reference.md` previews the tokens,
 and still names the old six — it is a document in the contents repo, so edit it

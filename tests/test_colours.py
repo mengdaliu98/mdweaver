@@ -1,10 +1,10 @@
 """Tests for the annotation colour palette.
 
-Five colours, pickable in the browser and stored in the sidecar. Two things
-here are worth more than a spot check. The older six-name palette is still in
-the user's files, so a render has to resolve those names without rewriting
-them; and the four values per token only earn their keep if the fill, the pin
-and the card stay legible together, which is arithmetic and so is testable.
+Six colours, pickable in the browser and stored in the sidecar. Two things
+here are worth more than a spot check. The older palette is still in the
+user's files, so a render has to resolve those names without rewriting them;
+and the four values per token only earn their keep if the fill, the pin and
+the card stay legible together, which is arithmetic and so is testable.
 """
 
 from __future__ import annotations
@@ -46,8 +46,8 @@ def ann(**kw) -> Annotation:
 
 # --- the palette ----------------------------------------------------------
 
-def test_the_palette_is_five_colours():
-    assert COLOR_TOKENS == ("yellow", "green", "blue", "pink", "purple")
+def test_the_palette_is_six_colours():
+    assert COLOR_TOKENS == ("pink", "purple", "blue", "green", "yellow", "orange")
     assert DEFAULT_COLOR in COLOR_TOKENS
 
 
@@ -74,9 +74,12 @@ def test_the_dark_scheme_restyles_every_card():
 
 # --- contrast -------------------------------------------------------------
 
-# The page's own colours, from base.css: black-ish text on white.
+# The page's own colours, from base.css: black-ish text on warm paper. WHITE
+# is not the page -- it is the pin's own text, which is white whatever the
+# paper behind the pin happens to be.
 PAGE_INK = (24, 27, 33)
-PAGE_SURFACE = (255, 255, 255)
+PAGE_SURFACE = (242, 239, 228)
+WHITE = (255, 255, 255)
 AA = 4.5
 
 _VALUE = re.compile(r"--([\w-]+):\s*rgb\(([^)]+)\)")
@@ -126,7 +129,7 @@ def test_body_text_stays_readable_through_the_highlight(token):
 def test_the_pin_carries_white_text(token):
     """The edge colour is the pin's background, and the initial on it is white."""
     values = palette()
-    assert contrast(values[f"hl-{token}-edge"], PAGE_SURFACE) >= AA
+    assert contrast(values[f"hl-{token}-edge"], WHITE) >= AA
 
 
 @pytest.mark.parametrize("token", COLOR_TOKENS)
@@ -140,7 +143,7 @@ def test_a_card_is_readable_against_its_own_background(token):
 @pytest.mark.parametrize(
     "legacy, token",
     [
-        ("amber", "yellow"),
+        ("amber", "orange"),
         ("rose", "pink"),
         ("mint", "green"),
         ("violet", "purple"),
@@ -153,16 +156,20 @@ def test_a_legacy_colour_name_resolves_to_its_replacement(legacy, token):
     assert ann(color=legacy).color_token == token
 
 
-def test_only_slate_loses_its_distinction_now():
-    """`sky` has a proper home again: the palette carries a blue.
+def test_every_legacy_name_still_lands_somewhere_of_its_own():
+    """Six old names onto six tokens, one each.
 
-    `slate` is the one without a counterpart -- it was the only desaturated
-    token -- so it folds onto yellow and a note that meant "low priority" now
-    shouts. The way back is to recolour it, which the picker can do.
+    Worth more than getting every hue right: two legacy names sharing a token
+    makes two notes that were deliberately different look the same. `amber`
+    used to fold onto yellow and collide with the notes actually written
+    yellow; the sixth colour is where it belongs. `slate` has nowhere truly
+    right to go -- there is no grey, and blue is spoken for by sky -- so it
+    keeps yellow, which is a soft sand in this palette rather than a shout.
     """
-    assert resolve_color_token("sky") == "blue"
-    assert resolve_color_token("violet") == "purple", "no longer collides with sky"
-    assert resolve_color_token("slate") == resolve_color_token("amber") == "yellow"
+    assert resolve_color_token("amber") == "orange"
+    assert resolve_color_token("slate") == "yellow"
+    assert len(set(LEGACY_COLOR_ALIASES.values())) == len(LEGACY_COLOR_ALIASES), \
+        "two old names on one token makes two different notes look alike"
 
 
 def test_a_legacy_name_is_not_mistaken_for_a_raw_css_colour():
@@ -179,7 +186,7 @@ def test_a_legacy_colour_is_not_rewritten_in_the_sidecar(tmp_path):
     (restored,) = sidecar.load(path)
 
     assert restored.color == "amber"
-    assert restored.color_token == "yellow"
+    assert restored.color_token == "orange"
     assert json.loads(path.read_text())["annotations"][0]["color"] == "amber"
 
 
@@ -491,7 +498,7 @@ console.log(JSON.stringify({
 def test_the_swatches_are_one_tab_stop_the_arrow_keys_move_within(tmp_path):
     """The keyboard contract, run rather than grepped for.
 
-    Five radio buttons sharing one tab stop is only correct if the tabindex
+    Radio buttons sharing one tab stop is only correct if the tabindex
     actually roves and the arrows actually move the selection.
     """
     program = "\n".join(
@@ -513,20 +520,21 @@ def test_the_swatches_are_one_tab_stop_the_arrow_keys_move_within(tmp_path):
     assert done.returncode == 0, done.stderr
     result = json.loads(done.stdout)
 
-    assert result["names"] == ["Yellow", "Green", "Blue", "Pink", "Purple"]
-    assert result["roles"] == ["radio"] * 5
+    assert result["names"] == ["Pink", "Purple", "Blue", "Green", "Yellow", "Orange"]
+    assert result["roles"] == ["radio"] * 6
 
     # One tab stop, and it is always the current colour -- never none, and
-    # never five.
+    # never one per swatch.
     assert result["before"] == {"checked": ["green"], "stops": ["green"]}
-    # Right from green is blue in this order, not pink.
+    # Right from green is yellow in this order, not blue.
     assert result["arrowed"] == {
-        "checked": ["blue"],
-        "stops": ["blue"],
-        "focused": "blue",
+        "checked": ["yellow"],
+        "stops": ["yellow"],
+        "focused": "yellow",
     }
-    assert result["clicked"] == {"checked": ["yellow"], "stops": ["yellow"]}
-    assert result["picked"] == ["blue", "yellow"]
+    # A click lands on the first swatch, whatever the focus was.
+    assert result["clicked"] == {"checked": ["pink"], "stops": ["pink"]}
+    assert result["picked"] == ["yellow", "pink"]
 
 
 def test_note_actions_survive_an_in_place_swap():
@@ -551,11 +559,12 @@ def test_note_actions_survive_an_in_place_swap():
 # --- the exact palette that was asked for ----------------------------------
 
 REQUESTED = {
-    "pink":   (255, 173, 177),
-    "yellow": (255, 252, 136),
-    "green":  (203, 244, 130),
-    "blue":   (173, 225, 236),
-    "purple": (204, 204, 255),
+    "pink":   (0xd4, 0xb0, 0xb5),
+    "purple": (0xc3, 0xb0, 0xd4),
+    "blue":   (0xb0, 0xb2, 0xd4),
+    "green":  (0xb0, 0xd4, 0xb1),
+    "yellow": (0xed, 0xdf, 0x91),
+    "orange": (0xfa, 0xce, 0x98),
 }
 
 
@@ -569,8 +578,40 @@ def test_the_fill_is_the_colour_that_was_specified(token, rgb):
     assert fill[3] == 1.0, "an alpha here would change the colour on screen"
 
 
-def test_the_palette_has_no_orange_and_does_have_a_blue():
-    assert "blue" in COLOR_TOKENS and "orange" not in COLOR_TOKENS
+BASE_CSS = (THEME / "base.css").read_text(encoding="utf-8")
+SIDEBAR_CSS = (THEME / "sidebar.css").read_text(encoding="utf-8")
+
+
+def test_the_page_and_the_panel_are_the_two_backgrounds_that_were_asked_for():
+    assert "--paper:        rgb(242, 239, 228);" in BASE_CSS   # #F2EFE4
+    assert "--sidebar-bg:   rgb(209, 199, 183);" in BASE_CSS   # #D1C7B7
+
+    body = BASE_CSS.split("body {")[1].split("}")[0]
+    assert "background: var(--paper);" in body
+    # Anchored at a line start: `body[...] .sidebar {` matches otherwise, and
+    # its one-line body says `display: none` and nothing about a colour.
+    panel = SIDEBAR_CSS.split("\n.sidebar {")[1].split("}")[0]
+    assert "background: var(--sidebar-bg);" in panel
+
+
+def test_the_panel_paints_itself_with_one_token_throughout():
+    """The row-action strips are opaque and have to match the row behind them,
+    so a strip left on the old token shows as a pale rectangle on a hover."""
+    assert "--surface-sunk" not in SIDEBAR_CSS
+
+
+def test_the_paper_and_the_panel_are_far_enough_apart_to_see():
+    """Two warm tones a hair apart would read as a rendering artefact rather
+    than as an edge; the border alone should not be doing all the work."""
+    paper, panel = (242, 239, 228), (209, 199, 183)
+    assert contrast(paper, panel) >= 1.2
+
+
+def test_the_swatches_are_offered_in_the_order_they_were_given():
+    """The menu is read left to right, so the list is part of what was asked
+    for and not just the set of colours in it."""
+    assert list(COLOR_TOKENS) == list(REQUESTED)
+    assert 'var COLORS = ["pink", "purple", "blue", "green", "yellow", "orange"]' in ANNOTATE_JS
 
 
 def test_sky_has_a_home_again():

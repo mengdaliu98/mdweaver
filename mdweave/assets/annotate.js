@@ -27,7 +27,7 @@
   var PENDING = "__pending__";
   // Keep in step with model.COLOR_TOKENS and model.DEFAULT_COLOR; a drift
   // offers a swatch the server will refuse.
-  var COLORS = ["yellow", "green", "blue", "pink", "purple"];
+  var COLORS = ["pink", "purple", "blue", "green", "yellow", "orange"];
   var DEFAULT_COLOR = "yellow";
   var DOC_ID = document.body.dataset.document || "";
   var API = "/api/annotations";
@@ -185,7 +185,7 @@
 
   /* --- small UI pieces --------------------------------------------------- */
 
-  /* Two rows, five colours each. Picking a colour *is* the action, so a
+  /* Two rows, the palette on each. Picking a colour *is* the action, so a
    * highlight is one click rather than "highlight, then recolour" -- and the
    * colour you are choosing is shown in the colour it will be. */
   var COMMENT_ICON =
@@ -249,7 +249,7 @@
     element.classList.add(prefix + color);
   }
 
-  /** Which of the five an element is currently wearing, or null for none. */
+  /** Which of the six an element is currently wearing, or null for none. */
   function colorOf(element, prefix) {
     for (var i = 0; i < COLORS.length; i++) {
       if (element.classList.contains(prefix + COLORS[i])) return COLORS[i];
@@ -273,9 +273,9 @@
 
   var ARROWS = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 };
 
-  /* Five swatches as a radio group, not five toggles: the colours are mutually
+  /* Swatches as a radio group, not a row of toggles: the colours are mutually
    * exclusive. That buys the arrow keys and one tab stop for the whole group
-   * instead of five, which matters in a note card that already has two
+   * instead of one each, which matters in a note card that already has two
    * buttons after it. */
   function colorPicker(current, onPick) {
     var row = document.createElement("div");

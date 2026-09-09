@@ -176,34 +176,9 @@ def test_creating_over_an_existing_document_is_refused(server):
     assert "At the root." in (workspace.inputs / "top.md").read_text()
 
 
-def test_creating_in_a_folder_that_is_not_there_makes_it(server):
-    """Typing `notes/2026/draft` should not need the folders made first.
-
-    This used to 404 on the intermediate -- the report was "unknown folder
-    'x'" when creating `x/y` -- even though `create_folder` already passed
-    `parents=True`. Creating is the one operation where inventing a folder is
-    what was asked for; a *move* into one that is not there is still a 404.
-    """
-    base, workspace = server
-    status, payload = call(base, "/api/documents/create", {"path": "nowhere/doc"})
-
-    assert status == 201
-    assert payload["document"]["id"] == "nowhere/doc"
-    assert (workspace.inputs / "nowhere" / "doc.md").exists()
-
-
-def test_creating_a_folder_makes_its_parents_too(server):
-    base, workspace = server
-    status, payload = call(base, "/api/folders/create", {"path": "x/y/z"})
-
-    assert status == 201 and payload["folder"]["path"] == "x/y/z"
-    assert (workspace.inputs / "x" / "y" / "z").is_dir()
-
-
-def test_a_move_into_a_folder_that_is_not_there_is_still_a_404(server):
-    """Inventing a folder is what create means; it is not what move means."""
+def test_creating_in_a_folder_that_is_not_there_is_a_404(server):
     base, _ = server
-    assert call(base, "/api/documents/move", {"from": "top", "to": "nowhere/top"})[0] == 404
+    assert call(base, "/api/documents/create", {"path": "nowhere/doc"})[0] == 404
 
 
 def test_creating_needs_a_path(server):
@@ -491,28 +466,15 @@ ESCAPES = [
 
 @pytest.mark.parametrize("target", ESCAPES)
 def test_no_create_can_write_outside_the_markdown_root(server, target):
-    """The property that matters, whatever the status: nothing lands outside.
-
-    Creation makes intermediate folders now, so a path is no longer looked up
-    -- each segment is sanitised instead. `..` has nothing left after that and
-    is refused rather than dropped, so `../escape` cannot quietly become
-    `escape`. A leading slash is stripped, as `safe_document_name` has always
-    done, so `/etc/escape` is the one input here that legitimately succeeds --
-    inside the root, where `etc` is just a folder name.
-    """
+    """Every path a client sends is either looked up or reduced to a bare name."""
     base, workspace = server
+    before = _snapshot(workspace)
 
     status, _ = call(base, "/api/documents/create", {"path": target})
 
-    outside = sorted(p.name for p in workspace.inputs.parent.iterdir())
-    assert outside == ["html_outputs", "markdown_inputs"], f"{target} escaped"
+    assert status in (400, 404, 409)
+    assert _snapshot(workspace) == before
     assert not (workspace.inputs.parent / "escape.md").exists()
-
-    if target == "/etc/escape":
-        assert status == 201, "a leading slash is stripped, not an escape"
-        assert (workspace.inputs / "etc" / "escape.md").exists()
-    else:
-        assert status in (400, 404, 409), f"{target} should have been refused"
 
 
 @pytest.mark.parametrize("target", ESCAPES)
@@ -1125,3 +1087,86 @@ __CHAIN__
     calls = [c for c in out["intoFolder"] if isinstance(c, str)]
     assert calls == ["/api/documents/move", "/api/tree/order"]
     assert ["land", "PANEL-AFTER-ORDER"] in out["intoFolder"], out["intoFolder"]
+
+
+def test_a_typed_name_is_one_name_however_many_slashes_it_has(tmp_path):
+    """Regression: typing "Research/Papers" as a folder name answered
+    `unknown folder: 'Research'`.
+
+    The prompt asks for a name, so the whole answer is the name. The server
+    reads its `path` field as a path -- parent looked up, leaf sanitised --
+    which is right for a drag, where both halves come from rows that exist,
+    and wrong for a typed name, where the parent is whichever row the button
+    hangs off and the reader never named it at all. Escaping the slash before
+    the join is what keeps those two apart.
+
+    Executed rather than read: the rule is a regex, and a regex that is
+    subtly wrong looks exactly like one that is right.
+    """
+    source = (ASSETS / "filetree.js").read_text(encoding="utf-8")
+    begin = source.index("  function askName(")
+    end = source.index("\n  }", begin) + len("\n  }")
+    helper = source[begin:end]
+
+    program = """
+let answer = null;
+const window = { prompt: (q, initial) => answer };
+__HELPER__
+
+function ask(given) { answer = given; return askName("Name?", "was"); }
+console.log(JSON.stringify({
+  plain:     ask("Research"),
+  slash:     ask("Research/Papers"),
+  spaced:    ask("Research / Papers"),
+  doubled:   ask("Research//Papers"),
+  backslash: ask("Research\\\\Papers"),
+  deep:      ask("a/b/c"),
+  leading:   ask("/Research"),
+  padded:    ask("  Research  "),
+  empty:     ask(""),
+  blank:     ask("   "),
+  slashonly: ask("///"),
+  cancelled: ask(null),
+}));
+"""
+    script = tmp_path / "name.js"
+    script.write_text(program.replace("__HELPER__", helper), encoding="utf-8")
+
+    done = subprocess.run(["node", str(script)], capture_output=True, text=True, timeout=30)
+    assert done.returncode == 0, done.stderr
+    out = json.loads(done.stdout)
+
+    assert out["plain"] == "Research"
+    # Not dropped: the two words either side stay separate, and an underscore
+    # is already how a space is written here, so the label reads the same.
+    assert out["slash"] == "Research_Papers"
+    assert out["spaced"] == "Research_Papers"
+    assert out["doubled"] == "Research_Papers"
+    assert out["backslash"] == "Research_Papers"
+    assert out["deep"] == "a_b_c"
+    assert out["leading"] == "_Research", "the server strips the underscore"
+    assert out["padded"] == "Research"
+
+    # Nothing to do, and nothing to send: null is "leave it alone", which is
+    # also what cancelling the prompt means.
+    assert out["empty"] is None
+    assert out["blank"] is None
+    assert out["cancelled"] is None
+    assert out["slashonly"] == "_", "refused by the server, which strips it to nothing"
+
+
+def test_no_prompt_bypasses_the_escaping(tmp_path):
+    """Four places ask for a name; the rule has to be in front of all of them."""
+    source = (ASSETS / "filetree.js").read_text(encoding="utf-8")
+    prompts = re.findall(r"window\.prompt\(", source)
+    assert len(prompts) == 1, "a prompt outside askName can still nest a typed name"
+    assert source.count("askName(") == 5, "one definition, four callers"
+
+
+def test_a_name_that_escapes_to_nothing_is_refused(server):
+    """`askName` can hand back "_", which is the server's business to refuse."""
+    base, workspace = server
+    status, payload = call(base, "/api/folders/create", {"path": "_"})
+
+    assert status == 400 and "usable folder name" in payload["error"]
+    assert not (workspace.inputs / "_").exists()

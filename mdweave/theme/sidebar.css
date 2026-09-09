@@ -81,7 +81,7 @@ body.sidebar-resizing {
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 0 0 2rem;
-  background: var(--surface-sunk);
+  background: var(--sidebar-bg);
   border-right: 1px solid var(--rule);
   font-size: 0.82rem;
   line-height: 1.4;
@@ -98,7 +98,7 @@ body.sidebar-resizing {
   justify-content: space-between;
   gap: 0.5rem;
   padding: 0.85rem 0.5rem 0.6rem 0.9rem;
-  background: var(--surface-sunk);
+  background: var(--sidebar-bg);
 }
 
 .sidebar__title {
@@ -296,7 +296,7 @@ body.sidebar-resizing {
   justify-content: center;
   padding: 0.55rem 0.75rem;
   text-align: center;
-  background: color-mix(in srgb, var(--accent) 12%, var(--surface-sunk));
+  background: color-mix(in srgb, var(--accent) 12%, var(--sidebar-bg));
   border-top: 2px dashed var(--accent);
   color: var(--accent);
   font-weight: 600;
@@ -360,20 +360,20 @@ body.sidebar-resizing {
   /* Opaque, so a long label runs behind them rather than through them. The
      tints below mirror the row states exactly; a mismatch here shows up as a
      pale rectangle sitting on a highlighted row. */
-  background: var(--surface-sunk);
+  background: var(--sidebar-bg);
 }
 
 .tree__row--folder:hover > .tree__actions,
 .tree__file:hover > .tree__actions {
-  background: color-mix(in srgb, var(--ink) 6%, var(--surface-sunk));
+  background: color-mix(in srgb, var(--ink) 6%, var(--sidebar-bg));
 }
 
 .tree__row--active ~ .tree__actions {
-  background: color-mix(in srgb, var(--accent) 13%, var(--surface-sunk));
+  background: color-mix(in srgb, var(--accent) 13%, var(--sidebar-bg));
 }
 
 .tree__file:hover > .tree__row--active ~ .tree__actions {
-  background: color-mix(in srgb, var(--accent) 18%, var(--surface-sunk));
+  background: color-mix(in srgb, var(--accent) 18%, var(--sidebar-bg));
 }
 
 /* Only once a server has answered: all four write to disk. */

@@ -84,6 +84,26 @@
     return folder ? folder + "/" + name : name;
   }
 
+  /* Ask for one name, and return one name -- or null to mean "leave it".
+   *
+   * The prompt asks for a name, not a path, so a "/" in the answer is part of
+   * the name: "Notes/2026" is a single folder called Notes_2026, not a 2026
+   * inside a Notes. Escaping it here is what keeps the two halves of the path
+   * apart, because the parent always comes from the row the button hangs off
+   * and never from what was typed. It also takes an "unknown folder" 404 off
+   * the table: splitting a typed name and looking its first half up as a
+   * parent folder is exactly where that error came from.
+   *
+   * A slash becomes an underscore rather than being dropped, so the two words
+   * either side stay separate -- and an underscore is already how this reads a
+   * space, so the label comes out as "Notes 2026" either way.
+   */
+  function askName(question, initial) {
+    var raw = window.prompt(question, initial || "");
+    if (raw === null) return null;
+    return raw.trim().replace(/\s*[\\/]+\s*/g, "_") || null;
+  }
+
   /* --- reading the tree ---------------------------------------------------- */
 
   /* The folder a row belongs to: itself if it is a folder, its parent if it is
@@ -132,9 +152,7 @@
 
   function create(button) {
     var folder = folderAt(button);
-    var name = window.prompt("Name for the new document", "");
-    if (name === null) return;
-    name = name.trim();
+    var name = askName("Name for the new document");
     if (!name) return;
 
     busy(true);
@@ -150,9 +168,7 @@
     if (!link) return;
 
     var was = link.dataset.name || "";
-    var name = window.prompt("Rename this document", was);
-    if (name === null) return;
-    name = name.trim();
+    var name = askName("Rename this document", was);
     if (!name || name === was) return;
 
     busy(true);
@@ -199,9 +215,7 @@
 
   function newFolder(button) {
     var parent = folderAt(button);
-    var name = window.prompt("Name for the new folder", "");
-    if (name === null) return;
-    name = name.trim();
+    var name = askName("Name for the new folder");
     if (!name) return;
 
     busy(true);
@@ -222,9 +236,7 @@
     if (!details) return;
 
     var was = details.dataset.folder || "";
-    var name = window.prompt("Rename this folder", was);
-    if (name === null) return;
-    name = name.trim();
+    var name = askName("Rename this folder", was);
     if (!name || name === was) return;
 
     var path = details.dataset.path;
