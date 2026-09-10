@@ -141,13 +141,28 @@ class Workspace:
             raise ApiError(HTTPStatus.NOT_FOUND, f"unknown folder: {folder!r}")
 
     def children_of(self, folder: str) -> set[str]:
-        """The names the sidebar draws directly inside one folder."""
+        """The names the sidebar draws directly inside one folder.
+
+        Folders as well as documents, and the folders have to be asked for
+        separately: an empty one holds no document, so deriving the list from
+        document ids alone leaves it out. `set_order` then drops it as a name
+        the sidebar does not draw -- and dragging an empty folder up or down
+        did nothing that survived a reload, while a folder with a document in
+        it moved perfectly well. `build_tree` takes `folders` for the same
+        reason; this is the other half of it.
+        """
         prefix = f"{folder}/" if folder else ""
-        return {
+        names = {
             doc_id[len(prefix) :].split("/", 1)[0]
             for doc_id in self.documents()
             if doc_id.startswith(prefix)
         }
+        names.update(
+            path[len(prefix) :].split("/", 1)[0]
+            for path in self.folders()
+            if path and path.startswith(prefix)
+        )
+        return names
 
     def annotations_for(self, doc_id: str) -> list[Annotation]:
         md = self.markdown_for(doc_id)

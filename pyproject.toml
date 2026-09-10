@@ -11,6 +11,12 @@ dependencies = [
     "Pygments>=2.17",
 ]
 
+[project.optional-dependencies]
+# The browser suite only. Kept out of the base install because it wants a
+# 190MB Chromium alongside it, and `tests/test_browser.py` skips rather than
+# fails when neither is there.
+browser = ["playwright>=1.40"]
+
 [project.scripts]
 mdweave = "mdweave.cli:main"
 

@@ -380,6 +380,27 @@ def test_names_that_are_not_children_are_dropped(server):
     assert load_order(workspace.inputs) == {"": ["top", "other"]}
 
 
+def test_an_empty_folder_can_be_ordered_like_any_other_row(server):
+    """Found in a browser, not here: dragging an empty folder up or down did
+    nothing that survived a reload.
+
+    `children_of` derived the list of rows from document ids, and an empty
+    folder has none -- so `set_order` dropped its name as something the
+    sidebar does not draw, while a folder with a document in it moved
+    perfectly well. Every test here used the second kind.
+    """
+    base, workspace = server
+    assert not any((workspace.inputs / "archive").iterdir()), "the fixture's empty one"
+
+    status, payload = call(
+        base, "/api/tree/order", {"folder": "", "order": ["archive", "notes", "top"]}
+    )
+
+    assert status == 200
+    assert payload["order"] == ["archive", "notes", "top"], "a name was dropped"
+    assert load_order(workspace.inputs)[""] == ["archive", "notes", "top"]
+
+
 def test_a_folder_counts_as_a_child_of_its_parent(server):
     base, _ = server
     _, payload = call(base, "/api/tree/order", {"folder": "", "order": ["notes"]})

@@ -31,6 +31,10 @@ cd mdweaver
 uv venv .venv && uv pip install --python .venv/bin/python -e .
 .venv/bin/python -m pytest tests/          # expect 181 passing
 
+# optional: the browser suite, which needs a real browser to drive
+uv pip install --python .venv/bin/python -e '.[browser]'
+.venv/bin/playwright install chromium      # ~190MB, into ~/.cache/ms-playwright
+
 ln -s "$PWD/.venv/bin/mdweave" ~/.local/bin/mdweave    # or add .venv/bin to PATH
 ```
 
@@ -427,6 +431,33 @@ block.
 
 Unrecognised fields are preserved verbatim through a load/save round trip, so
 new features do not need a schema migration.
+
+## Testing the browser
+
+Most of the suite reasons about the browser code without running it: a
+function is lifted out of its file and driven under `node` against a stub
+DOM, or the source is read and asserted about. That is fast, and it is enough
+for logic — but it is not enough for anything about real events, real layout,
+or the wiring between them, and three bugs that reached the reader proved it.
+Dragging a folder threw `Cannot set properties of null` while every
+source-level test around it passed. Creating a folder answered `unknown
+folder` from a server that was self-consistent right up until something used
+it. A slash in a typed name quietly made a hierarchy.
+
+`tests/test_browser.py` drives a real page: real clicks, real drags, and
+`pageerror` wired up so an uncaught exception in the panel fails the test
+rather than sitting in a console nobody reads. It also asserts on
+`getComputedStyle` rather than on the stylesheet, because a token can be
+perfectly correct and still be overridden by something later.
+
+It found one on its first run: an **empty** folder could not be reordered.
+`children_of` derived the sidebar's rows from document ids, and an empty
+folder has none, so the order endpoint dropped its name — while a folder with
+a document in it moved perfectly well, which is why every existing test
+missed it.
+
+The file skips, rather than fails, when the browser is not installed, so
+`pytest tests/` still works on a checkout that never ran `playwright install`.
 
 ## Colours
 
