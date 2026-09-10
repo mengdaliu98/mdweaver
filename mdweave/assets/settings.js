@@ -459,12 +459,20 @@
 
     var payload = { active: name, schemes: schemes };
 
-    // Only when the colours actually moved, and only for the scheme the
-    // annotations are currently expressed in. Renumbering because someone
-    // rearranged a scheme they are not using would repaint the page they are
-    // looking at, which is the one thing a reorder must never do.
-    var moved = state.order.join(",") !== "1,2,3,4,5,6";
-    if (moved && state.from === state.wasActive) payload.remap = state.order;
+    // Whenever the colours moved, whichever scheme they moved in.
+    //
+    // This used to be conditional on editing the scheme already in use, on the
+    // theory that renumbering for a scheme nobody is looking at would repaint
+    // the page. It is the opposite: Apply *activates* whatever is being
+    // edited, so the edited scheme is always the one about to be looked at,
+    // and skipping the renumbering is what makes the drag visible. Pressing
+    // New and rearranging the copy repainted five highlights out of six.
+    //
+    // The rule that holds in every case is simpler than the one it replaces:
+    // a reorder contributes nothing visible, on top of whatever else the
+    // apply does. Same scheme, and nothing changes at all. A different one,
+    // and you get exactly the switch you would have got without the drag.
+    if (state.order.join(",") !== "1,2,3,4,5,6") payload.remap = state.order;
 
     post("/api/schemes", payload)
       .then(function (data) {

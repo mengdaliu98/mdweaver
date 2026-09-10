@@ -357,3 +357,155 @@ def test_a_new_scheme_starts_from_the_one_on_screen(page):
     assert slot_pickers(page) == before
     name = page.input_value(".settings__text")
     assert name and name != "Warm paper", "a copy needs a name of its own"
+
+
+# --- reordering must never be visible ---------------------------------------
+#
+# Reported: rearranging the swatches repainted existing text. The cause was a
+# guard that only renumbered when the scheme being edited was the one already
+# in use -- but Apply *activates* whatever is being edited, so pressing New and
+# rearranging the copy skipped the renumbering and the drag became visible.
+#
+# These run the whole path, because the arithmetic was never the broken part:
+# the server-side test for renumbering passed throughout.
+
+import json as _json  # noqa: E402
+
+from mdweave import scheme as _schemes  # noqa: E402
+from mdweave.model import Annotation as _Annotation, TextTarget as _TextTarget  # noqa: E402
+from mdweave.sources import sidecar as _sidecar  # noqa: E402
+
+WORDS = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot"]
+
+INK = _schemes.Scheme(
+    name="Ink", sidebar="#1b1b22", paper="#101014",
+    colors=["#7a3b3b", "#4b3b7a", "#3b4b7a", "#3b7a4b", "#7a7a3b", "#7a5b3b"],
+)
+
+
+@pytest.fixture()
+def highlighted(tmp_path):
+    """One document wearing all six colours, so a repaint cannot hide."""
+    inputs, outputs = tmp_path / "markdown_inputs", tmp_path / "html_outputs"
+    inputs.mkdir()
+    (inputs / "doc.md").write_text(f"# Doc\n\n{' '.join(WORDS)}.\n", encoding="utf-8")
+    _sidecar.save(
+        _sidecar.sidecar_path(inputs / "doc.md"),
+        [
+            _Annotation(id=f"a{n}", target=_TextTarget(quote=word),
+                        kind="highlight", color=n)
+            for n, word in enumerate(WORDS, start=1)
+        ],
+    )
+    workspace = Workspace(inputs=inputs, outputs=outputs)
+    workspace.rebuild_all()
+
+    httpd = make_server(workspace, "127.0.0.1", 0)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{httpd.server_port}", workspace
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+
+
+def loaded(browser, base):
+    context = browser.new_context(viewport={"width": 1280, "height": 900})
+    page = context.new_page()
+    page.goto(f"{base}/doc.html", wait_until="networkidle")
+    page.wait_for_selector(".sidebar--manageable", timeout=10_000)
+    return context, page
+
+
+def fills(page) -> dict:
+    return dict(
+        page.eval_on_selector_all(
+            "mark.hl",
+            "els => els.map(e => [e.textContent, getComputedStyle(e).backgroundColor])",
+        )
+    )
+
+
+def drag_slot(page, source: int, target: int):
+    page.drag_and_drop(
+        f".settings__slot[data-index='{source}']",
+        f".settings__slot[data-index='{target}']",
+    )
+
+
+def apply_(page):
+    with page.expect_navigation(wait_until="networkidle", timeout=20_000):
+        page.click(".settings__button--go")
+
+
+@pytest.mark.parametrize("make_new", [False, True], ids=["this scheme", "a new scheme"])
+def test_reordering_never_changes_what_the_page_looks_like(browser, highlighted, make_new):
+    """The whole promise of dragging a swatch: the palette is rearranged and
+    the notes are not restyled."""
+    base, workspace = highlighted
+    context, page = loaded(browser, base)
+    try:
+        before = fills(page)
+        assert len(set(before.values())) == 6, "the fixture should wear all six"
+
+        page.click("#sidebar-settings")
+        page.wait_for_selector(".settings", timeout=10_000)
+        if make_new:
+            page.click(".settings__row .settings__button")
+        drag_slot(page, 4, 0)
+        apply_(page)
+
+        assert fills(page) == before
+
+        # Invisible, but not a no-op: the numbers underneath moved.
+        stored = _json.loads(
+            _sidecar.sidecar_path(workspace.inputs / "doc.md").read_text(encoding="utf-8")
+        )
+        assert [a["color"] for a in stored["annotations"]] == [2, 3, 4, 5, 1, 6]
+    finally:
+        context.close()
+
+
+def test_a_reorder_adds_nothing_on_top_of_a_switch(browser, highlighted):
+    """Switching palettes does change the colours -- that is what switching
+    means. The rule is that a drag contributes nothing beyond it, so both
+    routes have to land on the same page."""
+    base, workspace = highlighted
+    _schemes.save(
+        workspace.inputs,
+        _schemes.Theme(schemes=[_schemes.DEFAULT_SCHEME, INK], active="Warm paper"),
+    )
+    workspace.rebuild_all()
+
+    def switch(reorder: bool) -> dict:
+        context, page = loaded(browser, base)
+        try:
+            page.click("#sidebar-settings")
+            page.wait_for_selector(".settings", timeout=10_000)
+            page.select_option(".settings__select", "Ink")
+            if reorder:
+                drag_slot(page, 4, 0)
+            apply_(page)
+            return fills(page)
+        finally:
+            context.close()
+
+    plain = switch(False)
+    # Put the knowledge base back the way it started before the second run.
+    _schemes.save(
+        workspace.inputs,
+        _schemes.Theme(schemes=[_schemes.DEFAULT_SCHEME, INK], active="Warm paper"),
+    )
+    _sidecar.save(
+        _sidecar.sidecar_path(workspace.inputs / "doc.md"),
+        [
+            _Annotation(id=f"a{n}", target=_TextTarget(quote=word),
+                        kind="highlight", color=n)
+            for n, word in enumerate(WORDS, start=1)
+        ],
+    )
+    workspace.rebuild_all()
+
+    assert switch(True) == plain

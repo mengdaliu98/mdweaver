@@ -496,8 +496,12 @@ looks like. Two consequences, both of them the reason:
   colours move, so every annotation is renumbered to *stay the colour it was*:
   drag the fifth colour to the front and everything wearing 5 becomes 1. The
   page looks identical, which is the point — you are arranging the palette,
-  not restyling your notes. It is the one edit here that touches a sidecar,
-  and it only ever runs for the scheme actually in use.
+  not restyling your notes. It is the one edit here that touches a sidecar.
+
+  A reorder contributes nothing visible, on top of whatever else the same
+  Apply does. Rearrange the scheme you are using and nothing changes at all;
+  rearrange one you are switching to and you get exactly the switch you would
+  have got without the drag.
 
 Slots are positional in the markup too: `hl--c3`, never `hl--yellow`, because
 a hue in a class name is a lie the moment the reader recolours it.
