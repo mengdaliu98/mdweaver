@@ -1090,7 +1090,13 @@ class Handler(SimpleHTTPRequestHandler):
         paths = self.workspace.files_of(doc_id)  # 404s an unknown document
         try:
             repo = git_checkpoint.repo_root(self.workspace.inputs)
-            result = git_checkpoint.checkpoint(repo, paths, message)
+            result = git_checkpoint.checkpoint(
+                repo,
+                paths,
+                message,
+                generated=self.workspace.outputs,
+                on_merge=self.workspace.rebuild_all,
+            )
         except git_checkpoint.GitError as exc:
             # The reader can act on what git said, so pass it through rather
             # than flattening it into "checkpoint failed".
@@ -1369,6 +1375,7 @@ def autocommit_for(workspace: Workspace) -> AutoCommit:
         outputs=workspace.outputs,
         delay=delay or DEFAULT_DELAY,
         enabled=delay > 0,
+        rebuild=workspace.rebuild_all,
     )
 
 

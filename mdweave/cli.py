@@ -128,6 +128,17 @@ def main(argv: list[str] | None = None) -> int:
         help="serve what is already on disk instead of rebuilding first",
     )
 
+    p_rec = sub.add_parser(
+        "reconcile",
+        help="merge what the remote has, when a push says the branch has moved on",
+    )
+    p_rec.add_argument(
+        "-i", "--indir", type=Path, default=default_indir(), help="markdown directory"
+    )
+    p_rec.add_argument(
+        "-o", "--outdir", type=Path, default=default_outdir(), help="output directory"
+    )
+
     sub.add_parser(
         "fingerprint",
         help="print a hash of the installed source (used to spot a stale server)",
@@ -148,7 +159,30 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_extract(args)
     if args.command == "serve":
         return cmd_serve(args)
+    if args.command == "reconcile":
+        return cmd_reconcile(args)
     return cmd_build(args)
+
+
+def cmd_reconcile(args) -> int:
+    """Bring the checkout in line with the remote, keeping both sides.
+
+    The recovery for "two machines wrote to one branch". The container runs it
+    at boot, where the alternative -- the `pull --ff-only` this replaced -- was
+    to abort and then serve an old commit for the rest of the deployment.
+    Exits 0 when there was nothing to take, so a boot script can just call it.
+    """
+    from . import checkpoint as git
+
+    try:
+        repo = git.repo_root(args.indir)
+        merged = git.reconcile(repo, args.outdir)
+    except git.GitError as exc:
+        print(f"mdweave: {exc}", file=sys.stderr)
+        return 1
+
+    print("mdweave: merged the remote" if merged else "mdweave: already up to date")
+    return 0
 
 
 def cmd_extract(args) -> int:

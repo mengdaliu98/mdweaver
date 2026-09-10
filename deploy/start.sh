@@ -45,8 +45,14 @@ if [ -d "$CONTENTS/.git" ]; then
   git -C "$CONTENTS" checkout -- html_outputs 2>/dev/null || true
   git -C "$CONTENTS" clean -qfd html_outputs 2>/dev/null || true
 
-  git -C "$CONTENTS" pull --ff-only || \
-    echo "mdweave-start: pull skipped (local changes under markdown_inputs)" >&2
+  # Not `pull --ff-only`. This container commits too, so the moment anything
+  # is written here and anywhere else between two boots the branches diverge,
+  # and --ff-only answers "Not possible to fast-forward, aborting" -- then
+  # serves an old commit for the whole deployment while the prose it should be
+  # showing sits on the remote. `reconcile` merges instead, and still refuses
+  # to guess when the conflict is in prose rather than in generated pages.
+  mdweave reconcile -i "$CONTENTS/markdown_inputs" -o "$CONTENTS/html_outputs" || \
+    echo "mdweave-start: serving this volume's own commits; the remote needs a hand" >&2
 else
   echo "mdweave-start: cloning into $CONTENTS"
   mkdir -p "$(dirname "$CONTENTS")"

@@ -167,6 +167,21 @@ which wants warm paper. Code blocks, table heads and hairlines were warmed to
 match, or they read as patches of a different page. The dark scheme keeps its
 own two tones — warm paper is a light-scheme idea.
 
+**Two writers, one branch.** This machine and the deployed container both
+commit to `main`, so a push can lose a race — and once it does, `git` answers
+`non-fast-forward` to that attempt and to every attempt after it, because
+nothing about the situation changes on its own. A whole session's work sits on
+one machine looking saved. So a rejected push now merges rather than giving up:
+generated pages conflict every time, since each side rebuilds them from its own
+prose, and they are resolved by taking ours and re-rendering over the prose
+that just arrived. A conflict in `markdown_inputs` is writing, and only the
+person who wrote it knows what was meant, so the merge is aborted and the
+checkout left exactly as it was found.
+
+`mdweave reconcile` is the same thing on demand, and the container runs it at
+boot — where the `pull --ff-only` it replaced would abort on a divergence and
+then serve a stale commit for the rest of the deployment.
+
 **Cost.** A tree change alters the navigation on every page and none of their
 prose, so only the one region that changed is rewritten: `render_sidebar`
 produces the panel and `splice_sidebar` swaps it between the markers each page

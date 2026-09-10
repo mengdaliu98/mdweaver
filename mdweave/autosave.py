@@ -22,6 +22,7 @@ Two properties matter and are easy to get wrong:
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -48,6 +49,10 @@ class AutoCommit:
     outputs: Path
     delay: float = DEFAULT_DELAY
     enabled: bool = False
+    # Called when a push loses a race and the remote's prose has to be taken
+    # in: the pages have to be rebuilt over it before they are committed, or
+    # the container serves someone else's writing through its own stale HTML.
+    rebuild: Callable[[], None] | None = None
 
     _timer: threading.Timer | None = field(default=None, init=False, repr=False)
     # One git process at a time. A manual checkpoint can land mid-timer, and
@@ -107,7 +112,13 @@ class AutoCommit:
             with self._lock:
                 repo = git.repo_root(self.inputs)
                 paths = [self.inputs, self.outputs]
-                result = git.checkpoint(repo, paths, self._message(repo))
+                result = git.checkpoint(
+                    repo,
+                    paths,
+                    self._message(repo),
+                    generated=self.outputs,
+                    on_merge=self.rebuild,
+                )
             self._last = Outcome(
                 at=stamp, committed=result.committed, revision=result.revision
             )

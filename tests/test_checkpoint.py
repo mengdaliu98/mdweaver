@@ -333,3 +333,122 @@ def test_the_message_distinguishes_the_three_outcomes():
     assert "payload.committed" in source
     assert "payload.sent" in source
     assert "Nothing had changed" not in source, "the wording that hid a real push"
+
+
+# --- two writers, one branch -----------------------------------------------
+#
+# The failure this section exists for, seen in production: the container and
+# the laptop both commit to `main`, whichever pushes second is told
+# `non-fast-forward`, and is told the same thing on every attempt after that.
+# A session's work sits on one machine looking saved.
+
+
+def other_clone(repo: Path, tmp_path: Path) -> Path:
+    """A second checkout of the same remote -- the other machine."""
+    remote = git(repo, "remote", "get-url", "origin").strip()
+    other = tmp_path / "elsewhere"
+    subprocess.run(["git", "clone", remote, str(other)], capture_output=True, check=True)
+    git(other, "config", "user.email", "other@example.com")
+    git(other, "config", "user.name", "Other")
+    return other
+
+
+def push_from_elsewhere(other: Path, name: str, body: str) -> None:
+    (other / "markdown_inputs" / name).write_text(body, encoding="utf-8")
+    git(other, "add", "-A")
+    git(other, "commit", "-m", f"elsewhere: {name}")
+    git(other, "push", "origin", "main")
+
+
+def test_a_push_that_lost_the_race_takes_the_other_side_and_still_lands(repo, tmp_path):
+    other = other_clone(repo, tmp_path)
+    push_from_elsewhere(other, "charlie.md", "# Charlie\n\nWritten elsewhere.\n")
+
+    (repo / "markdown_inputs" / "alpha.md").write_text("# Alpha\n\nEdited here.\n", encoding="utf-8")
+    result = git_checkpoint.checkpoint(
+        repo, [repo / "markdown_inputs" / "alpha.md"], "mine",
+        generated=repo / "html_outputs",
+    )
+
+    assert result.committed and result.pushed
+    # Both survive, on the remote and here.
+    assert (repo / "markdown_inputs" / "charlie.md").exists(), "the other side was dropped"
+    assert "Edited here." in (repo / "markdown_inputs" / "alpha.md").read_text()
+    git(other, "pull", "-q")
+    assert "Edited here." in (other / "markdown_inputs" / "alpha.md").read_text()
+
+
+def test_the_generated_pages_are_rebuilt_over_what_arrived(repo, tmp_path):
+    """A conflict in html_outputs is not a decision -- but taking ours and
+    stopping there would serve the other machine's prose through our stale
+    HTML, so the render has to run before the merge is committed."""
+    other = other_clone(repo, tmp_path)
+    (other / "html_outputs" / "alpha.html").write_text("<i>theirs</i>", encoding="utf-8")
+    (other / "markdown_inputs" / "alpha.md").write_text("# Alpha\n\nTheirs.\n", encoding="utf-8")
+    git(other, "add", "-A"); git(other, "commit", "-m", "elsewhere"); git(other, "push", "origin", "main")
+
+    (repo / "html_outputs" / "alpha.html").write_text("<i>ours</i>", encoding="utf-8")
+    (repo / "markdown_inputs" / "bravo.md").write_text("# Bravo\n\nOurs.\n", encoding="utf-8")
+
+    rebuilt = []
+
+    def rebuild():
+        rebuilt.append(True)
+        (repo / "html_outputs" / "alpha.html").write_text("<i>rebuilt</i>", encoding="utf-8")
+
+    git_checkpoint.checkpoint(
+        repo, [repo / "markdown_inputs", repo / "html_outputs"], "mine",
+        generated=repo / "html_outputs", on_merge=rebuild,
+    )
+
+    assert rebuilt, "the pages were never rebuilt over the merged prose"
+    assert (repo / "html_outputs" / "alpha.html").read_text() == "<i>rebuilt</i>"
+    assert not git(repo, "status", "--porcelain").strip(), "the rebuild was left uncommitted"
+
+
+def test_a_conflict_in_the_prose_is_left_for_a_person(repo, tmp_path):
+    """Two people wrote two things and only one of them knows what was meant."""
+    other = other_clone(repo, tmp_path)
+    push_from_elsewhere(other, "alpha.md", "# Alpha\n\nTheir sentence.\n")
+
+    (repo / "markdown_inputs" / "alpha.md").write_text("# Alpha\n\nOur sentence.\n", encoding="utf-8")
+    before = git(repo, "rev-parse", "HEAD").strip()
+
+    with pytest.raises(git_checkpoint.GitError) as caught:
+        git_checkpoint.checkpoint(
+            repo, [repo / "markdown_inputs" / "alpha.md"], "mine",
+            generated=repo / "html_outputs",
+        )
+
+    assert "alpha.md" in str(caught.value)
+    assert "by hand" in str(caught.value)
+    # Aborted cleanly: no half-finished merge, and our line is untouched.
+    assert "Our sentence." in (repo / "markdown_inputs" / "alpha.md").read_text()
+    assert not (repo / ".git" / "MERGE_HEAD").exists(), "left mid-merge"
+    assert git(repo, "rev-parse", "HEAD").strip() != before, "our own commit was lost"
+
+
+def test_reconcile_says_when_there_was_nothing_to_take(repo, tmp_path):
+    assert git_checkpoint.reconcile(repo, repo / "html_outputs") is False
+
+
+def test_reconcile_can_start_from_a_shallow_clone(repo, tmp_path):
+    """What the container has: `git clone --depth 1`, which may not reach a
+    commit both sides share -- and a merge with no merge base fails."""
+    remote = git(repo, "remote", "get-url", "origin").strip()
+    other = other_clone(repo, tmp_path)
+    push_from_elsewhere(other, "charlie.md", "# Charlie\n\nElsewhere.\n")
+
+    shallow = tmp_path / "shallow"
+    subprocess.run(["git", "clone", "--depth", "1", remote, str(shallow)],
+                   capture_output=True, check=True)
+    git(shallow, "config", "user.email", "c@example.com")
+    git(shallow, "config", "user.name", "Container")
+    push_from_elsewhere(other, "delta.md", "# Delta\n\nLater still.\n")
+
+    (shallow / "markdown_inputs" / "bravo.md").write_text("# Bravo\n\nIn the container.\n", encoding="utf-8")
+    git(shallow, "add", "-A"); git(shallow, "commit", "-m", "container")
+
+    assert git_checkpoint.reconcile(shallow, shallow / "html_outputs") is True
+    assert (shallow / "markdown_inputs" / "delta.md").exists()
+    assert "In the container." in (shallow / "markdown_inputs" / "bravo.md").read_text()
