@@ -11,38 +11,23 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-# Colour tokens defined in theme/annotations.css. A colour that is not one of
-# these, and not a legacy alias below, is treated as a raw CSS colour and
-# emitted as an inline custom property.
-COLOR_TOKENS = ("pink", "purple", "blue", "green", "yellow", "orange")
-DEFAULT_COLOR = "yellow"
+from .scheme import SLOT_CLASSES, slot_of
 
-# The palette these six replaced. Sidecars written before the change still
-# carry the old names, and a render is no place to rewrite a user's .ann.json
-# -- so the old names are resolved on the way out and the files are left alone.
+# A colour is a *slot*, not a hue: "the third colour", whatever the active
+# scheme says that looks like. See mdweave/scheme.py for why -- briefly,
+# storing a hue means renaming yellow restyles every note that mentions it,
+# and switching to a scheme with no yellow leaves them resolving to nothing.
 #
-# Six names onto six tokens, one each, which is worth more here than getting
-# every hue exactly right: two legacy names sharing a token makes two notes
-# that were deliberately different look the same. `amber` gets `orange`, so it
-# no longer collides with the notes that were actually written yellow. `slate`
-# is still the odd one -- there is no grey to send it to, and every other token
-# is spoken for -- but the palette is muted throughout now, so landing on
-# yellow reads as a soft sand rather than the shout it used to be.
-LEGACY_COLOR_ALIASES = {
-    "amber": "orange",
-    "rose": "pink",
-    "mint": "green",
-    "violet": "purple",
-    "sky": "blue",
-    "slate": "yellow",
-}
+# The names below are what a slot is called in a class attribute. The hues
+# live in the scheme; nothing here knows what c3 looks like.
+COLOR_TOKENS = SLOT_CLASSES
+DEFAULT_COLOR = 5  # where yellow sat when the six were hues
 
 
-def resolve_color_token(color: str) -> str | None:
-    """The palette token `color` names, or None when it is a raw CSS colour."""
-    if color in COLOR_TOKENS:
-        return color
-    return LEGACY_COLOR_ALIASES.get(color)
+def resolve_color_token(color) -> str | None:
+    """The class `color` names -- `c1`..`c6` -- or None for a raw CSS colour."""
+    slot = slot_of(color)
+    return f"c{slot}" if slot else None
 
 
 @dataclass
@@ -127,7 +112,7 @@ class Annotation:
     id: str
     target: TextTarget
     kind: str = "comment"  # "comment" (highlight + card) | "highlight" (no card)
-    color: str = DEFAULT_COLOR
+    color: str | int = DEFAULT_COLOR
     status: str = "open"  # "open" | "resolved"
     thread: list[Comment] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
@@ -185,8 +170,15 @@ class Annotation:
 
     @property
     def custom_color(self) -> str | None:
-        """The raw CSS colour, when `color` is not a known token."""
-        return None if resolve_color_token(self.color) else self.color
+        """The raw CSS colour, when `color` is not a slot."""
+        if resolve_color_token(self.color):
+            return None
+        return self.color if isinstance(self.color, str) else None
+
+    @property
+    def slot(self) -> int | None:
+        """Which of the six, 1-based, or None for a raw CSS colour."""
+        return slot_of(self.color)
 
 
 _ID_SAFE = re.compile(r"[^A-Za-z0-9_-]")

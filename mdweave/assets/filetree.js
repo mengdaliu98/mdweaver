@@ -292,12 +292,16 @@
     var button = event.target.closest ? event.target.closest(".tree__action") : null;
     if (!button) return;
 
+    // Not ours: the gear wears the same class for the same look, and
+    // swallowing its click here is invisible from over there -- the button
+    // simply never does anything. Only stop what this file actually handles.
+    var action = ACTIONS[button.dataset.action];
+    if (!action) return;
+
     // Inside a <summary>, an unhandled click folds the folder underneath it.
     event.preventDefault();
     event.stopPropagation();
-
-    var action = ACTIONS[button.dataset.action];
-    if (action) action(button);
+    action(button);
   }
 
   /* --- dragging a row somewhere else --------------------------------------- */

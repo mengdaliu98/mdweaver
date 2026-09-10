@@ -223,3 +223,137 @@ def test_the_open_document_row_matches_the_page_behind_it(page):
     paper = rgb(page, "body", "backgroundColor")
     assert paper == "rgb(242, 239, 228)"
     assert rgb(page, ".tree__row--active", "backgroundColor") == paper
+
+
+# --- the settings window ----------------------------------------------------
+
+def open_settings(page):
+    page.click("#sidebar-settings")
+    page.wait_for_selector(".settings", timeout=10_000)
+
+
+def slot_pickers(page):
+    return page.eval_on_selector_all(
+        ".settings__slot .settings__picker", "els => els.map(e => e.value)"
+    )
+
+
+def test_the_gear_sits_between_import_and_the_collapse_control(page):
+    """Where it was asked for, and the order is the meaning: it acts on the
+    whole knowledge base, so it belongs past the four that write files and
+    beside the panel's own control."""
+    order = page.eval_on_selector_all(
+        ".sidebar__actions button",
+        "els => els.map(e => e.id || e.dataset.action)",
+    )
+    assert order[-3:] == ["import", "sidebar-settings", "sidebar-collapse"]
+
+
+def test_the_window_opens_and_can_be_moved(page):
+    open_settings(page)
+    window = page.locator(".settings")
+    before = window.bounding_box()
+
+    bar = page.locator(".settings__bar")
+    box = bar.bounding_box()
+    page.mouse.move(box["x"] + 40, box["y"] + box["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(box["x"] - 160, box["y"] + 120, steps=8)
+    page.mouse.up()
+
+    after = window.bounding_box()
+    assert after["x"] < before["x"] - 100 and after["y"] > before["y"] + 80
+
+    # A window is not a modal: the prose underneath stays live.
+    assert page.locator(".doc").is_visible()
+
+
+def test_the_window_is_kept_on_screen(page):
+    """Dragged past the edge it would be unrecoverable without knowing where
+    it went."""
+    open_settings(page)
+    bar = page.locator(".settings__bar")
+    box = bar.bounding_box()
+    page.mouse.move(box["x"] + 40, box["y"] + box["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(-500, -500, steps=6)
+    page.mouse.up()
+
+    after = page.locator(".settings").bounding_box()
+    assert after["x"] >= 0 and after["y"] >= 0
+
+
+def test_it_offers_six_slots_and_the_two_backgrounds(page):
+    open_settings(page)
+    assert len(slot_pickers(page)) == 6
+    labels = page.eval_on_selector_all(
+        ".settings__field .settings__label", "els => els.map(e => e.textContent)"
+    )
+    assert "Left panel" in labels and "Document background" in labels
+
+
+def test_preview_changes_the_page_and_apply_is_what_writes_it(page, served):
+    """The two halves of the promise: you can see it before you mean it, and
+    nothing reaches the disk until you do."""
+    _, workspace = served
+    open_settings(page)
+
+    page.eval_on_selector(
+        ".settings__picker[data-field='sidebar']",
+        """el => { el.value = '#123456';
+                   el.dispatchEvent(new Event('input', {bubbles: true})); }""",
+    )
+    # Nothing yet: the box is unticked.
+    assert rgb(page, ".sidebar", "backgroundColor") == "rgb(209, 199, 183)"
+
+    page.check(".settings__preview input")
+    assert rgb(page, ".sidebar", "backgroundColor") == "rgb(18, 52, 86)"
+    assert not (workspace.inputs / ".mdweave-theme.json").exists(), "preview wrote to disk"
+
+    # Apply reloads, because every page was just rewritten -- including this
+    # one -- so the assertions after it are about the real stylesheet rather
+    # than the preview's override.
+    with page.expect_navigation(wait_until="networkidle", timeout=20_000):
+        page.click(".settings__button--go")
+
+    assert (workspace.inputs / ".mdweave-theme.json").exists()
+    assert page.evaluate("() => !document.getElementById('mdweave-preview')")
+    assert rgb(page, ".sidebar", "backgroundColor") == "rgb(18, 52, 86)"
+
+
+def test_closing_takes_the_preview_back(page):
+    open_settings(page)
+    page.eval_on_selector(
+        ".settings__picker[data-field='sidebar']",
+        """el => { el.value = '#123456';
+                   el.dispatchEvent(new Event('input', {bubbles: true})); }""",
+    )
+    page.check(".settings__preview input")
+    assert rgb(page, ".sidebar", "backgroundColor") == "rgb(18, 52, 86)"
+
+    page.click(".settings__close")
+    assert rgb(page, ".sidebar", "backgroundColor") == "rgb(209, 199, 183)"
+
+
+def test_a_slot_can_be_dragged_to_another_position(page):
+    open_settings(page)
+    before = slot_pickers(page)
+
+    page.drag_and_drop(
+        ".settings__slot[data-index='4']", ".settings__slot[data-index='0']"
+    )
+    after = slot_pickers(page)
+
+    assert after[0] == before[4], "the fifth colour did not land first"
+    assert after[1:5] == before[0:4]
+    assert sorted(after) == sorted(before), "a colour was lost in the reorder"
+
+
+def test_a_new_scheme_starts_from_the_one_on_screen(page):
+    open_settings(page)
+    before = slot_pickers(page)
+
+    page.click(".settings__row .settings__button")
+    assert slot_pickers(page) == before
+    name = page.input_value(".settings__text")
+    assert name and name != "Warm paper", "a copy needs a name of its own"

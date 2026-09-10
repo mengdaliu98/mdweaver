@@ -486,3 +486,159 @@ mark.hl--pending {
   .selection-toolbar, .mdweave-toast, .mdweave-notice,
   .page-action--spinning svg, mark.hl--pending { animation: none; }
 }
+
+/* --- the settings window -------------------------------------------------- */
+
+/* A window, not a modal. Nothing behind it is blocked or dimmed, because the
+   whole point of Preview is to watch the prose change colour while you pick;
+   a scrim over the thing you are judging would defeat it. */
+.settings {
+  position: fixed;
+  z-index: 80;
+  width: 20rem;
+  border-radius: var(--radius);
+  background: var(--surface);
+  border: 1px solid var(--rule-strong);
+  box-shadow: var(--shadow-md);
+  font-size: 0.82rem;
+  color: var(--ink);
+}
+
+.settings--moving { user-select: none; -webkit-user-select: none; }
+
+.settings__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 0.4rem 0.5rem 0.8rem;
+  border-bottom: 1px solid var(--rule);
+  cursor: move;
+  touch-action: none;
+}
+
+.settings__heading { font-weight: 640; }
+
+.settings__close {
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink-muted);
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.settings__close:hover { background: color-mix(in srgb, var(--ink) 8%, transparent); }
+
+.settings__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.75rem 0.8rem;
+}
+
+.settings__row,
+.settings__field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.settings__label { color: var(--ink-muted); }
+
+.settings__select,
+.settings__text {
+  flex: 1;
+  min-width: 0;
+  padding: 0.22rem 0.35rem;
+  border: 1px solid var(--rule-strong);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+}
+
+/* The native picker, sized down to a swatch. Chromium draws its own padding
+   around the well, which is what the inset border-box is fighting. */
+.settings__picker {
+  flex: none;
+  width: 2rem;
+  height: 1.4rem;
+  padding: 0;
+  border: 1px solid var(--rule-strong);
+  border-radius: 5px;
+  background: none;
+  cursor: pointer;
+}
+
+.settings__picker::-webkit-color-swatch-wrapper { padding: 2px; }
+.settings__picker::-webkit-color-swatch { border: 0; border-radius: 3px; }
+
+.settings__slots {
+  display: flex;
+  gap: 0.3rem;
+}
+
+.settings__slot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+  cursor: grab;
+}
+
+.settings__slot--dragging { opacity: 0.4; }
+
+.settings__ordinal {
+  font-size: 0.65rem;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.settings__hint {
+  margin: 0;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  color: var(--ink-muted);
+}
+
+.settings__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.6rem 0.8rem;
+  border-top: 1px solid var(--rule);
+}
+
+.settings__preview {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  cursor: pointer;
+}
+
+.settings__button {
+  padding: 0.28rem 0.7rem;
+  border: 1px solid var(--rule-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+
+.settings__button:hover { background: color-mix(in srgb, var(--ink) 6%, var(--surface)); }
+
+.settings__button--go {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+  font-weight: 600;
+}
+
+.settings__button--go:hover { filter: brightness(1.08); }

@@ -25,10 +25,11 @@
   var doc = mdw.doc;
   var layer = mdw.layer;
   var PENDING = "__pending__";
-  // Keep in step with model.COLOR_TOKENS and model.DEFAULT_COLOR; a drift
-  // offers a swatch the server will refuse.
-  var COLORS = ["pink", "purple", "blue", "green", "yellow", "orange"];
-  var DEFAULT_COLOR = "yellow";
+  // Slots, not hues: "the third colour", whatever the active scheme paints
+  // it. Keep in step with scheme.SLOT_CLASSES; a drift offers a swatch the
+  // server will refuse.
+  var COLORS = ["c1", "c2", "c3", "c4", "c5", "c6"];
+  var DEFAULT_COLOR = "c5";
   var DOC_ID = document.body.dataset.document || "";
   var API = "/api/annotations";
   var CONTEXT = 48; // keep in step with anchors.CONTEXT_CHARS
@@ -238,8 +239,10 @@
    * at the same specificity, so leaving it on would quietly beat the choice. */
   var PALETTE = COLORS.concat(["custom"]);
 
+  /* A slot has no name to speak, so the label is its position. Screen reader
+   * users get "Colour 3" rather than a hue that the next scheme contradicts. */
   function paletteName(color) {
-    return color.charAt(0).toUpperCase() + color.slice(1);
+    return "Colour " + color.slice(1);
   }
 
   function wearColor(element, prefix, color) {

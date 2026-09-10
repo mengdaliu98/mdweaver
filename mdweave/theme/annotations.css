@@ -1,92 +1,32 @@
 /* ==========================================================================
    mdweave -- highlights and sticky-note comment cards
 
-   ┌─ COLOUR TOKENS ──────────────────────────────────────────────────────────┐
-   │ Six colours -- pink, purple, blue, green, yellow, orange -- each        │
-   │ defined once, right below, and each offered as a swatch in the           │
-   │ browser. To restyle a colour everywhere it is used, edit its four        │
-   │ values here -- nothing else in this file or in the HTML needs to         │
-   │ change.                                                                  │
+   ┌─ COLOUR SLOTS ───────────────────────────────────────────────────────────┐
+   │ Six slots -- c1..c6 -- and no hues anywhere in this file. What a slot    │
+   │ looks like comes from the reader's active scheme, generated onto the     │
+   │ end of mdweave.css by `scheme.css()`, which also works out three of      │
+   │ each slot's four values from the one fill that was chosen:               │
    │                                                                          │
-   │   --hl-X-bg     fill painted behind the highlighted text                 │
-   │   --hl-X-edge   the note's pin, and the two highlight states below       │
-   │   --note-X-bg   card background                                          │
-   │   --note-X-ink  card text colour                                         │
+   │   --hl-cN-bg     fill painted behind the highlighted text                │
+   │   --hl-cN-edge   the note's pin, and the two highlight states below      │
+   │   --note-cN-bg   card background                                         │
+   │   --note-cN-ink  card text colour                                        │
    │                                                                          │
-   │ Only the fill is chosen; the other three are derived from it, by hue,    │
-   │ so a fill can be swapped without picking three companions by hand. The   │
-   │ four have to stay legible together: the fill sits behind body text,      │
-   │ the edge carries white text as the pin, and the card's ink sits on its   │
-   │ background. Every pair here clears WCAG AA.                              │
+   │ The rules below read the generic `--hl-bg` / `--hl-edge` pair, which     │
+   │ the generated mapping points at whichever slot is being worn. So an      │
+   │ annotation says "the third colour" and this file never learns what       │
+   │ that is -- which is the whole reason a scheme can be swapped without     │
+   │ touching a single sidecar.                                               │
    │                                                                          │
-   │ An older palette -- amber, rose, mint, sky, violet, slate -- has no      │
-   │ styles here. model.py maps those names onto these six before the         │
-   │ class is written, so a sidecar that still says "amber" renders as        │
-   │ orange without being rewritten.                                          │
-   │                                                                          │
-   │ A single annotation can also override its colour without a token: set    │
-   │ "color": "rgb(255 0 128)" in the .ann.json and it is emitted inline.     │
+   │ A single annotation can still opt out: set "color": "rgb(255 0 128)"     │
+   │ in its .ann.json and the colour is emitted inline, below.                │
    └──────────────────────────────────────────────────────────────────────────┘
    ========================================================================== */
 
-:root {
-  /* pink -- #d4b0b5 */
-  --hl-pink-bg:       rgb(212 176 181);
-  --hl-pink-edge:     rgb(179  78  92);
-  --note-pink-bg:     rgb(248 244 244);
-  --note-pink-ink:    rgb(117  56  65);
-
-  /* purple -- #c3b0d4 */
-  --hl-purple-bg:     rgb(195 176 212);
-  --hl-purple-edge:   rgb(138  87 183);
-  --note-purple-bg:   rgb(246 244 248);
-  --note-purple-ink:  rgb( 94  59 124);
-
-  /* blue -- #b0b2d4 */
-  --hl-blue-bg:       rgb(176 178 212);
-  --hl-blue-edge:     rgb( 98 103 187);
-  --note-blue-bg:     rgb(244 244 248);
-  --note-blue-ink:    rgb( 63  67 133);
-
-  /* green -- #b0d4b1 */
-  --hl-green-bg:      rgb(176 212 177);
-  --hl-green-edge:    rgb( 54 125  56);
-  --note-green-bg:    rgb(244 248 244);
-  --note-green-ink:   rgb( 40  85  42);
-
-  /* yellow -- #eddf91, the default */
-  --hl-yellow-bg:     rgb(237 223 145);
-  --hl-yellow-edge:   rgb(128 109   2);
-  --note-yellow-bg:   rgb(252 250 240);
-  --note-yellow-ink:  rgb( 88  75   6);
-
-  /* orange -- #face98 */
-  --hl-orange-bg:     rgb(250 206 152);
-  --hl-orange-edge:   rgb(166  91   0);
-  --note-orange-bg:   rgb(253 247 239);
-  --note-orange-ink:  rgb(115  63   0);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --note-pink-bg: rgb( 43  26  28);  --note-pink-ink: rgb(219 189 193);
-    --note-purple-bg: rgb( 35  26  43);  --note-purple-ink: rgb(205 189 219);
-    --note-blue-bg: rgb( 26  27  43);  --note-blue-ink: rgb(189 191 219);
-    --note-green-bg: rgb( 26  43  26);  --note-green-ink: rgb(189 219 190);
-    --note-yellow-bg: rgb( 55  49  13);  --note-yellow-ink: rgb(241 230 167);
-    --note-orange-bg: rgb( 61  37   8);  --note-orange-ink: rgb(250 209 158);
-  }
-}
-
-/* Map each token onto the generic vars the components actually read. The
-   picker's swatches are on this list too, so a swatch cannot end up
-   advertising a colour the highlight it sets does not actually use. */
-.hl--pink, .note--pink, .swatch--pink { --hl-bg: var(--hl-pink-bg); --hl-edge: var(--hl-pink-edge); --note-bg: var(--note-pink-bg); --note-ink: var(--note-pink-ink); }
-.hl--purple, .note--purple, .swatch--purple { --hl-bg: var(--hl-purple-bg); --hl-edge: var(--hl-purple-edge); --note-bg: var(--note-purple-bg); --note-ink: var(--note-purple-ink); }
-.hl--blue, .note--blue, .swatch--blue { --hl-bg: var(--hl-blue-bg); --hl-edge: var(--hl-blue-edge); --note-bg: var(--note-blue-bg); --note-ink: var(--note-blue-ink); }
-.hl--green, .note--green, .swatch--green { --hl-bg: var(--hl-green-bg); --hl-edge: var(--hl-green-edge); --note-bg: var(--note-green-bg); --note-ink: var(--note-green-ink); }
-.hl--yellow, .note--yellow, .swatch--yellow { --hl-bg: var(--hl-yellow-bg); --hl-edge: var(--hl-yellow-edge); --note-bg: var(--note-yellow-bg); --note-ink: var(--note-yellow-ink); }
-.hl--orange, .note--orange, .swatch--orange { --hl-bg: var(--hl-orange-bg); --hl-edge: var(--hl-orange-edge); --note-bg: var(--note-orange-bg); --note-ink: var(--note-orange-ink); }
+/* The token block and the six mappings that used to sit here are generated
+   now, from the active scheme, and appended to the end of mdweave.css --
+   `scheme.css()` in the Python. Nothing about a *hue* belongs in this file
+   any more; what is left is structure, which no scheme changes. */
 
 /* Per-annotation colour, derived from one raw CSS colour. */
 .hl--custom {

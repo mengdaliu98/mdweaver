@@ -27,6 +27,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
 
 from . import checkpoint as git_checkpoint
+from . import scheme as schemes
 from . import edits
 from .autosave import DEFAULT_DELAY, AutoCommit
 from .model import COLOR_TOKENS, DEFAULT_COLOR, Annotation, Comment, Offset, TextTarget
@@ -108,6 +109,43 @@ class Workspace:
     def documents(self) -> dict[str, Path]:
         """Every document under the markdown root, keyed by id."""
         return document_ids(self.inputs)
+
+    # --- colour schemes ----------------------------------------------------
+
+    def theme(self) -> schemes.Theme:
+        """The reader's schemes, read fresh: another machine may have pushed."""
+        return schemes.load(self.inputs)
+
+    def write_theme(self, theme: schemes.Theme) -> None:
+        schemes.save(self.inputs, theme)
+
+    def remap_slots(self, moved: list[int]) -> int:
+        """Renumber every annotation so a reordered scheme looks unchanged.
+
+        `moved[i]` is the slot whose colour now sits at position i+1. Moving
+        the colours without moving the annotations would repaint the whole
+        knowledge base, which is the opposite of what dragging a swatch means:
+        the reader is arranging the palette, not restyling their notes.
+
+        Only ever called for the scheme in effect. Reordering one that is not
+        active must leave annotations alone -- they are expressed in the active
+        scheme's positions, and renumbering them would be visible immediately.
+        """
+        onto = {old: new for new, old in enumerate(moved, start=1)}
+        touched = 0
+        for doc_id, markdown in self.documents().items():
+            path = sidecar.sidecar_path(markdown)
+            annotations = sidecar.load(path)
+            changed = False
+            for ann in annotations:
+                slot = ann.slot
+                if slot is not None and onto.get(slot, slot) != slot:
+                    ann.color = onto[slot]
+                    changed = True
+            if changed:
+                sidecar.save(path, annotations)
+                touched += 1
+        return touched
 
     def markdown_for(self, doc_id: str) -> Path:
         """Resolve a document id, rejecting anything not actually present.
@@ -216,7 +254,7 @@ class Workspace:
         every other page's navigation stale. Cheap at this scale, and it is what
         lets an import appear without restarting the server.
         """
-        write_assets(self.outputs)
+        write_assets(self.outputs, self.theme().current())
         documents = self.documents()
         tree = self.tree()
         for doc_id in documents:
@@ -594,7 +632,7 @@ class Workspace:
                 found.append((annotation, where))
         return found, index
 
-    def apply_highlight(self, doc_id: str, target: TextTarget, color: str) -> dict:
+    def apply_highlight(self, doc_id: str, target: TextTarget, color: int) -> dict:
         """Paint a selection, or -- if it is already exactly this colour -- clear it.
 
         One rule underneath all the cases: picking a colour means "make the
@@ -627,7 +665,7 @@ class Workspace:
                 "that text carries a comment — change its colour from its own card",
             )
 
-        same = [a for a, _ in touching if a.color_token == color]
+        same = [a for a, _ in touching if a.slot == color]
         clearing = (
             bool(touching)
             and len(same) == len(touching)
@@ -833,6 +871,14 @@ class Handler(SimpleHTTPRequestHandler):
                 "documents": sorted(self.workspace.documents()),
             }
 
+        if route.path == "/api/schemes":
+            theme = self.workspace.theme()
+            return HTTPStatus.OK, {
+                "active": theme.active,
+                "schemes": [s.to_dict() for s in theme.schemes],
+                "slots": schemes.SLOTS,
+            }
+
         if route.path == "/api/annotations":
             doc_id = self._query(route, "document")
             annotations = self.workspace.annotations_for(doc_id)
@@ -875,6 +921,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self._api_refresh()
         if route.path == "/api/checkpoint":
             return self._api_checkpoint()
+        if route.path == "/api/schemes":
+            return self._api_schemes()
         if route.path != "/api/annotations":
             raise ApiError(HTTPStatus.NOT_FOUND, f"no such endpoint: {route.path}")
 
@@ -1096,6 +1144,57 @@ class Handler(SimpleHTTPRequestHandler):
             "documents": sorted(self.workspace.documents()),
         }
 
+    def _api_schemes(self):
+        """Save the schemes, and switch to one.
+
+        Three things can change in one request and the order matters. The
+        renumbering goes first, because it is expressed in the slots as they
+        are *now*; then the file; then one rebuild, which repaints every page
+        from whichever scheme ended up active. Rebuilding before the
+        renumbering would publish pages in colours that are about to move.
+        """
+        payload = self._json_body()
+
+        raw = payload.get("schemes")
+        if not isinstance(raw, list) or not raw:
+            raise ApiError(HTTPStatus.BAD_REQUEST, "at least one scheme is needed")
+        try:
+            parsed = [schemes.Scheme.from_dict(entry) for entry in raw]
+        except (ValueError, AttributeError, TypeError) as exc:
+            raise ApiError(HTTPStatus.BAD_REQUEST, str(exc))
+
+        names = [s.name for s in parsed]
+        if len(set(names)) != len(names):
+            raise ApiError(HTTPStatus.BAD_REQUEST, "two schemes share a name")
+
+        active = payload.get("active")
+        if not isinstance(active, str) or active not in names:
+            raise ApiError(HTTPStatus.BAD_REQUEST, f"no scheme called {active!r}")
+
+        renumbered = 0
+        moved = payload.get("remap")
+        if moved is not None:
+            if (
+                not isinstance(moved, list)
+                or sorted(moved) != list(range(1, schemes.SLOTS + 1))
+            ):
+                raise ApiError(
+                    HTTPStatus.BAD_REQUEST,
+                    f"remap must be a permutation of 1..{schemes.SLOTS}",
+                )
+            renumbered = self.workspace.remap_slots(moved)
+
+        self.workspace.write_theme(schemes.Theme(schemes=parsed, active=active))
+        self.workspace.rebuild_all()
+
+        current = self.workspace.theme().current()
+        return HTTPStatus.OK, {
+            "active": active,
+            "schemes": [s.to_dict() for s in parsed],
+            "renumbered": renumbered,
+            "warnings": schemes.unreadable(current),
+        }
+
     def _api_checkpoint(self):
         """Commit and push one document, with the message the reader wrote."""
         payload = self._json_body()
@@ -1246,17 +1345,24 @@ class Handler(SimpleHTTPRequestHandler):
             super().log_message(fmt, *args)
 
 
-def _parse_color(raw) -> str:
-    """Validate a client-supplied colour: a palette token, nothing else.
+def _parse_color(raw) -> int:
+    """Validate a client-supplied colour: one of the six slots, nothing else.
 
     A raw CSS colour is legitimate in a hand-edited sidecar, but it reaches the
     page as an inline custom property -- so taking one from the browser would
-    be writing a client string into a style attribute. The five tokens are all
-    the picker can produce anyway.
+    be writing a client string into a style attribute. A slot is all the picker
+    can produce anyway.
+
+    Stored as the number. The class name `c3` is what the picker sends and what
+    the page wears, but writing that into a sidecar would put a presentation
+    detail in a data file; the file says 3. `slot_of` also takes the number and
+    the hue names the palette used to have, which costs nothing -- all three
+    name a slot, and none of them can name a colour.
     """
-    if raw not in COLOR_TOKENS:
+    slot = schemes.slot_of(raw)
+    if slot is None:
         raise ApiError(HTTPStatus.BAD_REQUEST, f"unknown colour {raw!r}")
-    return raw
+    return slot
 
 
 def _parse_offset(raw) -> Offset | None:

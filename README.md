@@ -344,7 +344,7 @@ turn into arguments.
 ## Adding comments in the browser
 
 Select any text and a menu appears with two rows — **Comment** and
-**Highlight** — each showing the six colours. The colour *is* the button, so
+**Highlight** — each showing the six slots of the active scheme. The colour *is* the button, so
 either is one click rather than "make it, then recolour it". A highlight has
 nothing to type and so skips the composer entirely; a comment opens one,
 already in the colour you picked.
@@ -461,76 +461,62 @@ The file skips, rather than fails, when the browser is not installed, so
 
 ## Colours
 
-Six, in the order the swatches appear:
+Six, and which six is up to you. The gear beside **Documents** opens a
+floating window — moved by its title bar, not a modal, because the point is to
+watch the prose change while you pick.
 
-| token      | fill      |
-| ---------- | --------- |
-| **pink**   | `#d4b0b5` |
-| **purple** | `#c3b0d4` |
-| **blue**   | `#b0b2d4` |
-| **green**  | `#b0d4b1` |
-| **yellow** | `#eddf91` |
-| **orange** | `#face98` |
+A scheme is the left panel, the document background, and six highlight
+colours. Six is fixed: it is the width of the picker, the width of the
+selection menu, and the number a reader can tell apart at a glance. Only the
+*fill* is chosen; the pin, the card and the card's text are derived from it by
+hue, and darkened until they clear WCAG AA — asking anyone to pick four
+colours that stay legible together, six times over, is asking them to do
+arithmetic. A fill too dark for the text on it is reported, never refused;
+the reader picked it, and a veto is someone else's taste in an error message.
 
-Pick one while writing a comment — the swatches sit in the composer, next to
-`Comment` — and the highlight and the card take it straight away. Open an
-existing note and the same six are in its card; clicking one recolours it and
-saves. The swatches are a radio group, so `Tab` reaches them as one stop and
-the arrow keys move between them.
+**Preview** paints the page with exactly the custom properties Apply would
+write, into a single `<style>` element. Nothing reaches the disk until Apply,
+and closing the window takes it back. The browser therefore derives the same
+four values as the server does — two implementations of one piece of
+arithmetic, paid for on purpose so dragging a picker does not mean a round
+trip per keystroke, and on the condition that a test compares them, which is
+`test_the_preview_paints_exactly_what_apply_would_write`.
 
-Each token is defined in one block at the top of
-`mdweave/theme/annotations.css`, as four values:
+### A colour is a slot
 
-```css
---hl-yellow-bg:     rgb(237 223 145);   /* fill behind the text      */
---hl-yellow-edge:   rgb(128 109   2);   /* note pin, and two states  */
---note-yellow-bg:   rgb(252 250 240);   /* card background           */
---note-yellow-ink:  rgb( 88  75   6);   /* card text                 */
-```
+This is the idea the rest of it hangs on. An annotation does not store a hue.
+It stores **which of the six** — `"color": 3` — and the scheme says what three
+looks like. Two consequences, both of them the reason:
 
-Only the fill is chosen; the other three are derived from it by hue, so
-swapping a colour does not mean picking three companions by hand. Edit those
-and rebuild — every yellow annotation follows. The four have to stay legible
-together; `tests/test_colours.py` computes the contrast of each pair and fails
-below WCAG AA, so a change that looks nice and reads badly does not get
-through.
+- **Switching schemes** moves every highlight to the same position in the new
+  palette and rewrites nothing. Storing a hue instead would mean renaming
+  yellow silently restyled every note that mentioned it, and switching to a
+  scheme with no yellow left those notes resolving to nothing.
+- **Reordering the six**, by dragging the swatches, is the opposite. The
+  colours move, so every annotation is renumbered to *stay the colour it was*:
+  drag the fifth colour to the front and everything wearing 5 becomes 1. The
+  page looks identical, which is the point — you are arranging the palette,
+  not restyling your notes. It is the one edit here that touches a sidecar,
+  and it only ever runs for the scheme actually in use.
 
-To recolour a single annotation instead, put a raw colour in its sidecar entry;
-the fill, underline, pin, and card tint are all derived from it with
-`color-mix()`:
+Slots are positional in the markup too: `hl--c3`, never `hl--yellow`, because
+a hue in a class name is a lie the moment the reader recolours it.
 
-```json
-{ "color": "rgb(255 61 148)" }
-```
+Schemes live in `markdown_inputs/.mdweave-theme.json`, beside the prose rather
+than beside the tool: they are the reader's, and they follow the knowledge
+base to the next machine. A missing or mangled file falls back to the palette
+that shipped, so a broken dotfile costs a colour and never a document.
 
-That only works in a file you edit by hand. The API takes the five token names
-and nothing else, because a raw colour reaches the page inside a `style`
-attribute and is not something to accept from a browser.
+**The palette before this one.** Sidecars in the wild say `pink`, `yellow`,
+`amber`, `slate` and the rest. Every one of them resolves to the slot that
+colour occupied at the time, on the way to the page, and the file is left
+exactly as it is. `LEGACY_SLOTS` in `mdweave/scheme.py` is the map.
 
-**The palette before this one.** Sidecars written earlier say `amber`, `rose`,
-`mint`, `sky`, `violet` or `slate`. Those files are left exactly as they are;
-the names are resolved to the six when the page is built:
-
-| was      | renders as |
-| -------- | ---------- |
-| `amber`  | orange     |
-| `rose`   | pink       |
-| `mint`   | green      |
-| `violet` | purple     |
-| `sky`    | blue       |
-| `slate`  | yellow     |
-
-Six names onto six tokens, one each — which matters more than getting every
-hue right, since two old names sharing a token makes two notes that were
-deliberately different look identical. `slate` is the one still in the wrong
-place: there is no grey to send it to and every other token is spoken for. The
-palette is muted throughout now, so it lands as a soft sand rather than the
-shout it used to be. Recolouring it in the browser writes a current token into
-the sidecar. `LEGACY_COLOR_ALIASES` in `mdweave/model.py` is the map.
-
-`knowledge_base/markdown_inputs/mdweave_style_reference.md` previews the tokens,
-and still names the old six — it is a document in the contents repo, so edit it
-there.
+A single annotation can still opt out of the palette entirely: put a raw CSS
+colour in its sidecar entry and the fill, pin and card tint are derived from
+it with `color-mix()`. That is a hand-edit only — the API refuses anything
+that is not a slot, because a raw colour reaches the page inside a `style`
+attribute and is not something to take from a browser.
 
 ## Reading the output
 

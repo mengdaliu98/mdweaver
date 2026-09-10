@@ -23,19 +23,25 @@ import pytest
 from mdweave.model import (
     COLOR_TOKENS,
     DEFAULT_COLOR,
-    LEGACY_COLOR_ALIASES,
     Annotation,
     Comment,
     TextTarget,
     resolve_color_token,
 )
+from mdweave.scheme import DEFAULT_SCHEME, LEGACY_SLOTS, SLOTS
+from mdweave import scheme as schemes
 from mdweave.render import render_document
 from mdweave.serve import Workspace, make_server
 from mdweave.sources import sidecar
 
 ASSETS = Path(__file__).resolve().parents[1] / "mdweave" / "assets"
 THEME = Path(__file__).resolve().parents[1] / "mdweave" / "theme"
-ANNOTATIONS_CSS = (THEME / "annotations.css").read_text(encoding="utf-8")
+# Two different files, and the split is the point of this change. The palette
+# is generated from the active scheme -- so the tests below read what the
+# renderer would actually emit, not a stylesheet someone hand-maintained --
+# while annotations.css keeps only the structure, which no scheme alters.
+GENERATED_CSS = schemes.css(DEFAULT_SCHEME)
+STRUCTURE_CSS = (THEME / "annotations.css").read_text(encoding="utf-8")
 ANNOTATE_JS = (ASSETS / "annotate.js").read_text(encoding="utf-8")
 
 
@@ -46,27 +52,29 @@ def ann(**kw) -> Annotation:
 
 # --- the palette ----------------------------------------------------------
 
-def test_the_palette_is_six_colours():
-    assert COLOR_TOKENS == ("pink", "purple", "blue", "green", "yellow", "orange")
-    assert DEFAULT_COLOR in COLOR_TOKENS
+def test_the_palette_is_six_slots_and_no_hues():
+    """A slot, not a colour: `c3` means "the third", whatever it looks like."""
+    assert COLOR_TOKENS == ("c1", "c2", "c3", "c4", "c5", "c6")
+    assert resolve_color_token(DEFAULT_COLOR) in COLOR_TOKENS
+    assert len(DEFAULT_SCHEME.colors) == SLOTS
 
 
 @pytest.mark.parametrize("token", COLOR_TOKENS)
 def test_every_token_defines_all_four_of_its_values(token):
     for name in ("hl-{}-bg", "hl-{}-edge", "note-{}-bg", "note-{}-ink"):
-        assert f"--{name.format(token)}:" in ANNOTATIONS_CSS
+        assert f"--{name.format(token)}:" in GENERATED_CSS
 
 
 @pytest.mark.parametrize("token", COLOR_TOKENS)
 def test_every_token_is_mapped_onto_the_variables_the_components_read(token):
     """A token declared but never mapped renders as an unstyled highlight."""
     for selector in (f".hl--{token}", f".note--{token}", f".swatch--{token}"):
-        assert selector in ANNOTATIONS_CSS
+        assert selector in GENERATED_CSS
 
 
 def test_the_dark_scheme_restyles_every_card():
     """A token missed here shows dark text on a dark background."""
-    dark = ANNOTATIONS_CSS.split("prefers-color-scheme: dark")[1]
+    dark = GENERATED_CSS.split("prefers-color-scheme: dark")[1]
     for token in COLOR_TOKENS:
         assert f"--note-{token}-bg:" in dark
         assert f"--note-{token}-ink:" in dark
@@ -87,7 +95,7 @@ _VALUE = re.compile(r"--([\w-]+):\s*rgb\(([^)]+)\)")
 
 def palette() -> dict[str, tuple[float, ...]]:
     """Every `--name: rgb(r g b / a)` in the light-mode block, as numbers."""
-    light = ANNOTATIONS_CSS.split("prefers-color-scheme: dark")[0]
+    light = GENERATED_CSS.split("prefers-color-scheme: dark")[0]
     found = {}
     for name, inside in _VALUE.findall(light):
         channels, _, alpha = inside.partition("/")
@@ -141,35 +149,28 @@ def test_a_card_is_readable_against_its_own_background(token):
 # --- the palette these five replaced --------------------------------------
 
 @pytest.mark.parametrize(
-    "legacy, token",
+    "legacy, slot",
     [
-        ("amber", "orange"),
-        ("rose", "pink"),
-        ("mint", "green"),
-        ("violet", "purple"),
-        ("sky", "blue"),
-        ("slate", "yellow"),
+        ("pink", "c1"), ("purple", "c2"), ("blue", "c3"),
+        ("green", "c4"), ("yellow", "c5"), ("orange", "c6"),
+        ("rose", "c1"), ("violet", "c2"), ("sky", "c3"),
+        ("mint", "c4"), ("slate", "c5"), ("amber", "c6"),
     ],
 )
-def test_a_legacy_colour_name_resolves_to_its_replacement(legacy, token):
-    assert resolve_color_token(legacy) == token
-    assert ann(color=legacy).color_token == token
+def test_a_hue_that_used_to_be_a_colour_resolves_to_the_slot_it_held(legacy, slot):
+    """Two palettes' worth of names are in the reader's files. Both resolve to
+    the position the colour occupied at the time, so nothing has to be
+    rewritten and nothing changes appearance."""
+    assert resolve_color_token(legacy) == slot
+    assert ann(color=legacy).color_token == slot
 
 
-def test_every_legacy_name_still_lands_somewhere_of_its_own():
-    """Six old names onto six tokens, one each.
-
-    Worth more than getting every hue right: two legacy names sharing a token
-    makes two notes that were deliberately different look the same. `amber`
-    used to fold onto yellow and collide with the notes actually written
-    yellow; the sixth colour is where it belongs. `slate` has nowhere truly
-    right to go -- there is no grey, and blue is spoken for by sky -- so it
-    keeps yellow, which is a soft sand in this palette rather than a shout.
-    """
-    assert resolve_color_token("amber") == "orange"
-    assert resolve_color_token("slate") == "yellow"
-    assert len(set(LEGACY_COLOR_ALIASES.values())) == len(LEGACY_COLOR_ALIASES), \
-        "two old names on one token makes two different notes look alike"
+def test_a_number_is_a_slot_and_a_css_colour_is_not():
+    assert resolve_color_token(3) == "c3"
+    assert resolve_color_token("3") == "c3"
+    assert resolve_color_token(0) is None and resolve_color_token(7) is None
+    assert resolve_color_token("rgb(255 0 128)") is None
+    assert resolve_color_token(True) is None, "a bool is not slot 1"
 
 
 def test_a_legacy_name_is_not_mistaken_for_a_raw_css_colour():
@@ -186,15 +187,15 @@ def test_a_legacy_colour_is_not_rewritten_in_the_sidecar(tmp_path):
     (restored,) = sidecar.load(path)
 
     assert restored.color == "amber"
-    assert restored.color_token == "orange"
+    assert restored.color_token == "c6"
     assert json.loads(path.read_text())["annotations"][0]["color"] == "amber"
 
 
-def test_a_legacy_colour_renders_as_its_replacement():
+def test_a_legacy_colour_renders_as_the_slot_it_names():
     html = render_document("Serve over CRAM/BAM.", [ann(color="sky")]).html
 
-    assert "hl--blue" in html
-    assert "note--blue" in html
+    assert "hl--c3" in html
+    assert "note--c3" in html
     assert "sky" not in html
 
 
@@ -270,12 +271,12 @@ def test_a_new_comment_without_a_colour_gets_the_default(server):
 
 def test_a_new_comment_keeps_the_colour_it_was_written_in(server):
     base, workspace = server
-    status, payload = comment(base, color="green")
+    status, payload = comment(base, color="c4")
 
     assert status == 201
-    assert payload["annotation"]["color"] == "green"
-    assert saved_in(workspace).color == "green"
-    assert "hl--green" in (workspace.outputs / "doc.html").read_text(encoding="utf-8")
+    assert payload["annotation"]["color"] == 4
+    assert saved_in(workspace).color == 4
+    assert "hl--c4" in (workspace.outputs / "doc.html").read_text(encoding="utf-8")
 
 
 def test_patch_recolours_an_annotation_in_the_sidecar_and_the_page(server):
@@ -284,15 +285,15 @@ def test_patch_recolours_an_annotation_in_the_sidecar_and_the_page(server):
     ann_id = payload["annotation"]["id"]
 
     status, body = call(
-        base, "PATCH", f"/api/annotations/{ann_id}", {"document": "doc", "color": "pink"}
+        base, "PATCH", f"/api/annotations/{ann_id}", {"document": "doc", "color": "c1"}
     )
     assert status == 200
-    assert body["annotation"]["color"] == "pink"
-    assert saved_in(workspace).color == "pink"
+    assert body["annotation"]["color"] == 1
+    assert saved_in(workspace).color == 1
 
     html = (workspace.outputs / "doc.html").read_text(encoding="utf-8")
-    assert "hl--pink" in html
-    assert "hl--yellow" not in html
+    assert "hl--c1" in html
+    assert "hl--c5" not in html
 
 
 def test_recolouring_disturbs_nothing_else_about_the_annotation(server):
@@ -303,7 +304,7 @@ def test_recolouring_disturbs_nothing_else_about_the_annotation(server):
     call(base, "PATCH", f"/api/annotations/{before['id']}",
          {"document": "doc", "offset": {"dx": 40, "dy": 8}})
     _, body = call(base, "PATCH", f"/api/annotations/{before['id']}",
-                   {"document": "doc", "color": "blue"})
+                   {"document": "doc", "color": "c3"})
     after = body["annotation"]
 
     assert after["target"] == before["target"]
@@ -311,10 +312,16 @@ def test_recolouring_disturbs_nothing_else_about_the_annotation(server):
     assert after["offset"] == {"dx": 40.0, "dy": 8.0}
 
 
-@pytest.mark.parametrize("color", ["chartreuse", "rgb(255 61 148)", "amber", "", 7])
-def test_only_a_palette_token_may_arrive_from_the_browser(server, color):
+@pytest.mark.parametrize("color", ["chartreuse", "rgb(255 61 148)", "", 7, 0, None])
+def test_only_a_slot_may_arrive_from_the_browser(server, color):
     """A raw colour is emitted into a style attribute, so it is not something
-    to take from a client -- and the picker cannot produce one anyway."""
+    to take from a client -- and the picker cannot produce one anyway.
+
+    A hue the palette used to have is not in this list: `amber` names slot 6
+    and always did, so accepting it costs nothing. What is refused is anything
+    that is not a position -- which is exactly the set that could reach a
+    style attribute.
+    """
     base, _ = server
     _, created = comment(base)
 
@@ -341,9 +348,9 @@ def test_recolouring_replaces_a_raw_colour_rather_than_layering_over_it(server):
     annotation.color = "rgb(255 61 148)"
     sidecar.save(path, [annotation])
 
-    call(base, "PATCH", f"/api/annotations/{ann_id}", {"document": "doc", "color": "purple"})
+    call(base, "PATCH", f"/api/annotations/{ann_id}", {"document": "doc", "color": "c2"})
 
-    assert saved_in(workspace).color == "purple"
+    assert saved_in(workspace).color == 2
     html = (workspace.outputs / "doc.html").read_text(encoding="utf-8")
     assert "hl--custom" not in html
     assert "rgb(255 61 148)" not in html
@@ -360,11 +367,11 @@ def test_the_browser_offers_exactly_the_palette_python_knows():
 
 
 def test_the_browser_and_python_agree_on_the_default_colour():
-    assert f'var DEFAULT_COLOR = "{DEFAULT_COLOR}";' in ANNOTATE_JS
+    assert f'var DEFAULT_COLOR = "c{DEFAULT_COLOR}";' in ANNOTATE_JS
 
 
 def test_the_browser_never_offers_a_legacy_name():
-    for legacy in LEGACY_COLOR_ALIASES:
+    for legacy in LEGACY_SLOTS:
         assert f'"{legacy}"' not in ANNOTATE_JS
 
 
@@ -454,7 +461,7 @@ function fire(el, type, event) {
 
 DRIVER = """
 var picked = [];
-var row = colorPicker("green", function (color) { picked.push(color); });
+var row = colorPicker("c4", function (color) { picked.push(color); });
 var swatches = row.children;
 
 function where(attribute, value) {
@@ -472,7 +479,7 @@ function tabbable() {
 var before = { checked: where("aria-checked", "true"), stops: tabbable() };
 
 // ArrowRight from the focused swatch moves on, and selects as it moves.
-document.activeElement = swatches[COLORS.indexOf("green")];
+document.activeElement = swatches[COLORS.indexOf("c4")];
 fire(row, "keydown", { key: "ArrowRight", preventDefault: function () {} });
 var arrowed = {
   checked: where("aria-checked", "true"),
@@ -520,21 +527,17 @@ def test_the_swatches_are_one_tab_stop_the_arrow_keys_move_within(tmp_path):
     assert done.returncode == 0, done.stderr
     result = json.loads(done.stdout)
 
-    assert result["names"] == ["Pink", "Purple", "Blue", "Green", "Yellow", "Orange"]
+    assert result["names"] == [f"Colour {n}" for n in range(1, 7)]
     assert result["roles"] == ["radio"] * 6
 
     # One tab stop, and it is always the current colour -- never none, and
     # never one per swatch.
-    assert result["before"] == {"checked": ["green"], "stops": ["green"]}
-    # Right from green is yellow in this order, not blue.
-    assert result["arrowed"] == {
-        "checked": ["yellow"],
-        "stops": ["yellow"],
-        "focused": "yellow",
-    }
+    assert result["before"] == {"checked": ["c4"], "stops": ["c4"]}
+    # Right from the fourth is the fifth.
+    assert result["arrowed"] == {"checked": ["c5"], "stops": ["c5"], "focused": "c5"}
     # A click lands on the first swatch, whatever the focus was.
-    assert result["clicked"] == {"checked": ["pink"], "stops": ["pink"]}
-    assert result["picked"] == ["yellow", "pink"]
+    assert result["clicked"] == {"checked": ["c1"], "stops": ["c1"]}
+    assert result["picked"] == ["c5", "c1"]
 
 
 def test_note_actions_survive_an_in_place_swap():
@@ -559,12 +562,12 @@ def test_note_actions_survive_an_in_place_swap():
 # --- the exact palette that was asked for ----------------------------------
 
 REQUESTED = {
-    "pink":   (0xd4, 0xb0, 0xb5),
-    "purple": (0xc3, 0xb0, 0xd4),
-    "blue":   (0xb0, 0xb2, 0xd4),
-    "green":  (0xb0, 0xd4, 0xb1),
-    "yellow": (0xed, 0xdf, 0x91),
-    "orange": (0xfa, 0xce, 0x98),
+    "c1": (0xd4, 0xb0, 0xb5),
+    "c2": (0xc3, 0xb0, 0xd4),
+    "c3": (0xb0, 0xb2, 0xd4),
+    "c4": (0xb0, 0xd4, 0xb1),
+    "c5": (0xed, 0xdf, 0x91),
+    "c6": (0xfa, 0xce, 0x98),
 }
 
 
@@ -643,13 +646,14 @@ def test_the_swatches_are_offered_in_the_order_they_were_given():
     """The menu is read left to right, so the list is part of what was asked
     for and not just the set of colours in it."""
     assert list(COLOR_TOKENS) == list(REQUESTED)
-    assert 'var COLORS = ["pink", "purple", "blue", "green", "yellow", "orange"]' in ANNOTATE_JS
+    assert 'var COLORS = ["c1", "c2", "c3", "c4", "c5", "c6"]' in ANNOTATE_JS
 
 
-def test_sky_has_a_home_again():
-    """It used to fold onto purple and collide with violet; there is a blue now."""
-    assert resolve_color_token("sky") == "blue"
-    assert resolve_color_token("violet") == "purple"
+def test_the_default_scheme_is_the_palette_that_was_asked_for():
+    """The six fills that were chosen by hand are what a fresh knowledge base
+    still gets; schemes changed who owns them, not what they are."""
+    assert [tuple(int(c[i:i+2], 16) for i in (1, 3, 5)) for c in DEFAULT_SCHEME.colors] \
+        == list(REQUESTED.values())
 
 
 # --- painting over what is already there -----------------------------------
@@ -689,7 +693,7 @@ def paint(base, quote, color):
     })
 
 
-def comment_on(base, quote, color="green"):
+def comment_on(base, quote, color="c4"):
     return _post(base, "/api/annotations", {
         "document": "doc", "quote": quote, "body": "a real thread", "color": color
     })
@@ -718,18 +722,18 @@ def _post(base, path, payload):
 
 def test_a_fresh_selection_is_simply_highlighted(painting):
     base, workspace = painting
-    status, payload = paint(base, "bravo charlie", "yellow")
+    status, payload = paint(base, "bravo charlie", "c5")
 
-    assert status == 200 and payload["annotation"]["color"] == "yellow"
-    assert state(workspace) == [("bravo charlie", "yellow", "highlight")]
+    assert status == 200 and payload["annotation"]["color"] == 5
+    assert state(workspace) == [("bravo charlie", "c5", "highlight")]
 
 
 def test_the_same_colour_over_the_same_span_takes_it_off(painting):
     """The only reading of a second press that is not a no-op."""
     base, workspace = painting
-    _, first = paint(base, "bravo charlie", "yellow")
+    _, first = paint(base, "bravo charlie", "c5")
 
-    status, payload = paint(base, "bravo charlie", "yellow")
+    status, payload = paint(base, "bravo charlie", "c5")
 
     assert status == 200
     assert payload["cleared"] == [first["annotation"]["id"]]
@@ -739,47 +743,47 @@ def test_the_same_colour_over_the_same_span_takes_it_off(painting):
 def test_a_different_colour_repaints_rather_than_refusing(painting):
     """It used to be rejected as an overlap, which is not what a reader means."""
     base, workspace = painting
-    paint(base, "bravo charlie", "yellow")
+    paint(base, "bravo charlie", "c5")
 
-    status, payload = paint(base, "bravo charlie", "pink")
+    status, payload = paint(base, "bravo charlie", "c1")
 
     assert status == 200
     assert payload["replaced"], "the yellow one should have been absorbed"
-    assert state(workspace) == [("bravo charlie", "pink", "highlight")]
+    assert state(workspace) == [("bravo charlie", "c1", "highlight")]
 
 
 def test_a_partly_covered_selection_is_painted_not_cleared(painting):
     """Same colour, but only part of the selection had it -- so the press
     means "make all of this that colour", and clearing would lose the rest."""
     base, workspace = painting
-    paint(base, "bravo charlie", "pink")
+    paint(base, "bravo charlie", "c1")
 
-    status, payload = paint(base, "bravo charlie delta", "pink")
+    status, payload = paint(base, "bravo charlie delta", "c1")
 
     assert status == 200 and "annotation" in payload
-    assert state(workspace) == [("bravo charlie delta", "pink", "highlight")]
+    assert state(workspace) == [("bravo charlie delta", "c1", "highlight")]
 
 
 def test_mixed_colours_underneath_become_one_clean_highlight(painting):
     base, workspace = painting
-    paint(base, "bravo", "yellow")
-    paint(base, "delta", "green")
+    paint(base, "bravo", "c5")
+    paint(base, "delta", "c4")
 
-    status, payload = paint(base, "bravo charlie delta", "purple")
+    status, payload = paint(base, "bravo charlie delta", "c2")
 
     assert status == 200
     assert len(payload["replaced"]) == 2
-    assert state(workspace) == [("bravo charlie delta", "purple", "highlight")]
+    assert state(workspace) == [("bravo charlie delta", "c2", "highlight")]
 
 
 def test_two_adjacent_highlights_together_count_as_covering(painting):
     """Neither covers the selection alone; between them they do, so pressing
     their shared colour clears rather than repaints."""
     base, workspace = painting
-    paint(base, "bravo", "yellow")
-    paint(base, "charlie", "yellow")
+    paint(base, "bravo", "c5")
+    paint(base, "charlie", "c5")
 
-    status, payload = paint(base, "bravo charlie", "yellow")
+    status, payload = paint(base, "bravo charlie", "c5")
 
     assert status == 200
     assert len(payload.get("cleared", [])) == 2
@@ -790,9 +794,9 @@ def test_part_of_a_larger_highlight_clears_the_whole_of_it(painting):
     """A highlight is one thing; splitting it in two would be a stranger
     answer than removing what was pressed."""
     base, workspace = painting
-    paint(base, "golf hotel", "blue")
+    paint(base, "golf hotel", "c3")
 
-    status, payload = paint(base, "golf", "blue")
+    status, payload = paint(base, "golf", "c3")
 
     assert status == 200 and payload["cleared"]
     assert state(workspace) == []
@@ -803,18 +807,18 @@ def test_a_comment_is_never_absorbed(painting):
     base, workspace = painting
     comment_on(base, "echo foxtrot")
 
-    status, payload = paint(base, "echo foxtrot", "pink")
+    status, payload = paint(base, "echo foxtrot", "c1")
 
     assert status == 409
     assert "comment" in payload["error"]
-    assert state(workspace) == [("echo foxtrot", "green", "comment")]
+    assert state(workspace) == [("echo foxtrot", "c4", "comment")]
 
 
 def test_a_selection_merely_touching_a_comment_is_refused_too(painting):
     base, workspace = painting
     comment_on(base, "echo foxtrot")
 
-    status, _ = paint(base, "delta echo", "pink")
+    status, _ = paint(base, "delta echo", "c1")
 
     assert status == 409
     assert len(state(workspace)) == 1, "nothing added, nothing removed"
@@ -822,7 +826,7 @@ def test_a_selection_merely_touching_a_comment_is_refused_too(painting):
 
 def test_a_highlight_carries_no_card(painting):
     base, workspace = painting
-    paint(base, "bravo", "yellow")
+    paint(base, "bravo", "c5")
     (annotation,) = workspace.annotations_for("doc")
     assert annotation.thread == [] and not annotation.has_card
 
@@ -831,12 +835,12 @@ def test_a_highlight_carries_no_card(painting):
 
 def test_a_highlight_has_no_rule_under_it():
     """The fill is an opaque pastel and says the colour on its own."""
-    block = ANNOTATIONS_CSS.split("mark.hl {")[1].split("}")[0]
+    block = STRUCTURE_CSS.split("mark.hl {")[1].split("}")[0]
     # A declaration, not the word: `transition` names box-shadow too.
     assert not re.search(r"(?m)^\s*box-shadow\s*:", block)
 
 
 def test_resolved_keeps_its_rule():
     """Its fill is gone, so without one it would be invisible, not quiet."""
-    block = ANNOTATIONS_CSS.split("mark.hl--resolved {")[1].split("}")[0]
+    block = STRUCTURE_CSS.split("mark.hl--resolved {")[1].split("}")[0]
     assert "box-shadow" in block and "background: none" in block

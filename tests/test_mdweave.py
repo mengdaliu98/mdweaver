@@ -178,7 +178,9 @@ def test_render_emits_highlight_and_matching_note_card():
 
     assert 'data-ann="kxejp"' in result.html
     assert 'id="note-kxejp"' in result.html
-    assert "note--yellow" in result.html
+    # c5 is where the default sits: the slot yellow occupied when the six
+    # colours were hues rather than positions.
+    assert "note--c5" in result.html
     assert result.unresolved == []
 
 
