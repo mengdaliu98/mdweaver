@@ -431,6 +431,60 @@ mark.hl--pending {
 
 .checkpoint-dialog__actions button:disabled { opacity: 0.5; cursor: default; }
 
+/* --- asking Claude -------------------------------------------------------- */
+
+/* The same dialog as Checkpoint, with a picker above the box and a progress
+   list below it. Sharing the class is deliberate: two dialogs that do the same
+   kind of thing should not drift into two shapes. */
+
+.agent-dialog { width: min(34rem, calc(100vw - 3rem)); }
+
+.agent-dialog__action {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 0.5rem;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  font: 500 0.82rem/1.3 var(--font-body);
+}
+
+/* Empty until there is something to say, so the dialog does not open with a
+   grey box waiting to be filled. */
+.agent-log {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 13rem;
+  overflow-y: auto;
+}
+
+.agent-log:not(:empty) {
+  margin-top: 0.7rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+}
+
+.agent-log__row {
+  font: 400 0.74rem/1.5 var(--font-mono, ui-monospace, monospace);
+  color: color-mix(in srgb, var(--ink) 72%, transparent);
+  overflow-wrap: anywhere;
+}
+
+/* A tool call is what the turn is *doing*, so it gets the ink; prose it says
+   along the way is commentary and stays quiet. */
+.agent-log__row--tool { color: var(--ink); }
+.agent-log__row--tool::before { content: "› "; opacity: 0.5; }
+.agent-log__row--text { font-family: var(--font-body); font-style: italic; }
+.agent-log__row--status { opacity: 0.65; }
+.agent-log__row--error { color: rgb(159 18 57); font-weight: 500; }
+.agent-log__row--done { color: var(--ink); font-weight: 500; }
+
 @media print {
   .page-actions, .checkpoint-dialog { display: none !important; }
 }

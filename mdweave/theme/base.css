@@ -4,6 +4,20 @@
    Annotation styling lives in annotations.css.
    ========================================================================== */
 
+/* Every control that reaches back to the server ships `hidden` and unhides
+   itself once /api/health answers, so a page opened over file:// offers
+   nothing it cannot do. That contract was quietly broken: `[hidden]` is only
+   `display: none` at the browser's own specificity, and any component rule
+   that sets `display` -- `.page-action { display: inline-flex }` was the one
+   that mattered -- ties with it and wins on source order. Refresh and
+   Checkpoint were therefore on screen over file:// the whole time, doing
+   nothing when pressed.
+
+   Stated once, with `!important`, because the alternative is remembering it
+   at every site that sets `display` on something another module may hide, and
+   that is exactly the kind of thing nobody remembers twice. */
+[hidden] { display: none !important; }
+
 :root {
   --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", system-ui, sans-serif;
   --font-mono: "SF Mono", "JetBrains Mono", "Fira Code", ui-monospace, Menlo, monospace;

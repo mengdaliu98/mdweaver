@@ -341,6 +341,89 @@ stays put.
 The message reaches git through argv, never a shell, so it is data and cannot
 turn into arguments.
 
+## Co-writing with Claude
+
+The **Claude** button in the top right hands this document to a Claude session
+and waits. It asks what you want done, runs a turn, and swaps the rewritten
+prose into the page — without a reload, like every other edit here.
+
+The session is not in the browser and not in the container. It is on a
+devserver, in a checkout of this knowledge base, with a shell and everything
+else a session normally has. That machine has no public address, so the
+deployed site can never call it; the traffic all goes the other way.
+
+```
+browser ──POST /api/agent/jobs──▶ the site
+                                     ▲  │  POST /api/agent/claim
+                                     │  │   (held open until there is work)
+                                     │  ▼
+                                     │  mdweave agent, on the devserver
+                                     │      claude -p --resume <session>
+                                     │      edits markdown_inputs/
+                                     │      git push
+                                     │
+                                POST …/events, …/done, …/reconcile
+```
+
+**One conversation per document.** Which session owns a document is recorded
+beside it, in `<doc>.session.json` — the same convention `.ann.json` uses, and
+it travels the same way: a move renames it, a delete removes it, a checkpoint
+carries it. Each press resumes that conversation rather than starting a new
+one, so *"tighten the section you just added"* means something.
+
+Resuming reuses the same session id, which is what makes the last part work:
+
+```bash
+claude --resume $(jq -r .session_id markdown_inputs/metabridge-design-review.session.json)
+```
+
+That is the *same* conversation the buttons are driving, open in your terminal.
+The button's tooltip prints the command. Nothing is being mirrored or replayed
+— there is one session, and two ways to talk to it.
+
+**The buttons are yours.** An action is a name, a label and a prompt, and they
+live in `markdown_inputs/.mdweave-agent.json`, beside `.mdweave-theme.json` and
+for the same reason: both machines already have the knowledge base, so adding a
+button is a commit to your notes rather than a redeploy of the tool.
+`mdweave actions --write-default` drops the shipped three in to be edited, and
+`mdweave actions` lists what a checkout currently offers. A missing or mangled
+file costs a button and never a document.
+
+**Getting the result back.** Claude edits the markdown on the devserver, so
+four things have to happen before you can see it: re-render, commit, push, and
+— the one that is easy to leave out — tell the site to pull. Without that last
+step everything reports success and the page keeps serving the prose it booted
+with, because the container only ever pulled at startup. `/api/agent/reconcile`
+is that step, and it is the same merge `mdweave reconcile` does.
+
+**Why it polls rather than streams.** The obvious design is a connection held
+open from the devserver to the site. Railway closes an HTTP request after five
+minutes of silence and caps every one of them at fifteen, so "held open" would
+mean reconnecting four times an hour whatever it was called — and a stream that
+dies without a `FIN` leaves the reader blocked on a socket that will never
+speak again, believing it is connected. So the runner asks, and the *site*
+holds the question open for twenty-five seconds before answering "nothing".
+A press still reaches the devserver the instant it happens, and every cycle is
+a whole request that either completed or timed out. There is no third state to
+get wrong.
+
+The browser's end of it *is* SSE, because there `EventSource` reconnects on its
+own and says where it got to, and the replay buffer that makes `Last-Event-ID`
+mean anything is a few lines in the broker.
+
+**Nothing is retried.** A job whose runner goes quiet is marked `stalled` and
+left there. At-least-once delivery is the usual default and it is the wrong one
+here: the work is a language model editing files, so a redelivery is not a
+retry, it is a second and different edit. Press the button again if you meant
+to.
+
+**Two passwords, on purpose.** `MDWEAVE_AGENT_TOKEN` is what the runner
+presents; `MDWEAVE_AGENT_PASSWORD` is what the page asks you for before it will
+queue anything. Neither is the password that lets you read the notes. A session
+started with `--permission-mode bypassPermissions` can do whatever you can do
+on that devserver, and that should not be one leaked reading password away.
+See [DEPLOY.md](DEPLOY.md).
+
 ## Adding comments in the browser
 
 Select any text and a menu appears with two rows — **Comment** and
@@ -561,6 +644,18 @@ mdweave extract <file.md> [--in-place]    # Obsidian inline comments -> sidecar 
 mdweave fingerprint                       # hash of the installed source
 ```
 
+And the two for driving Claude sessions from the deployed site:
+
+```bash
+mdweave agent --remote https://<app>.up.railway.app --token <secret>
+                                          # take jobs from the site and run them here
+mdweave actions [--write-default]         # what buttons this knowledge base offers
+```
+
+`agent` is the long-running one: it belongs on the machine with the checkouts
+and the sessions, not in the container. `--once` takes a single job and exits,
+which is the way to try it without leaving anything running.
+
 `serve` is what `start` puts in the background; run it directly when you want
 the request log in front of you and Ctrl-C to stop it.
 
@@ -593,6 +688,13 @@ wins on conflict.
 - **A new API endpoint**: `mdweave/serve.py`. `Workspace` owns all filesystem
   access and is the path-traversal guard; handlers never join a client string
   onto a path.
+- **A new agent button**: `markdown_inputs/.mdweave-agent.json` in the
+  knowledge base — no code, and no deploy. `mdweave/agent/actions.py` holds the
+  shipped set and the fallback.
+- **The bridge**: `mdweave/agent/`. `protocol.py` is the shapes both ends
+  agree on, `broker.py` the queue and its leases on the container,
+  `daemon.py` the loop on the devserver, and `runner.py` the one place that
+  knows what `claude --output-format stream-json` emits.
 - **Editing**: `mdweave/edits.py` turns "characters 4 to 12 of the block at
   lines 14-18" back into a slice of the markdown — `apply_cuts` throws that
   slice away, `extract_spans` keeps only it. The alignment between visible

@@ -31,12 +31,33 @@
             title="Reload this document from disk" aria-label="Refresh" hidden>
       <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M11.95 8.75a5.25 5.25 0 1 1-1.24-5.46l2.71 2.54M13.42 2.33v3.5h-3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </button>
+    <button class="page-action" type="button" id="agent"
+            title="Ask the Claude session that owns this document" hidden>
+      <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M7 1.6l1.5 3.4 3.4 1.5-3.4 1.5L7 11.4 5.5 8 2.1 6.5 5.5 5z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+      <span>Claude</span>
+    </button>
     <button class="page-action" type="button" id="checkpoint"
             title="Commit and push this document" hidden>
       <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M7 1.8v10.4M2.6 6.2 7 1.8l4.4 4.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
       <span>Checkpoint</span>
     </button>
   </div>
+
+  <dialog class="checkpoint-dialog agent-dialog" id="agent-dialog" aria-labelledby="agent-title">
+    <form method="dialog" id="agent-form">
+      <h2 class="checkpoint-dialog__title" id="agent-title">Ask Claude about this document</h2>
+      <p class="checkpoint-dialog__what"><code id="agent-where"></code></p>
+      <select class="agent-dialog__action" id="agent-action" aria-label="What to do"></select>
+      <textarea class="checkpoint-dialog__message" id="agent-instruction" rows="3"
+                placeholder="What should change?" aria-label="Instruction"></textarea>
+      <ul class="agent-log" id="agent-log" aria-live="polite" aria-label="Progress"></ul>
+      <p class="checkpoint-dialog__error" id="agent-error" hidden></p>
+      <div class="checkpoint-dialog__actions">
+        <button type="button" class="checkpoint-dialog__cancel" id="agent-cancel">Cancel</button>
+        <button type="submit" class="checkpoint-dialog__submit" id="agent-submit">Send to Claude</button>
+      </div>
+    </form>
+  </dialog>
 
   <dialog class="checkpoint-dialog" id="checkpoint-dialog" aria-labelledby="checkpoint-title">
     <form method="dialog" id="checkpoint-form">

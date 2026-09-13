@@ -19,6 +19,7 @@ import random
 import shutil
 import string
 import sys
+import time
 from dataclasses import dataclass
 from functools import partial
 from http import HTTPStatus
@@ -29,6 +30,7 @@ from urllib.parse import parse_qs, quote, urlparse
 from . import checkpoint as git_checkpoint
 from . import scheme as schemes
 from . import edits
+from .agent import protocol
 from .autosave import DEFAULT_DELAY, AutoCommit
 from .model import COLOR_TOKENS, DEFAULT_COLOR, Annotation, Comment, Offset, TextTarget
 from .render import (
@@ -38,7 +40,7 @@ from .render import (
     splice_sidebar,
     write_assets,
 )
-from .sources import obsidian_inline, sidecar
+from .sources import obsidian_inline, session as session_store, sidecar
 from .tree import (
     build_tree,
     document_ids,
@@ -62,11 +64,49 @@ DRAIN_LIMIT = 64 * 1024 * 1024
 # POSTs that only read. Everything else that succeeds has changed something.
 READ_ONLY_POSTS = {"/api/extract"}
 
+
+def is_runner_route(path: str) -> bool:
+    """Is this one of the endpoints the devserver's runner calls?
+
+    Defined once and used twice -- by the authentication gate and by the
+    dispatcher -- because two lists that were meant to agree are exactly how a
+    route ends up gated by neither.
+    """
+    if path in ("/api/agent/claim", "/api/agent/reconcile"):
+        return True
+    return path.startswith("/api/agent/jobs/") and path.rsplit("/", 1)[-1] in (
+        "events",
+        "done",
+    )
+
+
+def _writes_something(path: str) -> bool:
+    """Should this request arm the auto-commit timer?
+
+    The bridge's own traffic must not. A runner polls for work every twenty-odd
+    seconds forever, and its progress reports are chatter about a job, not
+    edits to a document -- counting either as a write would leave the container
+    committing on a timer for as long as the daemon was connected, whether or
+    not anybody had written a word.
+    """
+    if path in READ_ONLY_POSTS:
+        return False
+    if path.startswith("/api/agent/"):
+        # `reconcile` is the exception: it pulls in real prose and re-renders
+        # over it, and the rebuilt pages are worth committing.
+        return path == "/api/agent/reconcile"
+    return True
+
 # A dragged note may not be flung arbitrarily far from its anchor.
 OFFSET_LIMIT = 4000
 
 # Files whose contents define "the version of mdweave this process is running".
 SOURCE_SUFFIXES = {".py", ".js", ".css", ".j2"}
+
+# How long a browser's event stream is held before it is closed on purpose.
+# Railway caps any request at fifteen minutes; ending it ourselves a little
+# short of that turns a severed connection into an ordinary reconnect.
+STREAM_LIFETIME = 12 * 60
 
 
 def source_fingerprint() -> str:
@@ -379,13 +419,17 @@ class Workspace:
                 HTTPStatus.CONFLICT, f"a document called {new_id!r} already exists"
             )
 
-        # The sidecar's name is derived from the markdown's, so leaving it
-        # behind would silently orphan every annotation on the document.
+        # Both sidecars' names are derived from the markdown's, so leaving
+        # either behind would silently orphan it -- the annotations on the
+        # document, and the Claude session that has been co-writing it.
         beside = sidecar.sidecar_path(source)
+        owning = session_store.session_path(source)
         path.parent.mkdir(parents=True, exist_ok=True)
         source.rename(path)
         if beside.exists():
             beside.rename(sidecar.sidecar_path(path))
+        if owning.exists():
+            owning.rename(session_store.session_path(path))
 
         # The generated page is named after the old id, which no document
         # claims any more; `rebuild_all` writes the new one but has no reason
@@ -399,9 +443,11 @@ class Workspace:
         """Remove a document, its annotations, and the page built from them."""
         markdown = self.markdown_for(doc_id)
         beside = sidecar.sidecar_path(markdown)
+        owning = session_store.session_path(markdown)
 
         markdown.unlink()
         beside.unlink(missing_ok=True)
+        owning.unlink(missing_ok=True)
         (self.outputs / f"{doc_id}.html").unlink(missing_ok=True)
 
         self._reindex(doc_id, None)
@@ -595,16 +641,23 @@ class Workspace:
     def files_of(self, doc_id: str) -> list[Path]:
         """Everything that belongs to one document.
 
-        The prose, the annotations beside it, and the page built from them --
-        but not `assets/`, which is shared and would drag every other document's
-        rebuild into a commit meant for this one.
+        The prose, the annotations beside it, the Claude session co-writing it,
+        and the page built from them -- but not `assets/`, which is shared and
+        would drag every other document's rebuild into a commit meant for this
+        one.
         """
         markdown = self.markdown_for(doc_id)
         return [
             markdown,
             sidecar.sidecar_path(markdown),
+            session_store.session_path(markdown),
             self.outputs / f"{doc_id}.html",
         ]
+
+    def session_of(self, doc_id: str) -> session_store.Session:
+        return session_store.load(
+            session_store.session_path(self.markdown_for(doc_id))
+        )
 
     # --- highlighting over what is already there --------------------------
 
@@ -721,6 +774,29 @@ def credentials() -> tuple[str, str] | None:
     return os.environ.get("MDWEAVE_USER") or "mdweave", password
 
 
+def agent_token() -> str:
+    """The shared secret the devserver's runner presents.
+
+    Deliberately not the page's password. The runner's credential lets a
+    machine claim jobs; the page's lets a person read the notes. Keeping them
+    separate means a leaked reading password does not also hand over the
+    devserver.
+    """
+    return os.environ.get("MDWEAVE_AGENT_TOKEN", "").strip()
+
+
+def agent_password() -> str:
+    """A second password, asked for before a button may queue a job.
+
+    A job runs a Claude session with whatever permissions the runner was
+    started with, which on a devserver is a great deal more than editing
+    prose. That is worth a credential of its own -- so reading the knowledge
+    base and driving an agent on the machine that hosts it stop being the same
+    secret. Unset means the page's own password is enough.
+    """
+    return os.environ.get("MDWEAVE_AGENT_PASSWORD", "").strip()
+
+
 LOOPBACK = {"127.0.0.1", "::1", "localhost"}
 
 
@@ -746,9 +822,25 @@ class Handler(SimpleHTTPRequestHandler):
 
     workspace: Workspace
 
-    def __init__(self, *args, workspace: Workspace, autosave=None, **kwargs) -> None:
+    # Deliberately left at the inherited HTTP/1.0. It was briefly raised to
+    # 1.1, on the theory that a streaming response wants chunked encoding --
+    # it does not: the event stream already sends `Connection: close`, and
+    # "the body ends when the socket does" is exactly what EventSource
+    # expects. What 1.1 did bring was keep-alive, and with it a hang. A
+    # `fetch()` that inspects `response.ok` and returns without reading the
+    # body leaves that body undrained; under 1.0 the close ended the request
+    # anyway, while under 1.1 the browser counted it in flight forever and no
+    # page ever reached `networkidle`. The whole browser suite stopped.
+    #
+    # Keep-alive is worth having one day. It is worth having deliberately,
+    # with every error path audited, and not as a side effect of adding SSE.
+
+    def __init__(
+        self, *args, workspace: Workspace, autosave=None, jobs=None, **kwargs
+    ) -> None:
         self.workspace = workspace
         self.autosave = autosave or AutoCommit(workspace.inputs, workspace.outputs)
+        self.jobs = jobs
         super().__init__(*args, directory=str(workspace.outputs), **kwargs)
 
     # --- authentication ----------------------------------------------------
@@ -783,6 +875,55 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         return False
 
+    def _has_runner_token(self) -> bool:
+        """Does this request carry the runner's shared secret?
+
+        Never raises, because it is also the authentication gate: a request
+        with no token at all has to fall through to the password prompt rather
+        than blow up.
+        """
+        wanted = agent_token()
+        if not wanted:
+            return False
+        header = self.headers.get("Authorization", "")
+        offered = header[7:].strip() if header.startswith("Bearer ") else ""
+        return hmac.compare_digest(offered, wanted)
+
+    def _runner_allowed(self) -> bool:
+        """Is this the devserver's runner, presenting the shared secret?
+
+        A bearer token rather than the browser's basic auth, because the two
+        callers are different in kind and should not be able to impersonate
+        each other. An unset token disables the runner endpoints outright --
+        an empty shared secret is not a shared secret.
+        """
+        if not agent_token():
+            raise ApiError(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                "no MDWEAVE_AGENT_TOKEN is set on this server",
+            )
+        return self._has_runner_token()
+
+    def _operator_allowed(self) -> bool:
+        """May this browser queue work on the devserver?
+
+        Sent as a header rather than a second basic-auth realm, so the page can
+        ask for it once and keep it in `sessionStorage` without a login form
+        and without it ever appearing in a URL.
+        """
+        wanted = agent_password()
+        if not wanted:
+            return True  # not configured: the page's own password is the gate
+        offered = self.headers.get("X-Mdweave-Agent-Key", "")
+        return hmac.compare_digest(offered, wanted)
+
+    def _broker(self):
+        if self.jobs is None:
+            raise ApiError(
+                HTTPStatus.SERVICE_UNAVAILABLE, "this server has no job broker"
+            )
+        return self.jobs
+
     # --- routing ---------------------------------------------------------
 
     def do_GET(self) -> None:  # noqa: N802 -- name fixed by BaseHTTPRequestHandler
@@ -795,7 +936,11 @@ class Handler(SimpleHTTPRequestHandler):
         if not self._allowed():
             return
         route = urlparse(self.path).path
-        if route.startswith("/api/"):
+        # Answered by streaming rather than by returning a payload, so it
+        # cannot go through `_dispatch`.
+        if route.startswith("/api/agent/jobs/") and route.endswith("/events"):
+            self._stream_job_events(route[len("/api/agent/jobs/") : -len("/events")])
+        elif route.startswith("/api/"):
             self._dispatch(self._api_get)
         elif route in ("", "/"):
             self._serve_root()
@@ -826,8 +971,18 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
 
     def do_POST(self) -> None:  # noqa: N802
-        if not self._allowed():
-            return
+        # The runner presents a bearer token, and there is only one
+        # Authorization header to present it in -- so on a deployment with a
+        # password (which is every deployment: the container refuses to boot
+        # without one) the basic-auth gate answered 401 to every claim and the
+        # bridge could never carry a single job. Its own credential is
+        # sufficient for its own endpoints, and `_api_agent` checks it again
+        # as the authority; this is only about getting past the front door.
+        if not (
+            is_runner_route(urlparse(self.path).path) and self._has_runner_token()
+        ):
+            if not self._allowed():
+                return
         self._dispatch(self._api_post)
 
     def do_PATCH(self) -> None:  # noqa: N802
@@ -855,7 +1010,7 @@ class Handler(SimpleHTTPRequestHandler):
         # new endpoint cannot forget to arm it. After the response, so arming
         # never costs the request anything.
         if self.command != "GET" and 200 <= int(status) < 300:
-            if urlparse(self.path).path not in READ_ONLY_POSTS:
+            if _writes_something(urlparse(self.path).path):
                 self.autosave.touch()
 
     # --- endpoints -------------------------------------------------------
@@ -891,7 +1046,123 @@ class Handler(SimpleHTTPRequestHandler):
                 "markdown": self.workspace.block_of(doc_id, line, end)
             }
 
+        if route.path == "/api/agent/status":
+            return HTTPStatus.OK, self._agent_status(route)
+
+        if route.path.startswith("/api/agent/jobs/"):
+            job = self._broker().get(route.path[len("/api/agent/jobs/") :])
+            if job is None:
+                raise ApiError(HTTPStatus.NOT_FOUND, "no such job")
+            return HTTPStatus.OK, {"job": job.summary()}
+
         raise ApiError(HTTPStatus.NOT_FOUND, f"no such endpoint: {route.path}")
+
+    def _agent_status(self, route) -> dict:
+        """Whether there is a runner, and what it could be asked to do.
+
+        The page hides the button when nothing is listening, the same way every
+        other control here hides itself when there is no server -- a button
+        that queues work nobody will ever collect is worse than no button.
+        """
+        from .agent import actions as agent_actions
+
+        broker = self._broker()
+        status = broker.status()
+        status["actions"] = [a.to_dict() for a in agent_actions.load(self.workspace.inputs)]
+        status["needs_key"] = bool(agent_password())
+        status["authorised"] = self._operator_allowed()
+
+        document = parse_qs(route.query).get("document", [""])[0]
+        if document:
+            status["recent"] = [j.summary() for j in broker.recent(document, limit=5)]
+            try:
+                status["session"] = self.workspace.session_of(document).to_dict()
+            except ApiError:
+                status["session"] = {}
+        return status
+
+    # --- the agent bridge --------------------------------------------------
+
+    def _stream_job_events(self, job_id: str) -> None:
+        """One job's progress, as Server-Sent Events.
+
+        The browser's `EventSource` reconnects on its own and tells us where it
+        got to via `Last-Event-ID`; the replay buffer that makes that mean
+        something lives in the broker, because the SSE standard carries the id
+        around and stores nothing.
+
+        `Connection: close` and no Content-Length: under HTTP/1.1 that is the
+        way to say "this body ends when the socket does", which is the only
+        thing that can be said about a stream whose length nobody knows.
+
+        The operator key is *not* asked for here, and the asymmetry is
+        deliberate. `EventSource` cannot set a request header, so the only ways
+        to present one would be a query parameter -- a secret in a URL, which
+        lands in every log that touches it -- or a cookie, which is a session
+        mechanism this server does not otherwise have. What that key protects
+        is the power to run something on the devserver, and that is the POST.
+        Watching a job you already queued report its progress is reading, and
+        reading is already behind the page's own password.
+        """
+        try:
+            broker = self._broker()
+        except ApiError as exc:
+            self._respond(exc.status, {"error": exc.message})
+            return
+
+        if broker.get(job_id) is None:
+            self._respond(HTTPStatus.NOT_FOUND, {"error": "no such job"})
+            return
+
+        after = 0
+        resumed = self.headers.get("Last-Event-ID", "")
+        if resumed.isdigit():
+            after = int(resumed)
+        else:
+            asked = parse_qs(urlparse(self.path).query).get("after", ["0"])[0]
+            if asked.isdigit():
+                after = int(asked)
+
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        # For any intermediary that would otherwise buffer the whole response
+        # and deliver a stream as one lump at the end.
+        self.send_header("X-Accel-Buffering", "no")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+
+        deadline = time.monotonic() + STREAM_LIFETIME
+        try:
+            while True:
+                events, state = broker.wait_for_events(
+                    job_id, after, timeout=protocol.STREAM_HEARTBEAT
+                )
+                for event in events:
+                    after = event.seq
+                    self._sse(event.seq, event.kind, json.dumps(event.to_dict()))
+
+                if state in protocol.TERMINAL and not events:
+                    self._sse(after, "closed", json.dumps({"state": state}))
+                    return
+                if not events:
+                    # A comment: it keeps the connection out of an idle
+                    # timeout without being an event the page has to ignore.
+                    self.wfile.write(b": ping\n\n")
+                    self.wfile.flush()
+                if time.monotonic() > deadline:
+                    # Railway caps a request at fifteen minutes regardless, so
+                    # end it deliberately and let EventSource come back.
+                    self._sse(after, "reconnect", json.dumps({"state": state}))
+                    return
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            return  # the reader closed the tab; nothing to report
+
+    def _sse(self, seq: int, event: str, data: str) -> None:
+        chunk = f"id: {seq}\nevent: {event}\ndata: {data}\n\n"
+        self.wfile.write(chunk.encode("utf-8"))
+        self.wfile.flush()
 
     def _api_post(self):
         route = urlparse(self.path)
@@ -923,6 +1194,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self._api_checkpoint()
         if route.path == "/api/schemes":
             return self._api_schemes()
+        if route.path.startswith("/api/agent/"):
+            return self._api_agent(route.path)
         if route.path != "/api/annotations":
             raise ApiError(HTTPStatus.NOT_FOUND, f"no such endpoint: {route.path}")
 
@@ -1195,6 +1468,121 @@ class Handler(SimpleHTTPRequestHandler):
             "warnings": schemes.unreadable(current),
         }
 
+    def _api_agent(self, path: str):
+        """Everything the bridge does, split by who is calling.
+
+        The browser's routes are gated by the operator key; the runner's by the
+        shared token. Nothing is reachable by both, which is the point of
+        having two credentials at all.
+        """
+        broker = self._broker()
+
+        # --- the runner's side ---------------------------------------------
+        if is_runner_route(path):
+            if not self._runner_allowed():
+                raise ApiError(HTTPStatus.FORBIDDEN, "bad or missing runner token")
+
+            if path == "/api/agent/claim":
+                payload = self._json_body() if self._has_body() else {}
+                job = broker.claim(
+                    timeout=protocol.CLAIM_SECONDS,
+                    runner=str(payload.get("runner", ""))[:80],
+                )
+                if job is None:
+                    return HTTPStatus.NO_CONTENT, {}
+                return HTTPStatus.OK, protocol.dispatch(job)
+
+            if path == "/api/agent/reconcile":
+                return HTTPStatus.OK, self._api_agent_reconcile()
+
+            job_id, _, verb = path[len("/api/agent/jobs/") :].rpartition("/")
+            if verb == "events":
+                payload = self._json_body()
+                event = broker.note(
+                    job_id,
+                    str(payload.get("kind", "status"))[:20],
+                    str(payload.get("text", ""))[:2000],
+                )
+                if event is None:
+                    raise ApiError(HTTPStatus.NOT_FOUND, "no such job, or it has finished")
+                return HTTPStatus.OK, {"seq": event.seq}
+
+            payload = self._json_body()
+            job = broker.finish(
+                job_id,
+                bool(payload.get("ok")),
+                str(payload.get("detail", ""))[:2000],
+                str(payload.get("revision", ""))[:80],
+                str(payload.get("session", ""))[:80] or None,
+            )
+            if job is None:
+                raise ApiError(HTTPStatus.NOT_FOUND, "no such job")
+            return HTTPStatus.OK, {"job": job.summary()}
+
+        # --- the browser's side ---------------------------------------------
+        if not self._operator_allowed():
+            raise ApiError(
+                HTTPStatus.FORBIDDEN,
+                "queueing work on the devserver needs the agent key",
+            )
+
+        if path == "/api/agent/jobs":
+            from .agent import actions as agent_actions
+
+            payload = self._json_body()
+            doc_id = _require(payload, "document")
+            self.workspace.markdown_for(doc_id)  # 404s a document that is gone
+
+            name = _require(payload, "action")
+            action = agent_actions.find(self.workspace.inputs, name)
+            if action is None:
+                raise ApiError(HTTPStatus.BAD_REQUEST, f"no action called {name!r}")
+
+            instruction = _optional(payload, "instruction").strip()
+            if action.needs_instruction and not instruction:
+                raise ApiError(
+                    HTTPStatus.BAD_REQUEST, f"{action.label} needs something to be asked"
+                )
+
+            if not broker.status()["connected"]:
+                raise ApiError(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    "no runner is connected — start `mdweave agent` on the devserver",
+                )
+
+            job = broker.submit(doc_id, action.name, instruction[:8000])
+            return HTTPStatus.ACCEPTED, {"job": job.summary()}
+
+        raise ApiError(HTTPStatus.NOT_FOUND, f"no such endpoint: {path}")
+
+    def _api_agent_reconcile(self) -> dict:
+        """Take in what the runner just pushed, and rebuild over it.
+
+        Without this the loop is silently broken in the least obvious way: the
+        edit is committed, the push succeeds, everything reports success, and
+        the page keeps serving the prose from boot. The container only ever
+        pulled at startup.
+        """
+        self._json_body() if self._has_body() else {}
+        try:
+            repo = git_checkpoint.repo_root(self.workspace.inputs)
+            # The pages this container rendered for itself are about to be
+            # rebuilt anyway, and leaving them in place is enough on its own to
+            # make the merge refuse to start.
+            git_checkpoint.discard_generated(repo, self.workspace.outputs)
+            merged = git_checkpoint.reconcile(repo, self.workspace.outputs)
+        except git_checkpoint.GitError as exc:
+            raise ApiError(HTTPStatus.BAD_GATEWAY, str(exc))
+
+        self.workspace.rebuild_all()
+        return {"merged": merged, "documents": sorted(self.workspace.documents())}
+
+    def _has_body(self) -> bool:
+        try:
+            return int(self.headers.get("Content-Length") or 0) > 0
+        except ValueError:
+            return False
+
     def _api_checkpoint(self):
         """Commit and push one document, with the message the reader wrote."""
         payload = self._json_body()
@@ -1327,6 +1715,14 @@ class Handler(SimpleHTTPRequestHandler):
             self.close_connection = True  # too big to bother draining
 
     def _respond(self, status: HTTPStatus, payload: dict) -> None:
+        # 204 is defined as having no body at all, and under HTTP/1.1 a client
+        # that is told otherwise waits for bytes that never come. It is the
+        # honest answer to "is there any work?", so it has to be sent properly.
+        if status == HTTPStatus.NO_CONTENT:
+            self.send_response(status)
+            self.end_headers()
+            return
+
         encoded = json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -1500,13 +1896,31 @@ def autocommit_for(workspace: Workspace) -> AutoCommit:
     )
 
 
+def broker_for(workspace: Workspace):
+    """The job queue, kept beside the checkout rather than inside it.
+
+    On Railway the volume is mounted at /data and the clone sits under it, so
+    the queue survives a redeploy without ever becoming something git would
+    try to commit.
+    """
+    from .agent.broker import Broker
+
+    store = os.environ.get("MDWEAVE_AGENT_STORE", "").strip()
+    path = Path(store) if store else workspace.inputs.parent.parent / "agent-jobs.json"
+    return Broker(store=path)
+
+
 def make_server(
-    workspace: Workspace, host: str, port: int, autosave: AutoCommit | None = None
+    workspace: Workspace,
+    host: str,
+    port: int,
+    autosave: AutoCommit | None = None,
+    jobs=None,
 ) -> ThreadingHTTPServer:
     workspace.outputs.mkdir(parents=True, exist_ok=True)
     return ThreadingHTTPServer(
         (host, port),
-        partial(Handler, workspace=workspace, autosave=autosave),
+        partial(Handler, workspace=workspace, autosave=autosave, jobs=jobs),
     )
 
 
@@ -1518,13 +1932,15 @@ def serve(inputs: Path, outputs: Path, host: str = "127.0.0.1", port: int = 8765
 
     workspace = Workspace(inputs=inputs, outputs=outputs)
     autosave = autocommit_for(workspace)
-    httpd = make_server(workspace, host, port, autosave)
+    jobs = broker_for(workspace)
+    httpd = make_server(workspace, host, port, autosave, jobs)
 
     guarded = " [password required]" if credentials() else ""
     saving = f"  [auto-commit after {autosave.delay:g}s]" if autosave.enabled else ""
+    bridge = "  [agent bridge open]" if agent_token() else ""
     print(
         f"mdweave serving http://{host}:{httpd.server_port}/  "
-        f"[{RUNNING_FINGERPRINT}]{guarded}{saving}  (Ctrl-C to stop)"
+        f"[{RUNNING_FINGERPRINT}]{guarded}{saving}{bridge}  (Ctrl-C to stop)"
     )
     for name in workspace.documents():
         print(f"  http://{host}:{httpd.server_port}/{name}.html")

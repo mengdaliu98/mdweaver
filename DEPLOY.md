@@ -33,6 +33,9 @@ generated domain, so that is fine there; do not put this on plain HTTP.
 | `MDWEAVE_CONTENTS` | no | where the clone lives (default `/data/knowledge_base`) |
 | `GIT_AUTHOR_NAME` | no | what checkpoint commits are attributed to |
 | `GIT_AUTHOR_EMAIL` | no | " |
+| `MDWEAVE_AGENT_TOKEN` | no | shared secret the devserver's runner presents; unset = no bridge |
+| `MDWEAVE_AGENT_PASSWORD` | no | second password the page asks for before queueing a job |
+| `MDWEAVE_AGENT_STORE` | no | where the queue is mirrored (default `/data/agent-jobs.json`) |
 | `PORT` | no | Railway injects this |
 
 The token wants the narrowest scope that still pushes: a fine-grained personal
@@ -74,6 +77,50 @@ curl https://<app>.up.railway.app/api/ping                  # {"ok": true}
 curl -o /dev/null -w '%{http_code}\n' https://<app>.up.railway.app/   # 401
 curl -u mdweave:<password> https://<app>.up.railway.app/api/health
 ```
+
+## The agent bridge
+
+Off unless `MDWEAVE_AGENT_TOKEN` is set. With it set, the container grows a
+queue: the page can put a job in, and a `mdweave agent` process elsewhere can
+take it out. See the README for what it does and why it polls.
+
+```bash
+railway variables --set MDWEAVE_AGENT_TOKEN="$(openssl rand -hex 32)" \
+                  --set MDWEAVE_AGENT_PASSWORD="$(openssl rand -hex 16)"
+```
+
+Then, on the machine that has the checkouts and the Claude sessions:
+
+```bash
+mdweave agent --remote https://<app>.up.railway.app --token <the same token>
+```
+
+It prints what it is talking to and then says nothing until a button is
+pressed. `--once` takes a single job and exits.
+
+**What this actually grants.** A job runs `claude` on that machine with
+`--permission-mode bypassPermissions` — it can do anything you can do there.
+So the two credentials above are deliberately not the password that reads the
+notes, and they are deliberately not each other:
+
+- `MDWEAVE_AGENT_TOKEN` is held only by the runner. It cannot queue work; it
+  can only collect it and report back.
+- `MDWEAVE_AGENT_PASSWORD` is what a browser must present to queue anything.
+  It is asked for once and kept in `sessionStorage`, so it does not outlive
+  the tab.
+
+Neither is checked on the job's progress stream. `EventSource` cannot send a
+request header, and the alternatives are a secret in a URL or a cookie session
+this server does not have — so watching a job you already queued is treated as
+reading, which the page's own password already gates. What the key protects is
+the POST that starts something.
+
+Set `--permission-mode acceptEdits` on the runner if that trade is not one you
+want; the sessions can still write prose and can no longer run commands.
+
+**Nothing about this is required.** Leave `MDWEAVE_AGENT_TOKEN` unset and the
+button never appears, the endpoints answer 503, and the deployment is exactly
+what it was.
 
 ## Notes
 

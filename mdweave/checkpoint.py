@@ -113,6 +113,40 @@ def _current_branch(repo: Path) -> str:
     return _git(repo, "rev-parse", "--abbrev-ref", "HEAD").strip()
 
 
+def discard_generated(repo: Path, generated: Path | None) -> None:
+    """Throw away the rendered pages, so a merge has nothing to trip over.
+
+    Generated pages are not work. They are rebuilt from the prose moments from
+    now, and every writer builds its own copy -- so the same file is routinely
+    modified here and committed there, and worse, *untracked* here and tracked
+    there. Git refuses that outright: "untracked working tree files would be
+    overwritten by merge", and the merge never starts.
+
+    That is not a rare collision. It is what happens the first time a second
+    machine commits a page this one has already rendered, which on a fresh
+    container is every page. `deploy/start.sh` has always done this at boot;
+    the reason it is a function is that a merge can now also happen long after
+    boot, when the agent pushes something.
+
+    Only ever the generated directory. A modified file under `markdown_inputs`
+    is writing, it still blocks the merge, and that is the behaviour worth
+    keeping -- see `reconcile`.
+    """
+    if generated is None:
+        return
+    try:
+        relative = generated.relative_to(repo).as_posix()
+    except ValueError:
+        return
+    for args in (("checkout", "--", relative), ("clean", "-qfd", "--", relative)):
+        try:
+            _git(repo, *args)
+        except GitError:
+            # Nothing tracked there yet, or nothing to clean. Both are fine:
+            # this is housekeeping before the operation that matters.
+            pass
+
+
 def reconcile(repo: Path, generated: Path | None = None) -> bool:
     """Take what the remote has, keeping both sides. True if anything came in.
 

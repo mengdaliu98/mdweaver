@@ -139,6 +139,50 @@ def main(argv: list[str] | None = None) -> int:
         "-o", "--outdir", type=Path, default=default_outdir(), help="output directory"
     )
 
+    p_agent = sub.add_parser(
+        "agent",
+        help="run Claude sessions here, driven by buttons on the deployed site",
+    )
+    p_agent.add_argument(
+        "-i", "--indir", type=Path, default=default_indir(), help="markdown directory"
+    )
+    p_agent.add_argument(
+        "-o", "--outdir", type=Path, default=default_outdir(), help="output directory"
+    )
+    p_agent.add_argument(
+        "--remote", default="", help="the deployed site, e.g. https://x.up.railway.app"
+    )
+    p_agent.add_argument("--token", default="", help="the shared runner secret")
+    p_agent.add_argument("--name", default="", help="how to identify this machine")
+    p_agent.add_argument("--model", default=None, help="model for the sessions")
+    p_agent.add_argument(
+        "--permission-mode",
+        default="bypassPermissions",
+        help="what the sessions may do (default: bypassPermissions)",
+    )
+    p_agent.add_argument(
+        "--add-dir",
+        action="append",
+        default=[],
+        help="another directory the sessions may touch; repeatable",
+    )
+    p_agent.add_argument(
+        "--once", action="store_true", help="take at most one job, then exit"
+    )
+    p_agent.add_argument("--verbose", action="store_true")
+
+    p_actions = sub.add_parser(
+        "actions", help="list the agent buttons this knowledge base offers"
+    )
+    p_actions.add_argument(
+        "-i", "--indir", type=Path, default=default_indir(), help="markdown directory"
+    )
+    p_actions.add_argument(
+        "--write-default",
+        action="store_true",
+        help="write the shipped set into the knowledge base, to be edited",
+    )
+
     sub.add_parser(
         "fingerprint",
         help="print a hash of the installed source (used to spot a stale server)",
@@ -161,7 +205,44 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_serve(args)
     if args.command == "reconcile":
         return cmd_reconcile(args)
+    if args.command == "agent":
+        return cmd_agent(args)
+    if args.command == "actions":
+        return cmd_actions(args)
     return cmd_build(args)
+
+
+def cmd_agent(args) -> int:
+    """Take jobs from the deployed site and run them here.
+
+    The site cannot call this machine -- there is no address to call -- so the
+    traffic all goes the other way: this asks for work, and the request is held
+    open until there is some.
+    """
+    from .agent.daemon import Runner, from_env
+
+    config = from_env(args)
+    if config is None:
+        return 1
+    try:
+        return Runner(config).loop()
+    except KeyboardInterrupt:
+        print("\nmdweave-agent: stopped")
+        return 0
+
+
+def cmd_actions(args) -> int:
+    from .agent import actions as registry
+
+    if args.write_default:
+        path = registry.write_default(args.indir)
+        print(f"mdweave: wrote {path}")
+        return 0
+
+    for action in registry.load(args.indir):
+        asks = "asks for an instruction" if action.needs_instruction else "one press"
+        print(f"{action.name:12} {action.label:24} ({asks})")
+    return 0
 
 
 def cmd_reconcile(args) -> int:
