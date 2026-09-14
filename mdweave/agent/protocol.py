@@ -6,10 +6,72 @@ of a job and one of an event, and no version to negotiate.
 
 from __future__ import annotations
 
+import os
 import random
 import string
+import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+
+# --- what the two credentials are called -----------------------------------
+#
+# There are two secrets and they belong to two different holders, so they are
+# named after the holders: the *operator* is a person at a browser, the
+# *runner* is the process on the devserver. They were originally
+# MDWEAVE_AGENT_PASSWORD and MDWEAVE_AGENT_TOKEN, which read as a matched pair
+# and are not one -- and the first of those went by three names depending on
+# where you met it (a prompt said "agent key", the setting said "password",
+# the request header said neither). Two secrets are confusing enough.
+#
+# The old names still work. A deployment is a thing someone has already
+# configured, and renaming a variable should not be a way to take their site
+# down while they are not looking.
+
+OPERATOR_KEY = "MDWEAVE_OPERATOR_KEY"
+RUNNER_TOKEN = "MDWEAVE_RUNNER_TOKEN"
+RUNNER_REMOTE = "MDWEAVE_RUNNER_REMOTE"
+JOBS_STORE = "MDWEAVE_JOBS_STORE"
+
+SUPERSEDED = {
+    OPERATOR_KEY: "MDWEAVE_AGENT_PASSWORD",
+    RUNNER_TOKEN: "MDWEAVE_AGENT_TOKEN",
+    RUNNER_REMOTE: "MDWEAVE_AGENT_REMOTE",
+    JOBS_STORE: "MDWEAVE_AGENT_STORE",
+}
+
+# The header the browser presents the operator key in. Both are accepted for
+# the same reason the variables are, and because a page cached in somebody's
+# tab is older than whatever the server is running.
+OPERATOR_HEADER = "X-Mdweave-Operator-Key"
+OPERATOR_HEADER_WAS = "X-Mdweave-Agent-Key"
+
+_warned: set[str] = set()
+
+
+def setting(name: str) -> str:
+    """Read one of the settings above, accepting the name it used to have.
+
+    Says so once per process when the old name is what answered -- once,
+    because this is read on every request and a line per request would bury
+    the log it is trying to be useful in.
+    """
+    value = os.environ.get(name, "").strip()
+    if value:
+        return value
+
+    old = SUPERSEDED.get(name)
+    if not old:
+        return ""
+    value = os.environ.get(old, "").strip()
+    if value and old not in _warned:
+        _warned.add(old)
+        print(
+            f"mdweave: {old} is the old name for {name}; still honoured, "
+            "rename it when convenient",
+            file=sys.stderr,
+            flush=True,
+        )
+    return value
 
 ID_ALPHABET = string.ascii_lowercase + string.digits
 ID_LENGTH = 8

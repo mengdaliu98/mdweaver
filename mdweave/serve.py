@@ -774,27 +774,29 @@ def credentials() -> tuple[str, str] | None:
     return os.environ.get("MDWEAVE_USER") or "mdweave", password
 
 
-def agent_token() -> str:
+def runner_token() -> str:
     """The shared secret the devserver's runner presents.
 
-    Deliberately not the page's password. The runner's credential lets a
-    machine claim jobs; the page's lets a person read the notes. Keeping them
-    separate means a leaked reading password does not also hand over the
-    devserver.
+    Deliberately not the page's password. This one lets a machine claim jobs
+    and report back; it cannot queue any. Unset, and the bridge does not exist
+    at all -- an empty shared secret is not a shared secret.
     """
-    return os.environ.get("MDWEAVE_AGENT_TOKEN", "").strip()
+    return protocol.setting(protocol.RUNNER_TOKEN)
 
 
-def agent_password() -> str:
-    """A second password, asked for before a button may queue a job.
+def operator_key() -> str:
+    """The secret a person presents before a button may queue a job.
 
-    A job runs a Claude session with whatever permissions the runner was
-    started with, which on a devserver is a great deal more than editing
-    prose. That is worth a credential of its own -- so reading the knowledge
-    base and driving an agent on the machine that hosts it stop being the same
-    secret. Unset means the page's own password is enough.
+    Queueing is the dangerous verb: a job runs a Claude session with whatever
+    permissions the runner was started with, which on a devserver is a great
+    deal more than editing prose. So reading the knowledge base and commanding
+    the machine that hosts it are two different credentials, and the weakest
+    place the reading one is ever typed does not set the risk for both.
+
+    Unset means the page's own password is the only gate, which is reasonable
+    on loopback and not what you want on a public URL.
     """
-    return os.environ.get("MDWEAVE_AGENT_PASSWORD", "").strip()
+    return protocol.setting(protocol.OPERATOR_KEY)
 
 
 LOOPBACK = {"127.0.0.1", "::1", "localhost"}
@@ -882,7 +884,7 @@ class Handler(SimpleHTTPRequestHandler):
         with no token at all has to fall through to the password prompt rather
         than blow up.
         """
-        wanted = agent_token()
+        wanted = runner_token()
         if not wanted:
             return False
         header = self.headers.get("Authorization", "")
@@ -897,7 +899,7 @@ class Handler(SimpleHTTPRequestHandler):
         each other. An unset token disables the runner endpoints outright --
         an empty shared secret is not a shared secret.
         """
-        if not agent_token():
+        if not runner_token():
             raise ApiError(
                 HTTPStatus.SERVICE_UNAVAILABLE,
                 "no MDWEAVE_AGENT_TOKEN is set on this server",
@@ -910,11 +912,19 @@ class Handler(SimpleHTTPRequestHandler):
         Sent as a header rather than a second basic-auth realm, so the page can
         ask for it once and keep it in `sessionStorage` without a login form
         and without it ever appearing in a URL.
+
+        A custom header is also, on its own, most of a CSRF defence: a form on
+        somebody else's site cannot set one, and a `fetch` that tries forces a
+        preflight this server does not answer. That holds even if the value
+        were public -- which is why the header and the secret are both worth
+        having rather than either alone.
         """
-        wanted = agent_password()
+        wanted = operator_key()
         if not wanted:
             return True  # not configured: the page's own password is the gate
-        offered = self.headers.get("X-Mdweave-Agent-Key", "")
+        offered = self.headers.get(protocol.OPERATOR_HEADER) or self.headers.get(
+            protocol.OPERATOR_HEADER_WAS, ""
+        )
         return hmac.compare_digest(offered, wanted)
 
     def _broker(self):
@@ -1069,7 +1079,7 @@ class Handler(SimpleHTTPRequestHandler):
         broker = self._broker()
         status = broker.status()
         status["actions"] = [a.to_dict() for a in agent_actions.load(self.workspace.inputs)]
-        status["needs_key"] = bool(agent_password())
+        status["needs_key"] = bool(operator_key())
         status["authorised"] = self._operator_allowed()
 
         document = parse_qs(route.query).get("document", [""])[0]
@@ -1685,10 +1695,40 @@ class Handler(SimpleHTTPRequestHandler):
             raise ApiError(HTTPStatus.BAD_REQUEST, f"bad line range {line}-{end}")
         return line, end
 
+    def _require_json_type(self) -> None:
+        """Refuse a body that does not announce itself as JSON.
+
+        This looks like pedantry and is not. A browser attaches HTTP Basic
+        credentials to *any* request to an origin it has them for, including
+        one started by somebody else's website -- there is no SameSite for
+        Basic auth the way there is for cookies. And a plain HTML form can be
+        submitted cross-origin without the browser asking permission first,
+        provided it uses one of three content types, of which `text/plain` is
+        one.
+
+        This server used to parse whatever arrived, whatever it claimed to be.
+        So a form with `enctype="text/plain"` and a JSON-shaped field name was
+        a working request, which meant that merely visiting a hostile page
+        while logged in here could queue a job -- and a job runs commands on
+        the devserver. Checked and reproduced before this was written.
+
+        `application/json` is not on the list a form may send, and setting it
+        from script forces a preflight this server never answers. So requiring
+        it ends that whole class of attack at one line, for every endpoint at
+        once, without depending on the operator key being set.
+        """
+        declared = (self.headers.get("Content-Type") or "").split(";", 1)[0]
+        if declared.strip().lower() != "application/json":
+            raise ApiError(
+                HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
+                "this endpoint takes application/json",
+            )
+
     def _json_body(self, limit: int = MAX_BODY_BYTES) -> dict:
         length = int(self.headers.get("Content-Length") or 0)
         if length <= 0:
             raise ApiError(HTTPStatus.BAD_REQUEST, "empty request body")
+        self._require_json_type()
         if length > limit:
             # Read the body before answering. Replying to a request whose body
             # is still in flight makes the client see a connection reset rather
@@ -1905,7 +1945,7 @@ def broker_for(workspace: Workspace):
     """
     from .agent.broker import Broker
 
-    store = os.environ.get("MDWEAVE_AGENT_STORE", "").strip()
+    store = protocol.setting(protocol.JOBS_STORE)
     path = Path(store) if store else workspace.inputs.parent.parent / "agent-jobs.json"
     return Broker(store=path)
 
@@ -1937,7 +1977,7 @@ def serve(inputs: Path, outputs: Path, host: str = "127.0.0.1", port: int = 8765
 
     guarded = " [password required]" if credentials() else ""
     saving = f"  [auto-commit after {autosave.delay:g}s]" if autosave.enabled else ""
-    bridge = "  [agent bridge open]" if agent_token() else ""
+    bridge = "  [agent bridge open]" if runner_token() else ""
     print(
         f"mdweave serving http://{host}:{httpd.server_port}/  "
         f"[{RUNNING_FINGERPRINT}]{guarded}{saving}{bridge}  (Ctrl-C to stop)"

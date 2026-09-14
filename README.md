@@ -417,12 +417,29 @@ here: the work is a language model editing files, so a redelivery is not a
 retry, it is a second and different edit. Press the button again if you meant
 to.
 
-**Two passwords, on purpose.** `MDWEAVE_AGENT_TOKEN` is what the runner
-presents; `MDWEAVE_AGENT_PASSWORD` is what the page asks you for before it will
-queue anything. Neither is the password that lets you read the notes. A session
-started with `--permission-mode bypassPermissions` can do whatever you can do
-on that devserver, and that should not be one leaked reading password away.
-See [DEPLOY.md](DEPLOY.md).
+**Two secrets, named after who holds them.** `MDWEAVE_RUNNER_TOKEN` belongs to
+the runner — a machine, which can hold a long random string and never type it.
+`MDWEAVE_OPERATOR_KEY` belongs to you, and the page asks for it before it will
+queue anything. Neither is the password that lets you read the notes.
+
+They are split because queueing is the dangerous verb. A session started with
+`--permission-mode bypassPermissions` can do whatever you can do on that
+devserver, and that should not be one leaked reading password away — the
+runner's token cannot queue work at all, and the page's password cannot either.
+
+The operator key travels in a header rather than a form field, which is doing
+two jobs. HTTP Basic credentials are attached by the browser to *any* request
+to an origin it has them for, including one begun by somebody else's site, and
+there is no SameSite for Basic auth the way there is for cookies. A cross-site
+form cannot set a custom header, and a `fetch` that tries forces a preflight
+this server does not answer. Requests must also declare
+`Content-Type: application/json`, which a cross-site form cannot send either —
+that check is a security boundary, not tidiness, and removing it reopens the
+hole. See [DEPLOY.md](DEPLOY.md).
+
+Both variables were once called `MDWEAVE_AGENT_TOKEN` and
+`MDWEAVE_AGENT_PASSWORD`, which read as a matched pair and are not one. The old
+names still work, and say so once at startup.
 
 ## Adding comments in the browser
 

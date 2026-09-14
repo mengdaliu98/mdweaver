@@ -23,7 +23,6 @@ it the edit is safely committed and invisible.
 from __future__ import annotations
 
 import json
-import os
 import socket
 import sys
 import time
@@ -34,6 +33,7 @@ from pathlib import Path
 
 from . import actions as registry
 from . import runner
+from . import protocol
 from .protocol import CLAIM_SECONDS
 
 # Slack on top of the server's own claim window, so a claim that is answered
@@ -298,14 +298,18 @@ class Runner:
 
 def from_env(args) -> Config | None:
     """Assemble the configuration, complaining about what is missing."""
-    remote = args.remote or os.environ.get("MDWEAVE_AGENT_REMOTE", "")
-    token = args.token or os.environ.get("MDWEAVE_AGENT_TOKEN", "")
+    remote = args.remote or protocol.setting(protocol.RUNNER_REMOTE)
+    token = args.token or protocol.setting(protocol.RUNNER_TOKEN)
 
     problems = []
     if not remote:
-        problems.append("  --remote https://<app>.up.railway.app  (or MDWEAVE_AGENT_REMOTE)")
+        problems.append(
+            f"  --remote https://<app>.up.railway.app  (or {protocol.RUNNER_REMOTE})"
+        )
     if not token:
-        problems.append("  --token <shared secret>                (or MDWEAVE_AGENT_TOKEN)")
+        problems.append(
+            f"  --token <shared secret>                (or {protocol.RUNNER_TOKEN})"
+        )
     if not args.indir.is_dir():
         problems.append(f"  -i {args.indir} is not a directory")
 

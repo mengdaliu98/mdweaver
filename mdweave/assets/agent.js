@@ -31,15 +31,19 @@
   var where = document.getElementById("agent-where");
 
   var DOC_ID = document.body.dataset.document || "";
-  var KEY_NAME = "mdweave.agentKey";
+  var KEY_NAME = "mdweave.operatorKey";
 
   var actions = [];
   var busy = false;
   var stream = null;
 
-  /* The second password, when the server is configured to want one. Kept in
+  /* The operator key, when the server is configured to want one. Kept in
    * sessionStorage rather than localStorage: a credential that runs commands
-   * on somebody's devserver should not outlive the tab it was typed into. */
+   * on somebody's devserver should not outlive the tab it was typed into.
+   *
+   * Sent as a custom header, which is also most of a CSRF defence on its own
+   * -- a form on another site cannot set one, and a fetch that tries forces a
+   * preflight this server does not answer. */
   function storedKey() {
     try {
       return window.sessionStorage.getItem(KEY_NAME) || "";
@@ -59,7 +63,7 @@
   function headers() {
     var out = { "Content-Type": "application/json" };
     var key = storedKey();
-    if (key) out["X-Mdweave-Agent-Key"] = key;
+    if (key) out["X-Mdweave-Operator-Key"] = key;
     return out;
   }
 
@@ -232,7 +236,7 @@
       .then(function (response) {
         if (response.status === 403) {
           return askForKey().then(function (again) {
-            if (!again) throw new Error("the agent key is needed to queue work");
+            if (!again) throw new Error("the operator key is needed to queue work");
             return send();
           });
         }
@@ -250,7 +254,7 @@
   function askForKey() {
     var typed = window.prompt(
       "This site asks for a separate key before it will run anything on the " +
-        "devserver.\n\nAgent key:"
+        "devserver.\n\nOperator key:"
     );
     if (!typed) return Promise.resolve(false);
     rememberKey(typed.trim());

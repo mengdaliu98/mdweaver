@@ -21,6 +21,7 @@ import os
 import sys
 from pathlib import Path
 
+from . import scheme as schemes
 from .render import render_document, write_assets
 from .sources import obsidian_inline, sidecar
 from .tree import build_tree, document_ids, folder_paths, humanize, load_order
@@ -321,7 +322,10 @@ def cmd_build(args) -> int:
 
     outdir: Path = args.outdir or default_outdir()
     outdir.mkdir(parents=True, exist_ok=True)
-    write_assets(outdir)
+    # From beside the documents, not the shipped default: this runs on every
+    # `mdweave start` and every container boot, and writing the default here
+    # silently reverted the reader's colours.
+    write_assets(outdir, schemes.load(root).current())
 
     failures = 0
     for doc_id, path in selected.items():

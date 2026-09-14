@@ -33,15 +33,25 @@ generated domain, so that is fine there; do not put this on plain HTTP.
 | `MDWEAVE_CONTENTS` | no | where the clone lives (default `/data/knowledge_base`) |
 | `GIT_AUTHOR_NAME` | no | what checkpoint commits are attributed to |
 | `GIT_AUTHOR_EMAIL` | no | " |
-| `MDWEAVE_AGENT_TOKEN` | no | shared secret the devserver's runner presents; unset = no bridge |
-| `MDWEAVE_AGENT_PASSWORD` | no | second password the page asks for before queueing a job |
-| `MDWEAVE_AGENT_STORE` | no | where the queue is mirrored (default `/data/agent-jobs.json`) |
+| `MDWEAVE_RUNNER_TOKEN` | no | the runner's credential; unset = no bridge at all |
+| `MDWEAVE_OPERATOR_KEY` | no | yours; the page asks for it before queueing a job |
+| `MDWEAVE_JOBS_STORE` | no | where the queue is mirrored (default `/data/agent-jobs.json`) |
 | `PORT` | no | Railway injects this |
 
 The token wants the narrowest scope that still pushes: a fine-grained personal
 access token limited to the one repository, with **Contents: read and write**.
 
 ## Deploying
+
+The `railway` command below is the Railway CLI, which is a separate install and
+is not on a machine just because the site is deployed from it:
+
+```bash
+npm install -g @railway/cli && railway login && railway link
+```
+
+Everything it does can also be done in the dashboard, which is worth knowing
+when you are on a box you would rather not install things on.
 
 ```bash
 railway init                       # or link an existing project
@@ -80,13 +90,16 @@ curl -u mdweave:<password> https://<app>.up.railway.app/api/health
 
 ## The agent bridge
 
-Off unless `MDWEAVE_AGENT_TOKEN` is set. With it set, the container grows a
+Off unless `MDWEAVE_RUNNER_TOKEN` is set. With it set, the container grows a
 queue: the page can put a job in, and a `mdweave agent` process elsewhere can
 take it out. See the README for what it does and why it polls.
 
 ```bash
-railway variables --set MDWEAVE_AGENT_TOKEN="$(openssl rand -hex 32)" \
-                  --set MDWEAVE_AGENT_PASSWORD="$(openssl rand -hex 16)"
+# The CLI is one way; the dashboard and the API are others. `openssl rand`
+# draws from the OS's cryptographic random source -- do not invent these.
+OPERATOR=$(openssl rand -hex 16); echo "type this into the page: $OPERATOR"
+railway variables --set MDWEAVE_RUNNER_TOKEN="$(openssl rand -hex 32)" \
+                  --set MDWEAVE_OPERATOR_KEY="$OPERATOR"
 ```
 
 Then, on the machine that has the checkouts and the Claude sessions:
@@ -103,9 +116,9 @@ pressed. `--once` takes a single job and exits.
 So the two credentials above are deliberately not the password that reads the
 notes, and they are deliberately not each other:
 
-- `MDWEAVE_AGENT_TOKEN` is held only by the runner. It cannot queue work; it
+- `MDWEAVE_RUNNER_TOKEN` is held only by the runner. It cannot queue work; it
   can only collect it and report back.
-- `MDWEAVE_AGENT_PASSWORD` is what a browser must present to queue anything.
+- `MDWEAVE_OPERATOR_KEY` is what a browser must present to queue anything.
   It is asked for once and kept in `sessionStorage`, so it does not outlive
   the tab.
 
@@ -118,7 +131,7 @@ the POST that starts something.
 Set `--permission-mode acceptEdits` on the runner if that trade is not one you
 want; the sessions can still write prose and can no longer run commands.
 
-**Nothing about this is required.** Leave `MDWEAVE_AGENT_TOKEN` unset and the
+**Nothing about this is required.** Leave `MDWEAVE_RUNNER_TOKEN` unset and the
 button never appears, the endpoints answer 503, and the deployment is exactly
 what it was.
 

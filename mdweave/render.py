@@ -256,13 +256,21 @@ def _infer_title(soup: BeautifulSoup) -> str | None:
     return h1.get_text().strip() if h1 else None
 
 
-def write_assets(outdir: Path, scheme=None) -> None:
+def write_assets(outdir: Path, scheme) -> None:
     """Copy the stylesheet, syntax theme, and note script next to the HTML.
 
     The active scheme is generated onto the end of the stylesheet rather than
     linked as a second file: last wins, so the static themes keep every rule
     about structure and own none of the colour, and switching schemes rewrites
     one file instead of every page.
+
+    `scheme` is required, and used to be optional with the shipped palette as
+    its default. That made forgetting it silent: `mdweave build` did, so every
+    boot wrote the default colours over the reader's scheme and the page stayed
+    that way until the server happened to rebuild for some other reason. Two
+    tabs on one URL came out different colours. Pass `scheme.load(inputs).
+    current()` -- there is no sensible default, because the answer lives beside
+    the documents and this function is not given them.
     """
     from . import scheme as schemes
 
@@ -273,7 +281,7 @@ def write_assets(outdir: Path, scheme=None) -> None:
         (THEME / name).read_text(encoding="utf-8")
         for name in ("base.css", "sidebar.css", "annotations.css", "editor.css")
     )
-    css += "\n\n" + schemes.css(scheme or schemes.DEFAULT_SCHEME)
+    css += "\n\n" + schemes.css(scheme)
     (assets / "mdweave.css").write_text(css, encoding="utf-8")
 
     pygments_css = HtmlFormatter(style=PYGMENTS_STYLE).get_style_defs(".codehilite")
