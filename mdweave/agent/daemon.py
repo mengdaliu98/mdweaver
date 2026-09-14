@@ -258,10 +258,21 @@ class Runner:
                 failures = 0
             except urllib.error.HTTPError as exc:
                 detail = exc.read().decode("utf-8", "replace")[:200]
+                # A 401 here used to mean a bad token and was worth exiting
+                # over. There is no token any more, so it can only mean the
+                # container is running code older than this -- which is
+                # precisely what a deploy looks like from underneath, and it
+                # resolves itself in a minute. Exiting on it meant a runner
+                # started during a redeploy died instead of waiting, which is
+                # how this was found.
                 if exc.code in (401, 403):
-                    _log(f"the container refused this runner ({exc.code}): {detail}")
-                    return 1
-                _log(f"claim failed: {exc.code} {detail}")
+                    if failures == 0:
+                        _log(
+                            f"the container refused this runner ({exc.code}) -- "
+                            "it is probably mid-deploy and older than this; waiting"
+                        )
+                else:
+                    _log(f"claim failed: {exc.code} {detail}")
                 job = None
                 failures += 1
             except (urllib.error.URLError, socket.timeout, OSError, ValueError) as exc:
