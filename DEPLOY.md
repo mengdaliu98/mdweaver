@@ -33,8 +33,7 @@ generated domain, so that is fine there; do not put this on plain HTTP.
 | `MDWEAVE_CONTENTS` | no | where the clone lives (default `/data/knowledge_base`) |
 | `GIT_AUTHOR_NAME` | no | what checkpoint commits are attributed to |
 | `GIT_AUTHOR_EMAIL` | no | " |
-| `MDWEAVE_RUNNER_TOKEN` | no | the runner's credential; unset = no bridge at all |
-| `MDWEAVE_OPERATOR_KEY` | no | yours; the page asks for it before queueing a job |
+| `MDWEAVE_OPERATOR_KEY` | no | the page asks for it before queueing an agent job |
 | `MDWEAVE_JOBS_STORE` | no | where the queue is mirrored (default `/data/agent-jobs.json`) |
 | `PORT` | no | Railway injects this |
 
@@ -90,22 +89,22 @@ curl -u mdweave:<password> https://<app>.up.railway.app/api/health
 
 ## The agent bridge
 
-Off unless `MDWEAVE_RUNNER_TOKEN` is set. With it set, the container grows a
-queue: the page can put a job in, and a `mdweave agent` process elsewhere can
-take it out. See the README for what it does and why it polls.
+The container holds a queue: the page can put a job in, and a `mdweave agent`
+process elsewhere can take it out. Nothing happens until you start a runner --
+until then the queue is inert and the button never appears. See the README for
+what it does and why it polls.
 
 ```bash
 # The CLI is one way; the dashboard and the API are others. `openssl rand`
-# draws from the OS's cryptographic random source -- do not invent these.
+# draws from the OS's cryptographic random source -- do not invent this.
 OPERATOR=$(openssl rand -hex 16); echo "type this into the page: $OPERATOR"
-railway variables --set MDWEAVE_RUNNER_TOKEN="$(openssl rand -hex 32)" \
-                  --set MDWEAVE_OPERATOR_KEY="$OPERATOR"
+railway variables --set MDWEAVE_OPERATOR_KEY="$OPERATOR"
 ```
 
 Then, on the machine that has the checkouts and the Claude sessions:
 
 ```bash
-mdweave agent --remote https://<app>.up.railway.app --token <the same token>
+mdweave agent --remote https://<app>.up.railway.app
 ```
 
 It prints what it is talking to and then says nothing until a button is
@@ -113,14 +112,16 @@ pressed. `--once` takes a single job and exits.
 
 **What this actually grants.** A job runs `claude` on that machine with
 `--permission-mode bypassPermissions` — it can do anything you can do there.
-So the two credentials above are deliberately not the password that reads the
-notes, and they are deliberately not each other:
+So `MDWEAVE_OPERATOR_KEY` is deliberately not the password that reads the
+notes: it is what a browser must present to queue anything, asked for once and
+kept in `sessionStorage` so it does not outlive the tab.
 
-- `MDWEAVE_RUNNER_TOKEN` is held only by the runner. It cannot queue work; it
-  can only collect it and report back.
-- `MDWEAVE_OPERATOR_KEY` is what a browser must present to queue anything.
-  It is asked for once and kept in `sessionStorage`, so it does not outlive
-  the tab.
+The runner's own endpoints — claim, events, done, reconcile — take no
+credential. Collecting a job and reporting on it lead nowhere; the endpoint
+that starts something is the one behind the key. The accepted cost is that a
+stranger who found the URL could claim your jobs and read the instruction
+text. Set `MDWEAVE_PASSWORD` to something strong and do not put anything
+confidential in a prompt.
 
 Neither is checked on the job's progress stream. `EventSource` cannot send a
 request header, and the alternatives are a secret in a URL or a cookie session
@@ -131,9 +132,8 @@ the POST that starts something.
 Set `--permission-mode acceptEdits` on the runner if that trade is not one you
 want; the sessions can still write prose and can no longer run commands.
 
-**Nothing about this is required.** Leave `MDWEAVE_RUNNER_TOKEN` unset and the
-button never appears, the endpoints answer 503, and the deployment is exactly
-what it was.
+**Nothing about this is required.** Start no runner and the button never
+appears, because the page asks whether one is connected before it offers it.
 
 ## Notes
 

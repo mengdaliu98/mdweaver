@@ -153,7 +153,6 @@ def main(argv: list[str] | None = None) -> int:
     p_agent.add_argument(
         "--remote", default="", help="the deployed site, e.g. https://x.up.railway.app"
     )
-    p_agent.add_argument("--token", default="", help="the shared runner secret")
     p_agent.add_argument("--name", default="", help="how to identify this machine")
     p_agent.add_argument("--model", default=None, help="model for the sessions")
     p_agent.add_argument(

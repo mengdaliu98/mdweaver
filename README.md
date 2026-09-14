@@ -417,15 +417,25 @@ here: the work is a language model editing files, so a redelivery is not a
 retry, it is a second and different edit. Press the button again if you meant
 to.
 
-**Two secrets, named after who holds them.** `MDWEAVE_RUNNER_TOKEN` belongs to
-the runner — a machine, which can hold a long random string and never type it.
-`MDWEAVE_OPERATOR_KEY` belongs to you, and the page asks for it before it will
-queue anything. Neither is the password that lets you read the notes.
+**One secret, and it guards the one thing that matters.** Queueing is the
+dangerous verb: a session started with `--permission-mode bypassPermissions`
+can do whatever you can do on that devserver. So `MDWEAVE_OPERATOR_KEY` is
+asked for before the page will queue anything, and it is deliberately not the
+password that lets you read the notes — reading them should not be enough to
+run commands on the machine that hosts them.
 
-They are split because queueing is the dangerous verb. A session started with
-`--permission-mode bypassPermissions` can do whatever you can do on that
-devserver, and that should not be one leaked reading password away — the
-runner's token cannot queue work at all, and the page's password cannot either.
+**The runner's endpoints take no credential**, and that is a trade rather than
+an oversight. Claiming a job and reporting on it lead nowhere: a job can only
+be *queued* with the operator key, and can only run on a machine somebody has
+started a runner on. What it costs is that a stranger who found the URL could
+claim your jobs — reading the instruction text, and stopping your own runner
+from getting them. For a personal knowledge base whose prompts carry nothing
+confidential, that is a fair price for one fewer secret to hold, copy to the
+devserver, and restore after a reboot.
+
+Worth knowing for a different reason: it means a stray POST from anything that
+scans the internet can eat a job. If a press ever does nothing at all and the
+log is silent, that is the shape of it.
 
 The operator key travels in a header rather than a form field, which is doing
 two jobs. HTTP Basic credentials are attached by the browser to *any* request
@@ -437,9 +447,10 @@ this server does not answer. Requests must also declare
 that check is a security boundary, not tidiness, and removing it reopens the
 hole. See [DEPLOY.md](DEPLOY.md).
 
-Both variables were once called `MDWEAVE_AGENT_TOKEN` and
-`MDWEAVE_AGENT_PASSWORD`, which read as a matched pair and are not one. The old
-names still work, and say so once at startup.
+`MDWEAVE_OPERATOR_KEY` was briefly `MDWEAVE_AGENT_PASSWORD`; the old name still
+works and says so once at startup. There was briefly a second credential for
+the runner, deleted rather than left behind a switch — an authentication path
+nobody exercises is a bug waiting to be found the hard way.
 
 ## Adding comments in the browser
 
@@ -664,7 +675,7 @@ mdweave fingerprint                       # hash of the installed source
 And the two for driving Claude sessions from the deployed site:
 
 ```bash
-mdweave agent --remote https://<app>.up.railway.app --token <secret>
+mdweave agent --remote https://<app>.up.railway.app
                                           # take jobs from the site and run them here
 mdweave actions [--write-default]         # what buttons this knowledge base offers
 ```

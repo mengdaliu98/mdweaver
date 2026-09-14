@@ -68,9 +68,10 @@ READ_ONLY_POSTS = {"/api/extract"}
 def is_runner_route(path: str) -> bool:
     """Is this one of the endpoints the devserver's runner calls?
 
-    Defined once and used twice -- by the authentication gate and by the
-    dispatcher -- because two lists that were meant to agree are exactly how a
-    route ends up gated by neither.
+    These take no credential, which makes this list the one place that decides
+    what is reachable without a password. It is defined once and used twice --
+    by `do_POST` to skip the gate and by `_api_agent` to route -- because two
+    lists meant to agree are exactly how a route ends up gated by neither.
     """
     if path in ("/api/agent/claim", "/api/agent/reconcile"):
         return True
@@ -774,16 +775,6 @@ def credentials() -> tuple[str, str] | None:
     return os.environ.get("MDWEAVE_USER") or "mdweave", password
 
 
-def runner_token() -> str:
-    """The shared secret the devserver's runner presents.
-
-    Deliberately not the page's password. This one lets a machine claim jobs
-    and report back; it cannot queue any. Unset, and the bridge does not exist
-    at all -- an empty shared secret is not a shared secret.
-    """
-    return protocol.setting(protocol.RUNNER_TOKEN)
-
-
 def operator_key() -> str:
     """The secret a person presents before a button may queue a job.
 
@@ -877,47 +868,20 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         return False
 
-    def _has_runner_token(self) -> bool:
-        """Does this request carry the runner's shared secret?
-
-        Never raises, because it is also the authentication gate: a request
-        with no token at all has to fall through to the password prompt rather
-        than blow up.
-        """
-        wanted = runner_token()
-        if not wanted:
-            return False
-        header = self.headers.get("Authorization", "")
-        offered = header[7:].strip() if header.startswith("Bearer ") else ""
-        return hmac.compare_digest(offered, wanted)
-
-    def _runner_allowed(self) -> bool:
-        """Is this the devserver's runner, presenting the shared secret?
-
-        A bearer token rather than the browser's basic auth, because the two
-        callers are different in kind and should not be able to impersonate
-        each other. An unset token disables the runner endpoints outright --
-        an empty shared secret is not a shared secret.
-        """
-        if not runner_token():
-            raise ApiError(
-                HTTPStatus.SERVICE_UNAVAILABLE,
-                "no MDWEAVE_AGENT_TOKEN is set on this server",
-            )
-        return self._has_runner_token()
-
     def _operator_allowed(self) -> bool:
         """May this browser queue work on the devserver?
 
+        The one credential this feature adds, and the only one that matters:
+        queueing is what ends in a Claude session running commands on another
+        machine. Reading the notes must not be enough to do that.
+
         Sent as a header rather than a second basic-auth realm, so the page can
         ask for it once and keep it in `sessionStorage` without a login form
-        and without it ever appearing in a URL.
-
-        A custom header is also, on its own, most of a CSRF defence: a form on
-        somebody else's site cannot set one, and a `fetch` that tries forces a
-        preflight this server does not answer. That holds even if the value
-        were public -- which is why the header and the secret are both worth
-        having rather than either alone.
+        and without it ever appearing in a URL. A custom header is also most of
+        a CSRF defence on its own: a form on somebody else's site cannot set
+        one, and a `fetch` that tries forces a preflight this server does not
+        answer. That holds even if the value were public, which is why the
+        header and the secret are both worth having rather than either alone.
         """
         wanted = operator_key()
         if not wanted:
@@ -981,16 +945,15 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
 
     def do_POST(self) -> None:  # noqa: N802
-        # The runner presents a bearer token, and there is only one
-        # Authorization header to present it in -- so on a deployment with a
-        # password (which is every deployment: the container refuses to boot
-        # without one) the basic-auth gate answered 401 to every claim and the
-        # bridge could never carry a single job. Its own credential is
-        # sufficient for its own endpoints, and `_api_agent` checks it again
-        # as the authority; this is only about getting past the front door.
-        if not (
-            is_runner_route(urlparse(self.path).path) and self._has_runner_token()
-        ):
+        # The runner's endpoints take no credential. Deliberately: what they
+        # can do is collect a job and report on it, and neither leads anywhere
+        # -- a job can only be *queued* with the operator key, and a job can
+        # only run on a machine someone has started a runner on. The cost of
+        # leaving them open is that a stranger who finds the URL could claim
+        # your jobs, reading the instruction text and stopping your own runner
+        # from getting them. A traded risk, taken knowingly: see the bridge
+        # section of the README.
+        if not is_runner_route(urlparse(self.path).path):
             if not self._allowed():
                 return
         self._dispatch(self._api_post)
@@ -1481,17 +1444,15 @@ class Handler(SimpleHTTPRequestHandler):
     def _api_agent(self, path: str):
         """Everything the bridge does, split by who is calling.
 
-        The browser's routes are gated by the operator key; the runner's by the
-        shared token. Nothing is reachable by both, which is the point of
-        having two credentials at all.
+        The browser's routes are gated by the operator key. The runner's are
+        not gated at all -- collecting a job and reporting on it lead nowhere,
+        and the endpoint that *starts* something is on the other side of this
+        branch. `is_runner_route` is the whole of that boundary.
         """
         broker = self._broker()
 
         # --- the runner's side ---------------------------------------------
         if is_runner_route(path):
-            if not self._runner_allowed():
-                raise ApiError(HTTPStatus.FORBIDDEN, "bad or missing runner token")
-
             if path == "/api/agent/claim":
                 payload = self._json_body() if self._has_body() else {}
                 job = broker.claim(
@@ -1977,7 +1938,7 @@ def serve(inputs: Path, outputs: Path, host: str = "127.0.0.1", port: int = 8765
 
     guarded = " [password required]" if credentials() else ""
     saving = f"  [auto-commit after {autosave.delay:g}s]" if autosave.enabled else ""
-    bridge = "  [agent bridge open]" if runner_token() else ""
+    bridge = "  [agent bridge open]" if jobs is not None else ""
     print(
         f"mdweave serving http://{host}:{httpd.server_port}/  "
         f"[{RUNNING_FINGERPRINT}]{guarded}{saving}{bridge}  (Ctrl-C to stop)"

@@ -47,7 +47,6 @@ BACKOFF = [1, 2, 5, 10, 20, 30, 60]
 @dataclass
 class Config:
     remote: str
-    token: str
     inputs: Path
     outputs: Path
     runner_name: str = ""
@@ -61,15 +60,13 @@ class Config:
 class Transport:
     """The few calls this makes, over stdlib http.
 
-    No new dependency for six endpoints, and one place that knows the token is
-    a bearer header rather than the page's basic auth -- the two credentials
-    are deliberately different, so the password that reads your notes is not
-    also the one that runs commands here.
+    No new dependency for six endpoints, and no credential: the endpoints this
+    talks to take none. TLS still matters and is not optional -- it is what
+    stops anything but the real site from answering, and `https` gets it.
     """
 
-    def __init__(self, remote: str, token: str) -> None:
+    def __init__(self, remote: str) -> None:
         self.remote = remote.rstrip("/")
-        self.token = token
 
     def post(self, path: str, payload: dict | None = None, timeout: float = 30.0):
         body = json.dumps(payload or {}).encode("utf-8")
@@ -77,10 +74,7 @@ class Transport:
             f"{self.remote}{path}",
             data=body,
             method="POST",
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.token}",
-            },
+            headers={"Content-Type": "application/json"},
         )
         with urllib.request.urlopen(request, timeout=timeout) as response:
             if response.status == 204:
@@ -103,7 +97,7 @@ class Runner:
 
     def __init__(self, config: Config) -> None:
         self.config = config
-        self.http = Transport(config.remote, config.token)
+        self.http = Transport(config.remote)
 
     # --- one job -----------------------------------------------------------
 
@@ -265,7 +259,7 @@ class Runner:
             except urllib.error.HTTPError as exc:
                 detail = exc.read().decode("utf-8", "replace")[:200]
                 if exc.code in (401, 403):
-                    _log(f"the container refused this token ({exc.code}): {detail}")
+                    _log(f"the container refused this runner ({exc.code}): {detail}")
                     return 1
                 _log(f"claim failed: {exc.code} {detail}")
                 job = None
@@ -299,16 +293,11 @@ class Runner:
 def from_env(args) -> Config | None:
     """Assemble the configuration, complaining about what is missing."""
     remote = args.remote or protocol.setting(protocol.RUNNER_REMOTE)
-    token = args.token or protocol.setting(protocol.RUNNER_TOKEN)
 
     problems = []
     if not remote:
         problems.append(
             f"  --remote https://<app>.up.railway.app  (or {protocol.RUNNER_REMOTE})"
-        )
-    if not token:
-        problems.append(
-            f"  --token <shared secret>                (or {protocol.RUNNER_TOKEN})"
         )
     if not args.indir.is_dir():
         problems.append(f"  -i {args.indir} is not a directory")
@@ -321,7 +310,6 @@ def from_env(args) -> Config | None:
 
     return Config(
         remote=remote,
-        token=token,
         inputs=args.indir.resolve(),
         outputs=args.outdir.resolve(),
         runner_name=args.name or socket.gethostname(),

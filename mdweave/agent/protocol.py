@@ -13,28 +13,28 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-# --- what the two credentials are called -----------------------------------
+# --- what the settings are called ------------------------------------------
 #
-# There are two secrets and they belong to two different holders, so they are
-# named after the holders: the *operator* is a person at a browser, the
-# *runner* is the process on the devserver. They were originally
-# MDWEAVE_AGENT_PASSWORD and MDWEAVE_AGENT_TOKEN, which read as a matched pair
-# and are not one -- and the first of those went by three names depending on
-# where you met it (a prompt said "agent key", the setting said "password",
-# the request header said neither). Two secrets are confusing enough.
+# There is one secret here, and it belongs to the person at the browser: the
+# operator key, which is what must be presented before a job may be queued.
+# The runner needs none -- see `is_runner_route` in serve.py for why its
+# endpoints are open and what that costs.
+#
+# There were briefly two, and the second was deleted rather than kept behind a
+# switch: an authentication path nobody exercises is a bug waiting to be found
+# the hard way, and two credentials for one feature is more to hold in your
+# head than the risk it was buying back.
 #
 # The old names still work. A deployment is a thing someone has already
 # configured, and renaming a variable should not be a way to take their site
 # down while they are not looking.
 
 OPERATOR_KEY = "MDWEAVE_OPERATOR_KEY"
-RUNNER_TOKEN = "MDWEAVE_RUNNER_TOKEN"
 RUNNER_REMOTE = "MDWEAVE_RUNNER_REMOTE"
 JOBS_STORE = "MDWEAVE_JOBS_STORE"
 
 SUPERSEDED = {
     OPERATOR_KEY: "MDWEAVE_AGENT_PASSWORD",
-    RUNNER_TOKEN: "MDWEAVE_AGENT_TOKEN",
     RUNNER_REMOTE: "MDWEAVE_AGENT_REMOTE",
     JOBS_STORE: "MDWEAVE_AGENT_STORE",
 }
@@ -72,6 +72,7 @@ def setting(name: str) -> str:
             flush=True,
         )
     return value
+
 
 ID_ALPHABET = string.ascii_lowercase + string.digits
 ID_LENGTH = 8
