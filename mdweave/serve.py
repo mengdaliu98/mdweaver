@@ -775,21 +775,6 @@ def credentials() -> tuple[str, str] | None:
     return os.environ.get("MDWEAVE_USER") or "mdweave", password
 
 
-def operator_key() -> str:
-    """The secret a person presents before a button may queue a job.
-
-    Queueing is the dangerous verb: a job runs a Claude session with whatever
-    permissions the runner was started with, which on a devserver is a great
-    deal more than editing prose. So reading the knowledge base and commanding
-    the machine that hosts it are two different credentials, and the weakest
-    place the reading one is ever typed does not set the risk for both.
-
-    Unset means the page's own password is the only gate, which is reasonable
-    on loopback and not what you want on a public URL.
-    """
-    return protocol.setting(protocol.OPERATOR_KEY)
-
-
 LOOPBACK = {"127.0.0.1", "::1", "localhost"}
 
 
@@ -867,29 +852,6 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
         return False
-
-    def _operator_allowed(self) -> bool:
-        """May this browser queue work on the devserver?
-
-        The one credential this feature adds, and the only one that matters:
-        queueing is what ends in a Claude session running commands on another
-        machine. Reading the notes must not be enough to do that.
-
-        Sent as a header rather than a second basic-auth realm, so the page can
-        ask for it once and keep it in `sessionStorage` without a login form
-        and without it ever appearing in a URL. A custom header is also most of
-        a CSRF defence on its own: a form on somebody else's site cannot set
-        one, and a `fetch` that tries forces a preflight this server does not
-        answer. That holds even if the value were public, which is why the
-        header and the secret are both worth having rather than either alone.
-        """
-        wanted = operator_key()
-        if not wanted:
-            return True  # not configured: the page's own password is the gate
-        offered = self.headers.get(protocol.OPERATOR_HEADER) or self.headers.get(
-            protocol.OPERATOR_HEADER_WAS, ""
-        )
-        return hmac.compare_digest(offered, wanted)
 
     def _broker(self):
         if self.jobs is None:
@@ -1042,8 +1004,6 @@ class Handler(SimpleHTTPRequestHandler):
         broker = self._broker()
         status = broker.status()
         status["actions"] = [a.to_dict() for a in agent_actions.load(self.workspace.inputs)]
-        status["needs_key"] = bool(operator_key())
-        status["authorised"] = self._operator_allowed()
 
         document = parse_qs(route.query).get("document", [""])[0]
         if document:
@@ -1491,12 +1451,11 @@ class Handler(SimpleHTTPRequestHandler):
             return HTTPStatus.OK, {"job": job.summary()}
 
         # --- the browser's side ---------------------------------------------
-        if not self._operator_allowed():
-            raise ApiError(
-                HTTPStatus.FORBIDDEN,
-                "queueing work on the devserver needs the agent key",
-            )
-
+        #
+        # Gated by the page password alone, which `do_POST` has already
+        # checked. That makes the page password an execute-code-here
+        # credential whenever a runner is connected -- see the bridge section
+        # of DEPLOY.md, where that is stated rather than left to be noticed.
         if path == "/api/agent/jobs":
             from .agent import actions as agent_actions
 

@@ -15,35 +15,29 @@ from datetime import datetime, timezone
 
 # --- what the settings are called ------------------------------------------
 #
-# There is one secret here, and it belongs to the person at the browser: the
-# operator key, which is what must be presented before a job may be queued.
-# The runner needs none -- see `is_runner_route` in serve.py for why its
-# endpoints are open and what that costs.
+# This feature adds no credential of its own. It did add two, and both were
+# deleted: a token for the runner, and an operator key for the browser.
 #
-# There were briefly two, and the second was deleted rather than kept behind a
-# switch: an authentication path nobody exercises is a bug waiting to be found
-# the hard way, and two credentials for one feature is more to hold in your
-# head than the risk it was buying back.
+# The operator key existed to stop a hostile page queueing a job with
+# credentials your browser attaches by itself. Requiring
+# `Content-Type: application/json` on every body ended that whole class more
+# cheaply -- a cross-site form cannot send it, and a script that tries forces
+# a preflight this server does not answer -- which left the key guarding only
+# "a leaked reading password is not also an execution one". A real property,
+# but not one worth a second secret on a personal knowledge base, and not one
+# that survives a page password written down somewhere anyway.
 #
 # The old names still work. A deployment is a thing someone has already
 # configured, and renaming a variable should not be a way to take their site
 # down while they are not looking.
 
-OPERATOR_KEY = "MDWEAVE_OPERATOR_KEY"
 RUNNER_REMOTE = "MDWEAVE_RUNNER_REMOTE"
 JOBS_STORE = "MDWEAVE_JOBS_STORE"
 
 SUPERSEDED = {
-    OPERATOR_KEY: "MDWEAVE_AGENT_PASSWORD",
     RUNNER_REMOTE: "MDWEAVE_AGENT_REMOTE",
     JOBS_STORE: "MDWEAVE_AGENT_STORE",
 }
-
-# The header the browser presents the operator key in. Both are accepted for
-# the same reason the variables are, and because a page cached in somebody's
-# tab is older than whatever the server is running.
-OPERATOR_HEADER = "X-Mdweave-Operator-Key"
-OPERATOR_HEADER_WAS = "X-Mdweave-Agent-Key"
 
 _warned: set[str] = set()
 

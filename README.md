@@ -417,40 +417,39 @@ here: the work is a language model editing files, so a redelivery is not a
 retry, it is a second and different edit. Press the button again if you meant
 to.
 
-**One secret, and it guards the one thing that matters.** Queueing is the
-dangerous verb: a session started with `--permission-mode bypassPermissions`
-can do whatever you can do on that devserver. So `MDWEAVE_OPERATOR_KEY` is
-asked for before the page will queue anything, and it is deliberately not the
-password that lets you read the notes — reading them should not be enough to
-run commands on the machine that hosts them.
+**No new secret, and one check doing the work.** Your existing
+`MDWEAVE_PASSWORD` gates the page, and that is the whole of the
+authentication. There is no separate key for the runner and none for you.
 
-**The runner's endpoints take no credential**, and that is a trade rather than
-an oversight. Claiming a job and reporting on it lead nowhere: a job can only
-be *queued* with the operator key, and can only run on a machine somebody has
-started a runner on. What it costs is that a stranger who found the URL could
-claim your jobs — reading the instruction text, and stopping your own runner
-from getting them. For a personal knowledge base whose prompts carry nothing
-confidential, that is a fair price for one fewer secret to hold, copy to the
-devserver, and restore after a reboot.
+The thing that makes that safe is one line: every request body must declare
+`Content-Type: application/json`. Without it, a hostile page you happened to
+visit could queue a job — browsers attach HTTP Basic credentials to *any*
+request to an origin they have them for, including one begun by somebody
+else's site, and there is no SameSite for Basic auth the way there is for
+cookies. A cross-site form cannot send that content type, and a script that
+tries forces a preflight this server does not answer. **That check is a
+security boundary, not tidiness.** Two credentials used to back it up and
+neither does now; removing it reopens the hole on its own.
 
-Worth knowing for a different reason: it means a stray POST from anything that
-scans the internet can eat a job. If a press ever does nothing at all and the
-log is silent, that is the shape of it.
+**So the page password is an execute-code-here credential** whenever a runner
+is connected. Anyone who can read your notes can also make a Claude session
+run on the devserver. That is the trade: one secret instead of three, and the
+reading password carries the weight of all of it. Set it to something long.
+Run the runner with `--permission-mode acceptEdits` if you would rather the
+sessions could write prose and not run commands.
 
-The operator key travels in a header rather than a form field, which is doing
-two jobs. HTTP Basic credentials are attached by the browser to *any* request
-to an origin it has them for, including one begun by somebody else's site, and
-there is no SameSite for Basic auth the way there is for cookies. A cross-site
-form cannot set a custom header, and a `fetch` that tries forces a preflight
-this server does not answer. Requests must also declare
-`Content-Type: application/json`, which a cross-site form cannot send either —
-that check is a security boundary, not tidiness, and removing it reopens the
-hole. See [DEPLOY.md](DEPLOY.md).
+The runner's own endpoints — claim, events, done, reconcile — take no
+credential at all. Collecting a job and reporting on it lead nowhere; what
+starts something is the POST above. The cost is that a stranger who found the
+URL could claim your jobs and read the instruction text, which for a personal
+knowledge base is a fair price for having nothing to copy to the devserver and
+nothing to restore after a reboot.
 
-`MDWEAVE_OPERATOR_KEY` was briefly `MDWEAVE_AGENT_PASSWORD`; the old name still
-works and says so once at startup. There was briefly a second credential for
-the runner, deleted rather than left behind a switch — an authentication path
-nobody exercises is a bug waiting to be found the hard way.
+There were briefly two secrets here, `MDWEAVE_AGENT_TOKEN` for the runner and
+`MDWEAVE_AGENT_PASSWORD` (later `MDWEAVE_OPERATOR_KEY`) for the browser. Both
+are gone. The first guarded nothing that led to execution; the second was
+made redundant by the content-type check, and an authentication path that is
+not load-bearing is a thing to maintain and explain rather than a defence.
 
 ## Adding comments in the browser
 

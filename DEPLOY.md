@@ -33,7 +33,6 @@ generated domain, so that is fine there; do not put this on plain HTTP.
 | `MDWEAVE_CONTENTS` | no | where the clone lives (default `/data/knowledge_base`) |
 | `GIT_AUTHOR_NAME` | no | what checkpoint commits are attributed to |
 | `GIT_AUTHOR_EMAIL` | no | " |
-| `MDWEAVE_OPERATOR_KEY` | no | the page asks for it before queueing an agent job |
 | `MDWEAVE_JOBS_STORE` | no | where the queue is mirrored (default `/data/agent-jobs.json`) |
 | `PORT` | no | Railway injects this |
 
@@ -94,14 +93,8 @@ process elsewhere can take it out. Nothing happens until you start a runner --
 until then the queue is inert and the button never appears. See the README for
 what it does and why it polls.
 
-```bash
-# The CLI is one way; the dashboard and the API are others. `openssl rand`
-# draws from the OS's cryptographic random source -- do not invent this.
-OPERATOR=$(openssl rand -hex 16); echo "type this into the page: $OPERATOR"
-railway variables --set MDWEAVE_OPERATOR_KEY="$OPERATOR"
-```
-
-Then, on the machine that has the checkouts and the Claude sessions:
+There is nothing to configure on Railway for it. On the machine that has
+the checkouts and the Claude sessions:
 
 ```bash
 mdweave agent --remote https://<app>.up.railway.app
@@ -112,25 +105,25 @@ pressed. `--once` takes a single job and exits.
 
 **What this actually grants.** A job runs `claude` on that machine with
 `--permission-mode bypassPermissions` — it can do anything you can do there.
-So `MDWEAVE_OPERATOR_KEY` is deliberately not the password that reads the
-notes: it is what a browser must present to queue anything, asked for once and
-kept in `sessionStorage` so it does not outlive the tab.
+Queueing one is gated by `MDWEAVE_PASSWORD` and nothing else, so:
 
-The runner's own endpoints — claim, events, done, reconcile — take no
-credential. Collecting a job and reporting on it lead nowhere; the endpoint
-that starts something is the one behind the key. The accepted cost is that a
-stranger who found the URL could claim your jobs and read the instruction
-text. Set `MDWEAVE_PASSWORD` to something strong and do not put anything
-confidential in a prompt.
+> **With a runner connected, the page password is a remote-code-execution
+> credential.** Anyone who can read your notes can run commands on the
+> devserver. Set it to something long, and do not reuse it.
 
-Neither is checked on the job's progress stream. `EventSource` cannot send a
-request header, and the alternatives are a secret in a URL or a cookie session
-this server does not have — so watching a job you already queued is treated as
-reading, which the page's own password already gates. What the key protects is
-the POST that starts something.
+`--permission-mode acceptEdits` on the runner narrows that if you would rather
+the sessions could write prose and not run commands.
 
-Set `--permission-mode acceptEdits` on the runner if that trade is not one you
-want; the sessions can still write prose and can no longer run commands.
+The one thing holding this up is that every request body must declare
+`Content-Type: application/json`. Browsers attach Basic credentials to
+cross-site requests, so without that check a page you merely visited could
+queue a job. A form cannot send that content type and a script that tries
+forces a preflight this server does not answer. Do not remove it to be
+helpful; there is no second credential behind it any more.
+
+The runner's endpoints — claim, events, done, reconcile — take no credential.
+The accepted cost is that a stranger who found the URL could claim your jobs
+and read the instruction text. Do not put anything confidential in a prompt.
 
 **Nothing about this is required.** Start no runner and the button never
 appears, because the page asks whether one is connected before it offers it.
@@ -169,21 +162,16 @@ If you have been starting it by hand, check before enabling the unit:
 pgrep -af 'mdweave agent'
 ```
 
-## Rotating the operator key
+## Rotating the password
 
 ```bash
-NEW=$(openssl rand -hex 16); echo "type this into the page: $NEW"
-railway variables --set MDWEAVE_OPERATOR_KEY="$NEW"     # or the dashboard
+railway variables --set MDWEAVE_PASSWORD="$(openssl rand -hex 16)"   # or the dashboard
 ```
 
-Railway redeploys and the old key stops working at once. Nothing else has to
-change: the runner never had a copy, and a browser holding the old one is
-refused, prompts you for a new one, retries, and remembers it. There is no
-cache to clear and no session to end.
-
-Worth doing if you ever typed it on a machine you do not control, since that
-key is what stands between a hostile webpage and a Claude session on your
-devserver.
+One password, so one thing to rotate. Railway redeploys and browsers are
+prompted again on their next request; the runner never had a copy of it and
+does not care. Worth doing if you ever typed it somewhere you do not control,
+because with a runner connected it is the credential that runs commands.
 
 ## Notes
 
