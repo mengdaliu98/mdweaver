@@ -135,6 +135,56 @@ want; the sessions can still write prose and can no longer run commands.
 **Nothing about this is required.** Start no runner and the button never
 appears, because the page asks whether one is connected before it offers it.
 
+## Operating the runner
+
+The runner is the one piece that does not live on Railway, so it is the one
+piece that has to be brought back by hand — unless something does it for you.
+`deploy/mdweave-agent.service` is a systemd *user* unit that does:
+
+```bash
+mkdir -p ~/.config/systemd/user ~/.local/var
+cp deploy/mdweave-agent.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now mdweave-agent
+loginctl enable-linger "$USER"      # so it survives logout and starts at boot
+```
+
+After that a drain, a reboot or a crash brings it back on its own; `Restart=always`
+with a ten second pause covers the case where the container is mid-deploy and
+briefly refusing.
+
+```bash
+systemctl --user status mdweave-agent      # is it up
+systemctl --user restart mdweave-agent     # after pulling new code
+journalctl --user -u mdweave-agent -f      # or: tail -f ~/.local/var/mdweave-agent.log
+```
+
+**Exactly one runner per knowledge base.** Two race for every job and whichever
+claims first wins, silently — the other never sees it. Hand-started daemons
+make this easy to get wrong, because stopping a terminal does not stop a
+`setsid` process; the unit is the fix, since systemd will not run two copies.
+If you have been starting it by hand, check before enabling the unit:
+
+```bash
+pgrep -af 'mdweave agent'
+```
+
+## Rotating the operator key
+
+```bash
+NEW=$(openssl rand -hex 16); echo "type this into the page: $NEW"
+railway variables --set MDWEAVE_OPERATOR_KEY="$NEW"     # or the dashboard
+```
+
+Railway redeploys and the old key stops working at once. Nothing else has to
+change: the runner never had a copy, and a browser holding the old one is
+refused, prompts you for a new one, retries, and remembers it. There is no
+cache to clear and no session to end.
+
+Worth doing if you ever typed it on a machine you do not control, since that
+key is what stands between a hostile webpage and a Claude session on your
+devserver.
+
 ## Notes
 
 - The clone is `--depth 1`. Checkpoint pushes the current branch, which is what

@@ -1,0 +1,27 @@
+[Unit]
+# The devserver half of the mdweave agent bridge: asks the deployed site for
+# work and runs Claude sessions here. Needs no credential -- see DEPLOY.md.
+Description=mdweave agent (runs Claude sessions for the deployed knowledge base)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/home/mengda/.local/bin/mdweave agent --remote https://mdweave-production.up.railway.app
+
+# The whole design assumes exactly one runner per knowledge base: two would
+# race for every job, and whichever claimed first would win silently.
+# systemd enforces that here, which hand-started daemons did not.
+Restart=always
+RestartSec=10
+
+# A drain, a reboot, a crash mid-turn: the job it was holding stalls after its
+# lease and the page says so. Nothing is retried, on purpose.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+StandardOutput=append:%h/.local/var/mdweave-agent.log
+StandardError=append:%h/.local/var/mdweave-agent.log
+
+[Install]
+WantedBy=default.target
