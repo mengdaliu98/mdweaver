@@ -351,3 +351,59 @@ def test_the_theme_travels_with_the_documents(served):
         "active": "Ink", "schemes": [DEFAULT_SCHEME.to_dict(), INK.to_dict()]
     })
     assert (workspace.inputs / schemes.THEME_FILE).exists()
+
+
+# --- the build and the server have to agree ---------------------------------
+
+def test_building_keeps_the_readers_scheme(tmp_path):
+    """Reported as two tabs on one URL showing different colours.
+
+    `write_assets` took the scheme as an optional argument defaulting to the
+    shipped palette, and `mdweave build` -- which runs on every `start` and
+    every container boot -- did not pass one. So a boot wrote the default
+    colours over the reader's scheme, and the page stayed that way until the
+    server rebuilt for some unrelated reason and wrote the right ones back.
+    Whichever had happened more recently is what a tab got.
+    """
+    import argparse
+    from mdweave.cli import cmd_build
+
+    inputs, outputs = tmp_path / "markdown_inputs", tmp_path / "html_outputs"
+    inputs.mkdir()
+    (inputs / "doc.md").write_text("# Doc\n\nSome prose.\n", encoding="utf-8")
+    schemes.save(inputs, Theme(schemes=[DEFAULT_SCHEME, INK], active="Ink"))
+
+    assert cmd_build(argparse.Namespace(input=inputs, outdir=outputs, strict=False)) == 0
+
+    css = (outputs / "assets" / "mdweave.css").read_text(encoding="utf-8")
+    assert "--hl-c1-bg: rgb(122 59 59)" in css, "the build reverted to the default palette"
+    assert "--paper: rgb(16 16 20)" in css
+
+
+def test_the_build_and_the_server_write_the_same_stylesheet(tmp_path):
+    """Two writers, one file, one URL. Any disagreement between them is a page
+    whose colours depend on which ran last."""
+    import argparse
+    from mdweave.cli import cmd_build
+
+    inputs = tmp_path / "markdown_inputs"
+    inputs.mkdir()
+    (inputs / "doc.md").write_text("# Doc\n\nSome prose.\n", encoding="utf-8")
+    schemes.save(inputs, Theme(schemes=[DEFAULT_SCHEME, INK], active="Ink"))
+
+    built, served = tmp_path / "built", tmp_path / "served"
+    cmd_build(argparse.Namespace(input=inputs, outdir=built, strict=False))
+    Workspace(inputs=inputs, outputs=served).rebuild_all()
+
+    assert (built / "assets" / "mdweave.css").read_text(encoding="utf-8") \
+        == (served / "assets" / "mdweave.css").read_text(encoding="utf-8")
+
+
+def test_the_scheme_is_not_optional():
+    """It was, and the default was the shipped palette, which is why the bug
+    above was silent rather than a traceback."""
+    import inspect
+    from mdweave.render import write_assets
+
+    assert inspect.signature(write_assets).parameters["scheme"].default \
+        is inspect.Parameter.empty
