@@ -1,13 +1,23 @@
 [Unit]
 # The devserver half of the mdweave agent bridge: asks the deployed site for
 # work and runs Claude sessions here. Needs no credential -- see DEPLOY.md.
+#
+# This file is the one copy. Install it by *linking* rather than copying, so
+# a change here reaches every machine on the next `git pull`:
+#
+#   ln -sfn "$PWD/deploy/mdweave-agent.service" \
+#           ~/.config/systemd/user/mdweave-agent.service
+#   systemctl --user daemon-reload && systemctl --user enable --now mdweave-agent
+#   loginctl enable-linger "$USER"
 Description=mdweave agent (runs Claude sessions for the deployed knowledge base)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/home/mengda/.local/bin/mdweave agent --remote https://mdweave-production.up.railway.app
+# %h is systemd's specifier for this user's home, so the unit carries to
+# another machine unchanged -- the README's setup puts mdweave there.
+ExecStart=%h/.local/bin/mdweave agent --remote https://mdweave-production.up.railway.app
 
 # The whole design assumes exactly one runner per knowledge base: two would
 # race for every job, and whichever claimed first would win silently.

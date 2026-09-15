@@ -132,19 +132,30 @@ appears, because the page asks whether one is connected before it offers it.
 
 The runner is the one piece that does not live on Railway, so it is the one
 piece that has to be brought back by hand — unless something does it for you.
-`deploy/mdweave-agent.service` is a systemd *user* unit that does:
+`deploy/mdweave-agent.service` is a systemd *user* unit. Link it rather than
+copy it, so the repository stays the one copy and a change reaches every
+machine on the next `git pull`:
 
 ```bash
 mkdir -p ~/.config/systemd/user ~/.local/var
-cp deploy/mdweave-agent.service ~/.config/systemd/user/
+ln -sfn "$PWD/deploy/mdweave-agent.service" ~/.config/systemd/user/mdweave-agent.service
 systemctl --user daemon-reload
 systemctl --user enable --now mdweave-agent
 loginctl enable-linger "$USER"      # so it survives logout and starts at boot
 ```
 
+`loginctl enable-linger` is the load-bearing line for "survives a restart".
+Without it a user unit does not start until you log in, which on a box you
+reach over SSH after a drain is not the same thing as starting at boot.
+
+The unit names no machine: `%h` is systemd's specifier for the user's home, so
+it finds `mdweave` wherever the README's setup put it. Only the link is
+per-machine, and making it is the install.
+
 After that a drain, a reboot or a crash brings it back on its own; `Restart=always`
 with a ten second pause covers the case where the container is mid-deploy and
-briefly refusing.
+briefly refusing. Editing the unit means editing it in the repo and then
+`systemctl --user daemon-reload`.
 
 ```bash
 systemctl --user status mdweave-agent      # is it up
