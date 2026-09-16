@@ -51,8 +51,16 @@ def block_source(markdown: str, line: int, end: int) -> str:
 
     Trailing blank lines are trimmed: markdown-it hands a list the blank line
     that terminates it, and showing that in an editor is just noise.
+
+    An empty range -- `line == end` -- is a block that does not exist yet:
+    what the "start writing" box on an empty document names, so that opening
+    it and saving it are the same two calls as any other block. There is
+    nothing to return, and nothing wrong. `replace_block` already writes into
+    an empty range by inserting, so only the read needed to agree.
     """
     lines = markdown.splitlines()
+    if line == end and 0 <= line <= len(lines):
+        return ""
     if not 0 <= line < len(lines) or end <= line:
         raise IndexError(f"no block at lines {line}-{end}")
     return "\n".join(lines[line:end]).rstrip("\n")

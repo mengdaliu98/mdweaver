@@ -77,6 +77,15 @@
     <div class="page">
       <article class="doc" id="doc">
 {{ body | safe }}
+{%- if start_at is not none %}
+        {# An empty document. `data-src-start` == `data-src-end` is an empty
+           range at the end of the file, which the block editor already knows
+           how to write into -- so this needs no endpoint of its own. #}
+        <button type="button" class="doc__start" id="doc-start"
+                data-src-start="{{ start_at }}" data-src-end="{{ start_at }}">
+          Start writing…
+        </button>
+{%- endif %}
       </article>
 
       <aside class="notes-layer" id="notes-layer" aria-label="Comments">

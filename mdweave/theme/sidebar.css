@@ -91,7 +91,12 @@ body.sidebar-resizing {
   overscroll-behavior: contain;
   padding: 0 0 2rem;
   background: var(--sidebar-bg);
-  border-right: 1px solid var(--rule);
+  /* No rule down the right-hand edge. The open document's row is painted in
+     the page's own colour so it reads as continuous with the prose, and a 1px
+     line is enough to break that -- the row stopped one pixel short and the
+     gap showed the panel through it. A child cannot paint over an ancestor's
+     border, so the border is what had to go; #D1C7B7 against #F2EFE4 is its
+     own edge everywhere else. */
   font-size: 0.82rem;
   line-height: 1.4;
   user-select: none;

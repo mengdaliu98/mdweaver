@@ -274,8 +274,25 @@ def test_get_block_hands_back_the_markdown(server):
 
 def test_get_block_rejects_a_bad_range(server):
     base, _ = server
-    assert call(base, "GET", "/api/block?document=doc&start=5&end=5")[0] == 400
+    assert call(base, "GET", "/api/block?document=doc&start=4&end=2")[0] == 400
+    assert call(base, "GET", "/api/block?document=doc&start=-1&end=2")[0] == 400
     assert call(base, "GET", "/api/block?document=doc&start=x&end=4")[0] == 400
+
+
+def test_an_empty_range_is_an_append_point_not_a_bad_one(server):
+    """`start == end` names a block that does not exist yet -- what the "start
+    writing" box on an empty document points at. Reading it gives nothing,
+    which is the truth, and writing it inserts."""
+    base, workspace = server
+    lines = len(workspace.source_of("doc").splitlines())
+
+    status, payload = call(base, "GET", f"/api/block?document=doc&start={lines}&end={lines}")
+    assert status == 200 and payload["markdown"] == ""
+
+    status, _ = call(base, "POST", "/api/block",
+                     {"document": "doc", "start": lines, "end": lines, "text": "Appended."})
+    assert status == 200
+    assert workspace.source_of("doc").rstrip().endswith("Appended.")
 
 
 def test_get_block_rejects_an_unknown_document(server):

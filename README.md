@@ -102,8 +102,8 @@ empty space below the tree to bring it back out to the top level, or between
 two rows to put it exactly there. A document's id is its path, so moving it
 renames it: the `.md`, its `.ann.json`, and its generated `.html` all travel
 together, and the page at the old address is removed rather than left to serve
-a document that has gone. Renaming from the pencil is the same operation, and
-keeps the row's position rather than sending it to the bottom of the folder.
+a document that has gone. Dragging is the only thing that moves a document
+now; the pencil names the row instead — see below.
 
 Order is not a property of the filesystem, so it is written down:
 `markdown_inputs/.mdweave-order.json` maps a folder path — `""` for the root —
@@ -137,8 +137,9 @@ hyphens become spaces, the first letter goes up, and the rest goes down.
 
 The last row is the cost of the rule: an acronym in a *filename* loses its
 capitals, because nothing distinguishes it from an ordinary word. The document
-keeps whatever title its own `# heading` gives it. `humanize` in
-`mdweave/tree.py` is the one place to change if that trade stops being worth it.
+keeps whatever title its own `# heading` gives it. That is a default rather
+than a verdict — the pencil overrides any of it, see **Naming a row** below —
+and `humanize` in `mdweave/tree.py` is where the rule itself lives.
 
 **Folders.** The `+`-in-a-folder button makes one: on a folder row it nests
 inside, on the strip below the tree it lands at the top level — which is the
@@ -148,7 +149,27 @@ anything into. Renaming a folder carries every document under it, and so
 changes their ids; deleting one refuses unless it is empty or the request says
 `recursive`.
 
-**A name is a name, not a path.** The prompts ask for one name, so a `/` in
+**Naming a row.** The pencil edits the *caption*, not the filename. The box
+opens on what you can see — `Ome zarr layout planner` — and whatever you type
+is stored literally, in `markdown_inputs/.mdweave-labels.json`, keyed by
+document id or folder path.
+
+That file holds only the exceptions. `humanize` still answers for everything
+not in it, so nothing has to be seeded and a caption typed back to what the
+heuristic would produce is removed rather than written. The heuristic is a
+good rule — `system_for_bio_literature_research` really is "System for bio
+literature research" — but it flattens every hyphen and underscore to a space
+and lowercases the rest, and it cannot know when the punctuation mattered.
+`Ome-Zarr`, or a date like `AI Career Research 2026-09-06`, are only reachable
+this way.
+
+The file keeps its name, which is the point: the id is the path, and ids are
+what links, pages, sidecars and annotations all hang off. A caption can be
+anything, including a slash, because it never becomes one. Labels follow a
+document or folder through a move — everything underneath it too — and are
+forgotten when the row is deleted.
+
+**A new name is a path, though.** The prompts ask for one name, so a `/` in
 what you type is escaped rather than obeyed: `Research/Papers` makes a single
 folder, `Research_Papers`. Where it goes is the row the button hangs off, and
 never something you typed. Typing a slash used to answer `unknown folder:
@@ -164,7 +185,9 @@ its faint end reads muddy rather than quiet, so hierarchy here is weight and
 indentation instead. The row for the document on screen is painted in
 `--paper`, the pane's own colour, so the panel reads as having a piece cut out
 of it — it is the only light shape on a darker panel and needs no accent to be
-found. They are deliberately
+found. The panel carries no rule down its right-hand edge, so that row runs
+into the prose with no seam; a child cannot paint over an ancestor's border,
+so the border is what had to go. They are deliberately
 not `--surface`, which is still white: that token is also the colour of the
 text on a dark chip and the fill of the floating re-open button, neither of
 which wants warm paper. Code blocks, table heads and hairlines were warmed to
@@ -206,8 +229,24 @@ filename, and the `document` field the API takes.
 
 ## Editing the prose in the browser
 
-Click a paragraph and it becomes a small box holding *its own* markdown —
-just that block. Click away and it turns back into rendered prose. The rest of
+**Double click** a paragraph, or press and hold it, and it becomes a small
+box holding *its own* markdown — just that block. Click away and it turns back
+into rendered prose.
+
+It used to be a single click, and that was wrong: a click is what you do on
+the way to almost everything else here — placing a cursor, dismissing a note,
+starting a selection that ends up empty because the drag was a pixel wide.
+Every one of those opened an editor nobody asked for, and the way out was to
+click away again. A double click is never accidental, and a long press is the
+same intent with a finger. A press that moves more than a few pixels is a
+selection and cancels the hold, because selecting is the gesture this most has
+to stay out of the way of.
+
+A document with nothing in it but its heading gets a **Start writing…** box
+underneath, which opens on a single click — it is a control whose only purpose
+is to be pressed, so a click there cannot mean anything else. Before it, the
+only way into an empty document was to open the heading and type past it,
+which nobody guesses. The rest of
 the page never changes, and at no point are you looking at a screen of raw
 markdown. Headings, lists, quotes, tables and code blocks all work the same
 way. `Esc` abandons the edit; `Cmd-Enter` saves without moving the mouse.
@@ -460,12 +499,14 @@ nothing to type and so skips the composer entirely; a comment opens one,
 already in the colour you picked.
 
 Pressing a colour means *make this selection that colour*, whatever is already
-underneath — so re-colouring a highlight, or painting over a patch of mixed
-ones, both leave a single clean highlight. The one exception is a selection
-that is already entirely and only that colour, where a second press is the
-only gesture that could mean anything else: it takes the highlight off.
-Whitespace does not count against "entirely", so two highlights either side of
-a space still cover the phrase they spell out.
+underneath, with no exceptions — so re-colouring a highlight, or painting over
+a patch of mixed ones, both leave a single clean highlight.
+
+Removing one is the **eraser** at the end of the Highlight row. It used to be
+a second press of the colour the text already was, which made one gesture mean
+two things depending on state the reader could not reliably see: press a
+colour on text that happened to be it and the highlight vanished. A press
+paints; the eraser erases.
 
 Text carrying a **comment** is never absorbed — its highlight is the handle for
 a thread, and no colour press should mean *delete that*. Recolour it from its

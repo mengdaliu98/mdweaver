@@ -196,19 +196,36 @@
     '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">' +
     '<path fill="currentColor" d="M10.6 1.9 14.1 5.4 7.4 12.1H3.9V8.6zM2.4 13.4h11.2v1.4H2.4z"/></svg>';
 
+  /* The eraser. Highlights used to be removed by pressing the colour they
+   * already were, which meant a colour press had to first work out what was
+   * underneath -- and a press that looked like "make this blue" sometimes
+   * meant "make this nothing". A press now always paints, whatever is there,
+   * and taking a highlight off has its own button. */
+  var ERASER_ICON =
+    '<svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true">' +
+    '<path fill="currentColor" d="M9.1 2.2 14 7.1a1.1 1.1 0 0 1 0 1.6l-4.3 4.3H13v1.3H6.6l-4.3-4.3a1.1 1.1 0 0 1 0-1.6l5.2-5.2a1.1 1.1 0 0 1 1.6 0ZM4.6 8.7l3.1 3.1 1.2-1.2-3.1-3.1z"/></svg>';
+
   function toolbarRow(kind, icon, label) {
     var dots = COLORS.map(function (color) {
       return (
         '<button type="button" class="selection-toolbar__swatch swatch swatch--' + color +
         '" data-kind="' + kind + '" data-color="' + color + '"' +
-        ' title="' + label + " in " + color + '"' +
-        ' aria-label="' + label + " in " + color + '"></button>'
+        ' title="' + label + " in " + paletteName(color).toLowerCase() + '"' +
+        ' aria-label="' + label + " in " + paletteName(color) + '"></button>'
       );
     }).join("");
+    // Only on the highlight row: a comment's colour is chosen when it is
+    // written, and there is nothing to erase before it exists.
+    var eraser =
+      kind === "highlight"
+        ? '<button type="button" class="selection-toolbar__swatch selection-toolbar__eraser"' +
+          ' data-kind="erase" title="Remove highlighting"' +
+          ' aria-label="Remove highlighting">' + ERASER_ICON + "</button>"
+        : "";
     return (
       '<div class="selection-toolbar__row" role="group" aria-label="' + label + '">' +
       '<span class="selection-toolbar__what">' + icon + " " + label + "</span>" +
-      '<span class="selection-toolbar__swatches">' + dots + "</span></div>"
+      '<span class="selection-toolbar__swatches">' + dots + eraser + "</span></div>"
     );
   }
 
@@ -723,6 +740,12 @@
     // be mistaken for this one's anchor.
     closeComposer();
 
+    if (swatch.dataset.kind === "erase") {
+      selection.removeAllRanges();
+      eraseHighlight(selector);
+      return;
+    }
+
     if (swatch.dataset.kind === "highlight") {
       selection.removeAllRanges();
       saveHighlight(selector, color);
@@ -736,6 +759,38 @@
     selection.removeAllRanges();
     openComposer(selector, color);
   });
+
+  /* Take the highlighting off a selection. A comment's highlight is left
+   * alone: it is the handle for a thread, and no gesture in this toolbar
+   * should delete a conversation. */
+  function eraseHighlight(selector) {
+    fetch(API + "/erase", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        document: DOC_ID,
+        quote: selector.quote,
+        prefix: selector.prefix,
+        suffix: selector.suffix,
+        occurrence: selector.occurrence,
+      }),
+    })
+      .then(function (response) {
+        if (!response.ok) return reject(response);
+        return response.json();
+      })
+      .then(function (data) {
+        var gone = data.cleared || [];
+        if (!gone.length) {
+          toast("Nothing to remove in that selection.", "warn");
+          return;
+        }
+        gone.forEach(unwrapAnnotation);
+      })
+      .catch(function (error) {
+        toast(error.message, "error");
+      });
+  }
 
   /* A highlight has nothing to type, so there is no composer step: the click
    * that chose the colour is the whole interaction. */

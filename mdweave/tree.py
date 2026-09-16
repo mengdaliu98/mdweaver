@@ -18,6 +18,45 @@ from pathlib import Path
 # never sees it: it only looks at `*.md`, and skips dotted paths on top of that.
 ORDER_FILE = ".mdweave-order.json"
 
+# Labels the reader has written by hand, keyed by document id or folder path.
+# `humanize` is a heuristic and a good one, but it is wrong wherever the
+# punctuation was meaningful -- Ome-Zarr, a date in a filename -- and it has no
+# way to know. This is where the exceptions live, so the rule can stay simple.
+LABELS_FILE = ".mdweave-labels.json"
+
+
+def load_labels(root: Path) -> dict[str, str]:
+    """Hand-written labels, keyed by document id or folder path.
+
+    Same failure policy as the order file: missing, unreadable or mangled all
+    mean "no labels", because a broken dotfile must cost a caption and never a
+    document.
+    """
+    try:
+        data = json.loads((root / LABELS_FILE).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {
+        str(key): value.strip()
+        for key, value in data.items()
+        if isinstance(value, str) and value.strip()
+    }
+
+
+def save_labels(root: Path, labels: dict[str, str]) -> None:
+    """Write the labels back, or remove the file once none are left."""
+    path = root / LABELS_FILE
+    trimmed = {key: value for key, value in labels.items() if value.strip()}
+    if not trimmed:
+        path.unlink(missing_ok=True)
+        return
+    root.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(trimmed, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
 
 def humanize(name: str) -> str:
     """Turn a file or folder name into a readable label.
@@ -161,6 +200,7 @@ def build_tree(
     doc_ids: list[str],
     order: dict[str, list[str]] | None = None,
     folders: list[str] | None = None,
+    labels: dict[str, str] | None = None,
 ) -> list[Node]:
     """Assemble a nested tree from flat document ids.
 
@@ -168,6 +208,10 @@ def build_tree(
     them. Without it a freshly made folder is invisible until it holds a
     document -- and since the only way to put one there is to drag it onto the
     row, it would never hold one.
+
+    `labels` overrides what a row is called, by id for a document and by path
+    for a folder. `humanize` still answers for everything not listed, so the
+    file only ever holds the exceptions.
     """
     root = Node(name="", label="", is_dir=True)
 
@@ -182,9 +226,10 @@ def build_tree(
                 None,
             )
             if match is None:
+                here = "/".join(parts[: depth + 1])
                 match = Node(
                     name=part,
-                    label=humanize(part),
+                    label=(labels or {}).get(here) or humanize(part),
                     is_dir=not is_file,
                     doc_id=doc_id if is_file else None,
                 )
@@ -193,14 +238,19 @@ def build_tree(
 
     for folder in sorted(folders or []):
         cursor = root
+        seen: list[str] = []
         for part in folder.split("/"):
             if not part:
                 continue
+            seen.append(part)
             match = next(
                 (c for c in cursor.children if c.name == part and c.is_dir), None
             )
             if match is None:
-                match = Node(name=part, label=humanize(part), is_dir=True)
+                here = "/".join(seen)
+                match = Node(
+                    name=part, label=(labels or {}).get(here) or humanize(part), is_dir=True
+                )
                 cursor.children.append(match)
             cursor = match
 

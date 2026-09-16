@@ -46,6 +46,8 @@ from .tree import (
     document_ids,
     folder_paths,
     humanize,
+    load_labels,
+    save_labels,
     load_order,
     safe_document_name,
     safe_folder_name,
@@ -159,6 +161,56 @@ class Workspace:
 
     def write_theme(self, theme: schemes.Theme) -> None:
         schemes.save(self.inputs, theme)
+
+    def label_of(self, key: str, fallback_name: str) -> str:
+        """What a row is called: the reader's word for it, or the heuristic."""
+        return load_labels(self.inputs).get(key) or humanize(fallback_name)
+
+    def set_label(self, key: str, label: str) -> str:
+        """Record what a row should be called, or forget a previous answer.
+
+        Stored literally. The whole reason this exists is that `humanize` has
+        no way to know when punctuation mattered -- Ome-Zarr, a date in a
+        filename -- so whatever is typed is kept exactly, including the case
+        and the hyphens the heuristic would have eaten.
+
+        A label equal to what the heuristic would produce is removed rather
+        than written, so the file stays a list of exceptions and a renamed
+        file goes back to following the rule.
+        """
+        label = " ".join(label.split())
+        if not label:
+            raise ApiError(HTTPStatus.BAD_REQUEST, "a name cannot be empty")
+
+        leaf = key.rpartition("/")[2]
+        labels = load_labels(self.inputs)
+        if label == humanize(leaf):
+            labels.pop(key, None)
+        else:
+            labels[key] = label
+        save_labels(self.inputs, labels)
+        return label
+
+    def move_labels(self, old: str, new: str) -> None:
+        """Carry labels across a move, for the row and everything under it."""
+        labels = load_labels(self.inputs)
+        moved = {}
+        for key, value in labels.items():
+            if key == old:
+                moved[new] = value
+            elif key.startswith(f"{old}/"):
+                moved[new + key[len(old):]] = value
+            else:
+                moved[key] = value
+        if moved != labels:
+            save_labels(self.inputs, moved)
+
+    def forget_label(self, key: str) -> None:
+        labels = load_labels(self.inputs)
+        gone = {k: v for k, v in labels.items()
+                if k != key and not k.startswith(f"{key}/")}
+        if gone != labels:
+            save_labels(self.inputs, gone)
 
     def remap_slots(self, moved: list[int]) -> int:
         """Renumber every annotation so a reordered scheme looks unchanged.
@@ -274,6 +326,7 @@ class Workspace:
             list(self.documents()),
             load_order(self.inputs),
             [f for f in self.folders() if f],
+            load_labels(self.inputs),
         )
 
     def write_html(self, doc_id: str, annotations: list[Annotation], tree=None):
@@ -438,6 +491,7 @@ class Workspace:
         (self.outputs / f"{doc_id}.html").unlink(missing_ok=True)
 
         self._reindex(doc_id, new_id)
+        self.move_labels(doc_id, new_id)
         return new_id
 
     def delete_document(self, doc_id: str) -> None:
@@ -452,6 +506,7 @@ class Workspace:
         (self.outputs / f"{doc_id}.html").unlink(missing_ok=True)
 
         self._reindex(doc_id, None)
+        self.forget_label(doc_id)
 
     # --- folders ----------------------------------------------------------
 
@@ -508,6 +563,7 @@ class Workspace:
             (self.outputs / f"{doc_id}.html").unlink(missing_ok=True)
 
         self._reindex_folder(folder, new_id)
+        self.move_labels(folder, new_id)
         return new_id
 
     def delete_folder(self, folder: str, recursive: bool) -> int:
@@ -687,16 +743,17 @@ class Workspace:
         return found, index
 
     def apply_highlight(self, doc_id: str, target: TextTarget, color: int) -> dict:
-        """Paint a selection, or -- if it is already exactly this colour -- clear it.
+        """Paint a selection. One rule, no exceptions.
 
-        One rule underneath all the cases: picking a colour means "make the
-        whole selection this colour", except when the selection is *already*
-        entirely and only this colour, which is the only reading of a second
-        press that is not a no-op.
+        Picking a colour means "make the whole selection this colour",
+        whatever is underneath -- so re-colouring part of a highlight, or a
+        patch of mixed colours, both end up as one clean highlight.
 
-        Anything highlighted underneath is absorbed, so re-colouring part of a
-        highlight, or a patch of mixed colours, both end up with one clean
-        highlight over the selection.
+        It used to also *clear*, when the selection was already entirely and
+        only the colour pressed. That made a press ambiguous: the same gesture
+        painted or erased depending on state the reader could not reliably
+        see, and pressing a colour by accident on already-coloured text took
+        the highlight off. Erasing is its own button now -- `erase_highlight`.
         """
         placed, index = self.spans_in(doc_id)
         span = index.find(target)
@@ -719,18 +776,8 @@ class Workspace:
                 "that text carries a comment — change its colour from its own card",
             )
 
-        same = [a for a, _ in touching if a.slot == color]
-        clearing = (
-            bool(touching)
-            and len(same) == len(touching)
-            and _covers(span, [where for _, where in touching], index.text)
-        )
-
         absorbed = {a.id for a, _ in touching}
         keep = [a for a in self.annotations_for(doc_id) if a.id not in absorbed]
-        if clearing:
-            self.save(doc_id, keep)
-            return {"cleared": [a.id for a, _ in touching]}
 
         fresh = Annotation(
             id=self.new_id({a.id for a in self.annotations_for(doc_id)} | absorbed),
@@ -750,6 +797,32 @@ class Workspace:
             "annotation": fresh.to_dict(),
             "replaced": [a.id for a, _ in touching],
         }
+
+    def erase_highlight(self, doc_id: str, target: TextTarget) -> dict:
+        """Take the highlighting off a selection, whatever colours it had.
+
+        The counterpart to a colour press, and the reason a press can be
+        unconditional. Comments are left where they are: their highlight is
+        the handle for a thread, and an eraser aimed at colour should not
+        delete a conversation. Removing one is what its own card is for.
+        """
+        placed, index = self.spans_in(doc_id)
+        span = index.find(target)
+        if span is None:
+            raise ApiError(
+                HTTPStatus.CONFLICT, f"could not anchor the selection: {target.quote!r}"
+            )
+
+        touching = [
+            a for a, where in placed
+            if where[0] < span[1] and span[0] < where[1] and not a.has_card
+        ]
+        if not touching:
+            return {"cleared": []}
+
+        gone = {a.id for a in touching}
+        self.save(doc_id, [a for a in self.annotations_for(doc_id) if a.id not in gone])
+        return {"cleared": sorted(gone)}
 
     def check_anchors(self, doc_id: str, annotations: list[Annotation]) -> dict[str, str]:
         """Render without saving; report which annotations fail to anchor."""
@@ -1115,6 +1188,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self._api_delete_document()
         if route.path == "/api/tree/order":
             return self._api_order()
+        if route.path == "/api/tree/label":
+            return self._api_label()
         if route.path == "/api/block":
             return self._api_block()
         if route.path == "/api/cut":
@@ -1129,6 +1204,20 @@ class Handler(SimpleHTTPRequestHandler):
             return self._api_schemes()
         if route.path.startswith("/api/agent/"):
             return self._api_agent(route.path)
+        if route.path == "/api/annotations/erase":
+            payload = self._json_body()
+            doc_id = _require(payload, "document")
+            self.workspace.markdown_for(doc_id)  # 404s an unknown document
+            return HTTPStatus.OK, self.workspace.erase_highlight(
+                doc_id,
+                TextTarget(
+                    quote=_require(payload, "quote"),
+                    prefix=str(payload.get("prefix", "")),
+                    suffix=str(payload.get("suffix", "")),
+                    occurrence=int(payload.get("occurrence", 0)),
+                ),
+            )
+
         if route.path != "/api/annotations":
             raise ApiError(HTTPStatus.NOT_FOUND, f"no such endpoint: {route.path}")
 
@@ -1150,9 +1239,9 @@ class Handler(SimpleHTTPRequestHandler):
             occurrence=int(payload.get("occurrence", 0)),
         )
 
-        # A highlight goes through the painting rule rather than being appended:
-        # a colour pressed over an existing highlight means recolour it, or --
-        # when it is already exactly that colour -- take it off.
+        # A highlight goes through the painting rule rather than being
+        # appended: a colour pressed over an existing highlight recolours it,
+        # unconditionally. Taking one off is /api/annotations/erase.
         if kind == "highlight":
             return HTTPStatus.OK, self.workspace.apply_highlight(
                 doc_id, target, _parse_color(payload.get("color", DEFAULT_COLOR))
@@ -1261,6 +1350,29 @@ class Handler(SimpleHTTPRequestHandler):
         )
         self.workspace.rebuild_tree({doc_id})
         return HTTPStatus.OK, _with_panel(self, payload, _described(doc_id))
+
+    def _api_label(self):
+        """Name a row. The file on disk keeps the name it has.
+
+        Renaming used to move the file, which made the caption and the id one
+        thing -- so a label the heuristic could not produce was unreachable
+        without a filename nobody wanted. They are separate now: the id stays
+        stable (links, pages and annotations all hang off it) and the caption
+        is whatever was typed. Moving a document is still a move.
+        """
+        payload = self._json_body()
+        key = _require(payload, "key")
+        kind = payload.get("kind", "document")
+
+        # Looked up, never joined -- the same guard every other write uses.
+        if kind == "folder":
+            self.workspace.folder_for(key)
+        else:
+            self.workspace.markdown_for(key)
+
+        label = self.workspace.set_label(key, _require(payload, "label"))
+        self.workspace.rebuild_tree()
+        return HTTPStatus.OK, _with_panel(self, payload, {"key": key, "label": label})
 
     def _api_delete_document(self):
         """Throw a document away -- the prose, its annotations, and its page."""
@@ -1611,7 +1723,10 @@ class Handler(SimpleHTTPRequestHandler):
             end = int(self._query(route, "end"))
         except ValueError:
             raise ApiError(HTTPStatus.BAD_REQUEST, "start and end must be integers")
-        if line < 0 or end <= line:
+        # `end == line` is allowed: an empty range at the end of the file is
+        # the append point the "start writing" box names, and the read and the
+        # write both understand it.
+        if line < 0 or end < line:
             raise ApiError(HTTPStatus.BAD_REQUEST, f"bad line range {line}-{end}")
         return line, end
 
@@ -1792,8 +1907,10 @@ def _spans(payload: dict, key: str, make) -> list:
 
 
 def _line_range(payload: dict) -> tuple[int, int]:
+    # An empty range inserts rather than replaces -- see `block_source`. It is
+    # how the "start writing" box on an empty document writes its first block.
     line, end = _int_field(payload, "start"), _int_field(payload, "end")
-    if end <= line:
+    if end < line:
         raise ApiError(HTTPStatus.BAD_REQUEST, f"bad line range {line}-{end}")
     return line, end
 

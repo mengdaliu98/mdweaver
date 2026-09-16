@@ -20,7 +20,15 @@ from pathlib import Path
 import pytest
 
 from mdweave.serve import Workspace, make_server
-from mdweave.tree import ORDER_FILE, build_tree, document_ids, load_order, save_order
+from mdweave.tree import (
+    LABELS_FILE,
+    ORDER_FILE,
+    build_tree,
+    document_ids,
+    load_labels,
+    load_order,
+    save_order,
+)
 
 ROOT = Path(__file__).resolve().parents[1] / "mdweave"
 ASSETS = ROOT / "assets"
@@ -1176,12 +1184,22 @@ console.log(JSON.stringify({
     assert out["slashonly"] == "_", "refused by the server, which strips it to nothing"
 
 
-def test_no_prompt_bypasses_the_escaping(tmp_path):
-    """Four places ask for a name; the rule has to be in front of all of them."""
+def test_every_prompt_that_makes_a_path_escapes_a_slash(tmp_path):
+    """Two kinds of prompt, and only one of them is making a filename.
+
+    `askName` feeds a path, so a typed slash has to be escaped or it nests.
+    `renameLabel` feeds a caption, which is free text and never becomes a
+    path -- escaping there would stop the reader writing "Ome-Zarr / notes".
+    The rule is that every *creation* prompt goes through askName.
+    """
     source = (ASSETS / "filetree.js").read_text(encoding="utf-8")
-    prompts = re.findall(r"window\.prompt\(", source)
-    assert len(prompts) == 1, "a prompt outside askName can still nest a typed name"
-    assert source.count("askName(") == 5, "one definition, four callers"
+
+    # One definition, two callers: the new document and the new folder.
+    assert source.count("askName(") == 3, "a create prompt is bypassing askName"
+    # One definition, two callers: renaming a document and renaming a folder.
+    assert source.count("renameLabel(") == 3
+    # Which accounts for every prompt in the file.
+    assert len(re.findall(r"window\.prompt\(", source)) == 2
 
 
 def test_a_name_that_escapes_to_nothing_is_refused(server):
@@ -1191,3 +1209,97 @@ def test_a_name_that_escapes_to_nothing_is_refused(server):
 
     assert status == 400 and "usable folder name" in payload["error"]
     assert not (workspace.inputs / "_").exists()
+
+
+# --- what a row is called ---------------------------------------------------
+#
+# `humanize` flattens every hyphen and underscore to a space and lowercases the
+# rest. That is right for `system_for_bio_literature_research` and wrong
+# wherever the punctuation meant something -- Ome-Zarr, a date in a filename --
+# and it has no way to tell which it is looking at. So the heuristic keeps
+# answering, and a dictionary holds the exceptions.
+
+def test_a_label_overrides_the_heuristic_without_touching_the_file(server):
+    base, workspace = server
+    status, payload = call(
+        base, "/api/tree/label", {"key": "top", "label": "Ome-Zarr layout"}
+    )
+
+    assert status == 200 and payload["label"] == "Ome-Zarr layout"
+    assert (workspace.inputs / "top.md").exists(), "the file was renamed"
+    assert "Ome-Zarr layout" in (workspace.outputs / "other.html").read_text(encoding="utf-8")
+
+
+def test_a_label_matching_the_heuristic_is_not_stored(server):
+    """The file is a list of exceptions. Writing the rule into it would make
+    every rename permanent, including the ones that change nothing."""
+    base, workspace = server
+    call(base, "/api/tree/label", {"key": "top", "label": "Renamed"})
+    call(base, "/api/tree/label", {"key": "top", "label": "Top"})
+
+    assert not (workspace.inputs / LABELS_FILE).exists()
+
+
+def test_a_label_is_kept_exactly_as_typed(server):
+    base, workspace = server
+    call(base, "/api/tree/label", {"key": "top", "label": "AI Career Research 2026-09-06"})
+
+    assert load_labels(workspace.inputs)["top"] == "AI Career Research 2026-09-06"
+
+
+def test_a_folder_can_be_labelled_too(server):
+    base, workspace = server
+    status, _ = call(
+        base, "/api/tree/label", {"key": "notes", "kind": "folder", "label": "Ome-Zarr"}
+    )
+    assert status == 200
+    assert "Ome-Zarr" in (workspace.outputs / "top.html").read_text(encoding="utf-8")
+
+
+def test_a_label_follows_its_document_across_a_move(server):
+    base, workspace = server
+    call(base, "/api/tree/label", {"key": "top", "label": "Kept"})
+    call(base, "/api/documents/move", {"from": "top", "to": "notes/top"})
+
+    assert load_labels(workspace.inputs) == {"notes/top": "Kept"}
+
+
+def test_a_folder_label_carries_what_is_under_it(server):
+    base, workspace = server
+    call(base, "/api/tree/label", {"key": "notes", "kind": "folder", "label": "Kept"})
+    call(base, "/api/tree/label", {"key": "notes/weekly", "label": "Also kept"})
+    call(base, "/api/folders/rename", {"from": "notes", "to": "archive2"})
+
+    assert load_labels(workspace.inputs) == {
+        "archive2": "Kept", "archive2/weekly": "Also kept"
+    }
+
+
+def test_deleting_a_document_forgets_its_label(server):
+    """A label for a document that is gone is a ghost in a file people read."""
+    base, workspace = server
+    call(base, "/api/tree/label", {"key": "top", "label": "Going"})
+    call(base, "/api/documents/delete", {"document": "top"})
+
+    assert load_labels(workspace.inputs) == {}
+
+
+def test_labelling_something_that_is_not_there_is_a_404(server):
+    base, _ = server
+    assert call(base, "/api/tree/label", {"key": "nowhere", "label": "X"})[0] == 404
+    assert call(
+        base, "/api/tree/label", {"key": "nope", "kind": "folder", "label": "X"}
+    )[0] == 404
+
+
+def test_an_empty_label_is_refused(server):
+    base, _ = server
+    assert call(base, "/api/tree/label", {"key": "top", "label": "   "})[0] == 400
+
+
+def test_a_mangled_label_file_costs_a_caption_not_a_document(server, tmp_path):
+    base, workspace = server
+    (workspace.inputs / LABELS_FILE).write_text("{ not json", encoding="utf-8")
+
+    workspace.rebuild_all()
+    assert "Top" in (workspace.outputs / "top.html").read_text(encoding="utf-8")

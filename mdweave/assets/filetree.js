@@ -163,23 +163,36 @@
       .catch(fail);
   }
 
+  /* Renaming names the *row*, not the file.
+   *
+   * The box opens on what you can see -- "Ome zarr layout planner" -- rather
+   * than on the filename behind it, and whatever you type is kept literally.
+   * That is the only way to get a caption the heuristic cannot produce: it
+   * flattens every hyphen and underscore to a space and lowercases the rest,
+   * which is right for `system_for_bio_literature_research` and wrong for
+   * Ome-Zarr or a date. The file keeps its name, so ids, links, pages and
+   * annotations are all undisturbed; dragging a row is still what moves it.
+   *
+   * A slash is not escaped here, unlike a *new* name: a caption is free text
+   * and never becomes a path. */
+  function renameLabel(question, key, kind, was, after) {
+    var label = window.prompt(question, was);
+    if (label === null) return;
+    label = label.trim();
+    if (!label || label === was) return;
+
+    busy(true);
+    post("/api/tree/label", { key: key, kind: kind, label: label })
+      .then(after)
+      .catch(fail);
+  }
+
   function rename(button) {
     var link = fileOf(button);
     if (!link) return;
-
-    var was = link.dataset.name || "";
-    var name = askName("Rename this document", was);
-    if (!name || name === was) return;
-
-    busy(true);
-    post("/api/documents/move", {
-      from: link.dataset.doc,
-      to: join(link.dataset.parent || "", name),
-    })
-      .then(function (payload) {
-        land(link.dataset.doc, payload);
-      })
-      .catch(fail);
+    renameLabel(
+      "Name for this document", link.dataset.doc, "document", labelOf(link), settle
+    );
   }
 
   function remove(button) {
@@ -235,23 +248,16 @@
     var details = folderRow(button);
     if (!details) return;
 
-    var was = details.dataset.folder || "";
-    var name = askName("Rename this folder", was);
-    if (!name || name === was) return;
-
-    var path = details.dataset.path;
-    busy(true);
-    post("/api/folders/rename", {
-      from: path,
-      to: join(path.split("/").slice(0, -1).join("/"), name),
-    })
-      .then(function (payload) {
-        // Every document under it has a new id, so the page being read is at
-        // an address that no longer exists; the root hands out another.
-        if (CURRENT.indexOf(path + "/") === 0) window.location.href = "/";
-        else settle(payload);
-      })
-      .catch(fail);
+    var summary = details.querySelector("summary .tree__label");
+    // A caption change moves nothing, so unlike the old rename there is no
+    // chance the page being read has just changed address.
+    renameLabel(
+      "Name for this folder",
+      details.dataset.path,
+      "folder",
+      summary ? summary.textContent : details.dataset.folder || "",
+      settle
+    );
   }
 
   function removeFolder(button) {

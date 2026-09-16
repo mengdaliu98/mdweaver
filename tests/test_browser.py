@@ -509,3 +509,112 @@ def test_a_reorder_adds_nothing_on_top_of_a_switch(browser, highlighted):
     workspace.rebuild_all()
 
     assert switch(True) == plain
+
+
+# --- the gestures and the empty document ------------------------------------
+
+def test_a_single_click_no_longer_opens_an_editor(page):
+    """Reported: a click is what you do on the way to almost everything else
+    -- placing a cursor, starting a selection that ends up empty -- and every
+    one of them swapped the paragraph for a textarea."""
+    page.click(".doc p")
+    page.wait_for_timeout(400)
+    assert page.locator(".doc textarea").count() == 0
+
+
+def test_a_double_click_opens_one(page):
+    page.dblclick(".doc p")
+    page.wait_for_selector(".doc textarea", timeout=5_000)
+
+
+def test_a_long_press_opens_one(page):
+    box = page.locator(".doc p").bounding_box()
+    page.mouse.move(box["x"] + 20, box["y"] + box["height"] / 2)
+    page.mouse.down()
+    page.wait_for_timeout(750)
+    page.mouse.up()
+    page.wait_for_selector(".doc textarea", timeout=5_000)
+
+
+def test_a_press_that_becomes_a_drag_selects_instead_of_editing(page):
+    """The gesture this most has to stay out of the way of."""
+    box = page.locator(".doc p").bounding_box()
+    page.mouse.move(box["x"] + 10, box["y"] + box["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(box["x"] + 120, box["y"] + box["height"] / 2, steps=10)
+    page.wait_for_timeout(750)
+    page.mouse.up()
+
+    assert page.locator(".doc textarea").count() == 0
+    assert page.evaluate("() => window.getSelection().toString().length") > 0
+
+
+@pytest.fixture()
+def blank(browser, tmp_path):
+    """A document with nothing but its heading -- what create leaves behind."""
+    inputs, outputs = tmp_path / "markdown_inputs", tmp_path / "html_outputs"
+    inputs.mkdir()
+    (inputs / "fresh.md").write_text("# Fresh\n", encoding="utf-8")
+    workspace = Workspace(inputs=inputs, outputs=outputs)
+    workspace.rebuild_all()
+
+    httpd = make_server(workspace, "127.0.0.1", 0)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    context = browser.new_context(viewport={"width": 1280, "height": 900})
+    page = context.new_page()
+    page.goto(f"http://127.0.0.1:{httpd.server_port}/fresh.html", wait_until="networkidle")
+    page.wait_for_selector(".sidebar--manageable", timeout=10_000)
+    try:
+        yield page, workspace
+    finally:
+        context.close()
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+
+
+def test_an_empty_document_offers_somewhere_to_start(blank):
+    """The only other way in was to open the heading and type past it, which
+    nobody guesses -- and less so now that prose needs a double click."""
+    page, workspace = blank
+    assert page.locator("#doc-start").is_visible()
+
+    # One click, because it is a button whose only purpose is to be pressed.
+    page.click("#doc-start")
+    page.wait_for_selector(".doc textarea", timeout=5_000)
+    page.fill(".doc textarea", "The first thing written here.")
+    page.keyboard.press("Control+Enter")
+
+    page.wait_for_function(
+        "() => !document.querySelector('.doc textarea')", timeout=10_000
+    )
+    assert "The first thing written here." in (
+        workspace.inputs / "fresh.md").read_text(encoding="utf-8")
+    # And the heading it was written under is still there.
+    assert (workspace.inputs / "fresh.md").read_text(encoding="utf-8").startswith("# Fresh")
+
+
+def test_the_box_goes_once_there_is_prose(blank):
+    page, workspace = blank
+    (workspace.inputs / "fresh.md").write_text("# Fresh\n\nWritten.\n", encoding="utf-8")
+    workspace.rebuild_all()
+    page.reload(wait_until="networkidle")
+
+    assert page.locator("#doc-start").count() == 0
+
+
+# --- the lane meets the page ------------------------------------------------
+
+def test_the_open_row_runs_into_the_document_with_no_seam(page):
+    """Reported as a thin strip of panel colour between the two. It was the
+    sidebar's 1px right border, which a child cannot paint over."""
+    geometry = page.evaluate(
+        """() => {
+             const row = document.querySelector('.tree__row--active');
+             const main = document.querySelector('.main');
+             return { rowRight: row.getBoundingClientRect().right,
+                      mainLeft: main.getBoundingClientRect().left };
+           }"""
+    )
+    assert geometry["rowRight"] == geometry["mainLeft"], "a gap is still there"

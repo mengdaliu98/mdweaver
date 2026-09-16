@@ -728,16 +728,22 @@ def test_a_fresh_selection_is_simply_highlighted(painting):
     assert state(workspace) == [("bravo charlie", "c5", "highlight")]
 
 
-def test_the_same_colour_over_the_same_span_takes_it_off(painting):
-    """The only reading of a second press that is not a no-op."""
+def test_the_same_colour_twice_is_a_no_op_not_an_erase(painting):
+    """A colour press paints, always.
+
+    It used to clear when the selection was already entirely that colour,
+    which made one gesture mean two things depending on state the reader
+    could not reliably see -- press a colour on text that happened to be it
+    and the highlight vanished. Erasing has its own button now.
+    """
     base, workspace = painting
-    _, first = paint(base, "bravo charlie", "c5")
+    paint(base, "bravo charlie", "c5")
 
     status, payload = paint(base, "bravo charlie", "c5")
 
     assert status == 200
-    assert payload["cleared"] == [first["annotation"]["id"]]
-    assert state(workspace) == []
+    assert "cleared" not in payload
+    assert state(workspace) == [("bravo charlie", "c5", "highlight")]
 
 
 def test_a_different_colour_repaints_rather_than_refusing(painting):
@@ -776,9 +782,10 @@ def test_mixed_colours_underneath_become_one_clean_highlight(painting):
     assert state(workspace) == [("bravo charlie delta", "c2", "highlight")]
 
 
-def test_two_adjacent_highlights_together_count_as_covering(painting):
-    """Neither covers the selection alone; between them they do, so pressing
-    their shared colour clears rather than repaints."""
+def test_two_adjacent_highlights_become_one(painting):
+    """Absorbing what is underneath is still right -- a press means the whole
+    selection is this colour, and two touching highlights of one colour are
+    indistinguishable from one."""
     base, workspace = painting
     paint(base, "bravo", "c5")
     paint(base, "charlie", "c5")
@@ -786,20 +793,65 @@ def test_two_adjacent_highlights_together_count_as_covering(painting):
     status, payload = paint(base, "bravo charlie", "c5")
 
     assert status == 200
-    assert len(payload.get("cleared", [])) == 2
-    assert state(workspace) == []
+    assert len(payload["replaced"]) == 2
+    assert state(workspace) == [("bravo charlie", "c5", "highlight")]
 
 
-def test_part_of_a_larger_highlight_clears_the_whole_of_it(painting):
-    """A highlight is one thing; splitting it in two would be a stranger
-    answer than removing what was pressed."""
+def test_pressing_a_colour_inside_a_larger_highlight_shrinks_it_to_the_press(painting):
+    """A highlight is one thing, so the one underneath is absorbed rather than
+    split, and what is left is exactly what was pressed."""
     base, workspace = painting
     paint(base, "golf hotel", "c3")
 
     status, payload = paint(base, "golf", "c3")
 
-    assert status == 200 and payload["cleared"]
+    assert status == 200 and payload["replaced"]
+    assert state(workspace) == [("golf", "c3", "highlight")]
+
+
+# --- the eraser -------------------------------------------------------------
+
+def erase(base, quote):
+    return _post(base, "/api/annotations/erase", {"document": "doc", "quote": quote})
+
+
+def test_the_eraser_takes_highlighting_off(painting):
+    base, workspace = painting
+    paint(base, "bravo charlie", "c5")
+
+    status, payload = erase(base, "bravo charlie")
+
+    assert status == 200 and len(payload["cleared"]) == 1
     assert state(workspace) == []
+
+
+def test_the_eraser_clears_every_colour_it_covers(painting):
+    base, workspace = painting
+    paint(base, "bravo", "c1")
+    paint(base, "charlie", "c4")
+
+    status, payload = erase(base, "bravo charlie")
+
+    assert status == 200 and len(payload["cleared"]) == 2
+    assert state(workspace) == []
+
+
+def test_the_eraser_leaves_comments_alone(painting):
+    """Its highlight is the handle for a thread; an eraser aimed at colour
+    must not delete a conversation."""
+    base, workspace = painting
+    comment_on(base, "bravo charlie", "c2")
+
+    status, payload = erase(base, "bravo charlie")
+
+    assert status == 200 and payload["cleared"] == []
+    assert state(workspace) == [("bravo charlie", "c2", "comment")]
+
+
+def test_erasing_where_there_is_nothing_says_so_rather_than_failing(painting):
+    base, _ = painting
+    status, payload = erase(base, "bravo charlie")
+    assert status == 200 and payload["cleared"] == []
 
 
 def test_a_comment_is_never_absorbed(painting):

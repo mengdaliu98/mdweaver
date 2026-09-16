@@ -193,11 +193,18 @@ def render_document(
     # assets and its siblings' pages.
     prefix = relative_prefix(doc_id or "")
 
+    # A document with nothing but its heading gets somewhere to start. The
+    # only other way in is to open the heading itself and type past it, which
+    # nobody guesses -- and now that editing needs a double click, even less
+    # so. The line number is the end of the file, which `replace_block` reads
+    # as an append rather than a replacement.
+    blocks = soup.find_all(attrs={"data-src-start": True}, recursive=False)
     template = env.get_template("document.html.j2")
     html = template.render(
         title=title or _infer_title(soup) or "Document",
         doc_id=doc_id or "",
         body=str(soup),
+        start_at=len(markdown.splitlines()) if len(blocks) <= 1 else None,
         notes=notes,
         tree=tree or [],
         prefix=prefix,

@@ -195,21 +195,81 @@
 
   /* --- gestures ----------------------------------------------------------- */
 
-  doc.addEventListener("click", function (event) {
-    if (!ready || open || busy) return;
-
-    // A click that ends a drag is a selection, not a request to edit.
-    var selection = window.getSelection();
-    if (selection && !selection.isCollapsed) return;
-
+  /* A double click, or a long press. Not a single click.
+   *
+   * A single click is what you do on the way to almost everything else here --
+   * placing a cursor, dismissing a note, starting a selection that ends up
+   * empty because the drag was a pixel wide. Every one of those swapped the
+   * paragraph for a textarea, and the reader had to click away to undo an
+   * edit they never asked for. The gesture has to be deliberate, and both of
+   * these are: nobody double clicks by accident, and a long press is the
+   * touch equivalent.
+   *
+   * `dblclick` also selects the word under the cursor, so the check for a
+   * non-empty selection that guarded the old handler cannot be used here. */
+  function wants(event) {
+    if (!ready || open || busy) return null;
     // Highlights belong to annotate.js: clicking one opens its note.
-    if (event.target.closest && event.target.closest("mark.hl")) return;
+    if (event.target.closest && event.target.closest("mark.hl")) return null;
     // Links should navigate.
-    if (event.target.closest && event.target.closest("a")) return;
+    if (event.target.closest && event.target.closest("a")) return null;
+    return ui.blockFor(event.target);
+  }
 
-    var block = ui.blockFor(event.target);
+  doc.addEventListener("dblclick", function (event) {
+    var block = wants(event);
     if (block) edit(block);
   });
+
+  /* The "start writing" box on an empty document opens on one click. It is a
+   * button whose only purpose is to be pressed -- the reason prose needs a
+   * deliberate gesture is that a click there usually means something else,
+   * and here it cannot. */
+  doc.addEventListener("click", function (event) {
+    if (!ready || open || busy) return;
+    var start = event.target.closest && event.target.closest(".doc__start");
+    if (start) edit(start);
+  });
+
+  /* The long press. Cancelled by movement, because a press that turns into a
+   * drag is a selection -- which is the gesture this most has to stay out of
+   * the way of. */
+  var HOLD = 500; // ms
+  var holding = null;
+  var from = null;
+
+  function stopHolding() {
+    if (holding) window.clearTimeout(holding);
+    holding = null;
+    from = null;
+  }
+
+  doc.addEventListener("pointerdown", function (event) {
+    if (event.button !== 0) return;
+    var block = wants(event);
+    if (!block) return;
+
+    from = { x: event.clientX, y: event.clientY };
+    holding = window.setTimeout(function () {
+      holding = null;
+      // Opening mid-press would leave the textarea with a stray selection
+      // from the gesture that opened it.
+      var selection = window.getSelection();
+      if (selection) selection.removeAllRanges();
+      edit(block);
+    }, HOLD);
+  });
+
+  doc.addEventListener("pointermove", function (event) {
+    if (!holding || !from) return;
+    if (Math.abs(event.clientX - from.x) > 6 || Math.abs(event.clientY - from.y) > 6) {
+      stopHolding();
+    }
+  });
+
+  doc.addEventListener("pointerup", stopHolding);
+  doc.addEventListener("pointercancel", stopHolding);
+  doc.addEventListener("scroll", stopHolding, true);
 
   document.addEventListener("keydown", function (event) {
     if (!ready || open || busy) return;
