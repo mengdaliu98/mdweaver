@@ -95,6 +95,12 @@
 
   button.addEventListener("click", refresh);
 
+  /* Also callable from annotate.js. Saving an annotation the browser then
+   * cannot place in the DOM used to end in "reload to see it" -- correct, and
+   * an instruction the reader should not be given when the page can simply go
+   * and get itself. */
+  window.mdweaveRefresh = refresh;
+
   /* Rendering happens on the server, so this only exists when one is there. */
   ui.api().then(function (health) {
     if (health) button.hidden = false;

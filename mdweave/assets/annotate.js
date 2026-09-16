@@ -469,7 +469,12 @@
           wrapSpan(index, span[0], span[1], "hl hl--" + token + " hl--has-note", annotation.id);
           addNote(annotation);
         } else {
-          toast("Saved, but could not place it here — reload to see it.", "warn");
+          // Saved, but this side could not work out where it goes. The
+          // server can: it renders the page from the same sidecar that was
+          // just written. Asking the reader to reload is telling them to do
+          // by hand the one thing the page already knows how to do.
+          if (window.mdweaveRefresh) window.mdweaveRefresh();
+          else toast("Saved — reload to see it.", "warn");
         }
       })
       .catch(function (error) {
@@ -831,7 +836,12 @@
         if (span) {
           wrapSpan(index, span[0], span[1], "hl hl--" + annotation.color, annotation.id);
         } else {
-          toast("Saved, but could not place it here — reload to see it.", "warn");
+          // Saved, but this side could not work out where it goes. The
+          // server can: it renders the page from the same sidecar that was
+          // just written. Asking the reader to reload is telling them to do
+          // by hand the one thing the page already knows how to do.
+          if (window.mdweaveRefresh) window.mdweaveRefresh();
+          else toast("Saved — reload to see it.", "warn");
         }
       })
       .catch(function (error) {
