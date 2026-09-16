@@ -129,12 +129,29 @@ class RenderResult:
 
 def build_parser() -> MarkdownIt:
     md = (
-        MarkdownIt("commonmark", {"html": True, "highlight": _highlight},
+        MarkdownIt("commonmark",
+                   {"html": True, "highlight": _highlight, "linkify": True},
                    renderer_cls=SourceMappedRenderer)
-        .enable(["table", "strikethrough"])
+        # `linkify` turns a bare URL into a link. Notes are full of pasted
+        # addresses, and wrapping each one in <> or [](…) by hand is work the
+        # parser can do -- markdown-it only does it inside text, so a URL in a
+        # code span or a fenced block is left exactly as written.
+        #
+        # Both halves are needed: the rule has to be enabled *and* the option
+        # set, because the rule reads the option before doing anything.
+        .enable(["table", "strikethrough", "linkify"])
         .use(footnote_plugin)
         .use(tasklists_plugin, enabled=True)
     )
+    # A scheme is required. linkify's fuzzy matching turns anything ending in
+    # a known TLD into a link, and `.md` is Moldova -- so "see README.md" came
+    # out as a link to a domain, in a knowledge base whose prose is largely
+    # about .md files. Bare emails go the same way for the same reason.
+    #
+    # The cost is that `www.example.org` is left alone too; there is no switch
+    # for www on its own. Writing `https://` is the reader saying they meant
+    # an address, which is a small thing to ask and never guesses wrong.
+    md.linkify.set({"fuzzy_link": False, "fuzzy_email": False})
     return md
 
 

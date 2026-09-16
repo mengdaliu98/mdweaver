@@ -288,3 +288,70 @@ def test_sidecar_is_valid_json_with_a_version(tmp_path):
     path = tmp_path / "d.ann.json"
     sidecar.save(path, [ann("q")])
     assert json.loads(path.read_text())["version"] == sidecar.SCHEMA_VERSION
+
+
+# --- bare URLs become links -------------------------------------------------
+
+def linked(markdown: str) -> list[tuple[str, str]]:
+    """Every (href, text) inside the rendered article."""
+    from bs4 import BeautifulSoup
+
+    html = render_document(markdown, []).html
+    article = BeautifulSoup(html, "html.parser").find("article")
+    return [(a["href"], a.get_text()) for a in article.find_all("a")]
+
+
+def test_a_bare_url_is_turned_into_a_link():
+    assert linked("See https://example.com/a?b=1 for more.") == [
+        ("https://example.com/a?b=1", "https://example.com/a?b=1")
+    ]
+
+
+def test_the_ways_of_writing_a_link_by_hand_still_work():
+    assert linked("<https://one.example> and [two](https://two.example)") == [
+        ("https://one.example", "https://one.example"),
+        ("https://two.example", "two"),
+    ]
+
+
+def test_code_is_left_exactly_as_written():
+    """A URL in code is a string being shown, not an address being offered."""
+    assert linked("Run `curl https://example.com` first.") == []
+    assert linked("    curl https://example.com\n") == []
+    assert linked("```sh\ncurl https://example.com\n```\n") == []
+
+
+@pytest.mark.parametrize(
+    "prose",
+    [
+        "see README.md for details",          # .md is Moldova
+        "the file agent_basics.md",
+        "version v2.0 shipped",
+        "figure 1.b shows it",
+        "mail me at someone@example.com",     # fuzzy_email is off too
+        "example.com on its own",
+    ],
+)
+def test_prose_that_merely_looks_like_an_address_is_left_alone(prose):
+    """linkify's fuzzy matching would take all of these. A knowledge base whose
+    prose is largely *about* .md files cannot afford that, so a scheme is
+    required -- writing `https://` is how the reader says they meant a link."""
+    assert linked(prose) == []
+
+
+@pytest.mark.parametrize("scheme", ["javascript:alert(1)", "vbscript:x", "data:text/html,x"])
+def test_a_dangerous_scheme_is_never_linkified(scheme):
+    """These reach the page inside an href. markdown-it refuses them; this is
+    here so that a future change to the parser options cannot quietly stop."""
+    assert linked(f"Try {scheme} now.") == []
+
+
+def test_a_link_does_not_disturb_an_annotation_over_it():
+    """Anchoring is by rendered text, and wrapping a span in <a> does not
+    change the text -- but it does split the node the highlight has to cover."""
+    result = render_document(
+        "Read https://example.com/x for the details.",
+        [ann("https://example.com/x for the details")],
+    )
+    assert result.unresolved == []
+    assert "<mark" in result.html and "<a href" in result.html

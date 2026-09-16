@@ -227,6 +227,25 @@ A document's id is its path under the root without the suffix, so
 `notes/weekly.md` is `notes/weekly`. That id is the sidebar link, the output
 filename, and the `document` field the API takes.
 
+## Links
+
+A bare URL in the prose becomes a link. `https://example.com/x` is clickable
+without being wrapped in `<>` or `[](…)`, which is most of what a pasted
+research note contains — 321 of them across nine documents when this was
+turned on.
+
+**A scheme is required**, and that is the whole of the rule. linkify's fuzzy
+matching takes anything ending in a known TLD, and `.md` is Moldova: "see
+README.md for details" came out as a link to a domain, in a knowledge base
+whose prose is largely about `.md` files. Bare email addresses go the same way.
+So `www.example.org` is left alone too — there is no switch for `www` on its
+own — and writing `https://` is how you say you meant an address.
+
+Code is untouched, in spans and in blocks alike: a URL there is a string being
+shown, not an address being offered. `javascript:` and friends are refused by
+markdown-it before they can reach an `href`, and a test pins that so a future
+change to the parser options cannot quietly undo it.
+
 ## Editing the prose in the browser
 
 **Double click** a paragraph, or press and hold it, and it becomes a small

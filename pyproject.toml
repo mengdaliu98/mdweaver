@@ -9,6 +9,7 @@ dependencies = [
     "beautifulsoup4>=4.12",
     "Jinja2>=3.1",
     "Pygments>=2.17",
+    "linkify-it-py>=2.0",   # bare URLs in notes become links
 ]
 
 [project.optional-dependencies]
