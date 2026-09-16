@@ -618,3 +618,105 @@ def test_the_open_row_runs_into_the_document_with_no_seam(page):
            }"""
     )
     assert geometry["rowRight"] == geometry["mainLeft"], "a gap is still there"
+
+
+# --- a fresh annotation has to be the colour it was given --------------------
+#
+# Reported: "after highlighting, the highlights do not show, and I have to
+# refresh". The mark was being placed correctly every time -- which is why the
+# tests above passed and why I could not reproduce it by counting marks. The
+# class was wrong. The API returned `color` as the sidecar holds it (a slot
+# *number*), the browser used it as a suffix and wrote `hl--3`, and the
+# renderer writes `hl--c3`. So the highlight was there, matched no rule, and
+# looked absent until a reload replaced it with the server's own markup.
+#
+# Counting elements could never have caught that. These read the painted
+# colour.
+
+def fill_of(page, selector: str) -> str:
+    return page.eval_on_selector(selector, "el => getComputedStyle(el).backgroundColor")
+
+
+def select_words(page, first: str, last: str):
+    page.evaluate(
+        """([a, b]) => {
+             const p = document.querySelector('.doc p');
+             const t = p.firstChild;
+             const text = t.data;
+             const r = document.createRange();
+             r.setStart(t, text.indexOf(a));
+             r.setEnd(t, text.indexOf(b) + b.length);
+             const s = getSelection();
+             s.removeAllRanges();
+             s.addRange(r);
+             document.dispatchEvent(new MouseEvent('mouseup', {bubbles: true}));
+           }""",
+        [first, last],
+    )
+    page.wait_for_selector(".selection-toolbar:not([hidden])", timeout=5_000)
+
+
+@pytest.fixture()
+def prose(browser, tmp_path):
+    inputs, outputs = tmp_path / "markdown_inputs", tmp_path / "html_outputs"
+    inputs.mkdir()
+    (inputs / "doc.md").write_text(
+        "# Doc\n\nalpha bravo charlie delta echo foxtrot golf hotel.\n", encoding="utf-8"
+    )
+    workspace = Workspace(inputs=inputs, outputs=outputs)
+    workspace.rebuild_all()
+
+    httpd = make_server(workspace, "127.0.0.1", 0)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    context = browser.new_context(viewport={"width": 1100, "height": 800})
+    page = context.new_page()
+    page.goto(f"http://127.0.0.1:{httpd.server_port}/doc.html", wait_until="networkidle")
+    page.wait_for_selector(".sidebar--manageable", timeout=10_000)
+    try:
+        yield page
+    finally:
+        context.close()
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+
+
+def test_a_new_highlight_is_painted_without_a_reload(prose):
+    page = prose
+    select_words(page, "bravo", "charlie")
+    page.click('.selection-toolbar__row:nth-child(2) .swatch--c3')
+    page.wait_for_selector("mark.hl", timeout=5_000)
+
+    painted = fill_of(page, "mark.hl")
+    assert painted not in ("rgba(0, 0, 0, 0)", "transparent"), "placed but unstyled"
+
+    # And it is the same colour the server would have rendered it.
+    page.reload(wait_until="networkidle")
+    assert fill_of(page, "mark.hl") == painted, "the reload changed its colour"
+
+
+def test_a_new_comment_keeps_its_colour_after_the_composer_closes(prose):
+    """Reported precisely: the colour shows while typing -- that is the pending
+    highlight, which uses the swatch's own token -- and vanishes on submit,
+    when the real one is drawn from the server's answer."""
+    page = prose
+    select_words(page, "bravo", "charlie")
+    page.click('.selection-toolbar__row:nth-child(1) .swatch--c2')
+    page.wait_for_selector(".composer textarea", timeout=5_000)
+
+    page.fill(".composer textarea", "a note")
+    page.keyboard.press("Control+Enter")
+    page.wait_for_selector(".note", timeout=10_000)
+
+    # The class, not the pixel: the freshly made note is open, so its mark
+    # also wears `hl--active` and is legitimately a different colour from the
+    # one drawn while typing. What went wrong was the slot in the name.
+    assert "hl--c2" in page.get_attribute("mark.hl", "class")
+    assert "note--c2" in page.get_attribute(".note", "class")
+    assert fill_of(page, ".note__body") not in ("rgba(0, 0, 0, 0)", "transparent")
+
+    # And the server agrees, which is the thing a reload used to fix.
+    page.reload(wait_until="networkidle")
+    assert "hl--c2" in page.get_attribute("mark.hl", "class")
+    assert "note--c2" in page.get_attribute(".note", "class")

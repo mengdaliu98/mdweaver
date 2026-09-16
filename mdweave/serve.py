@@ -794,7 +794,7 @@ class Workspace:
             )
         self.save(doc_id, candidate)
         return {
-            "annotation": fresh.to_dict(),
+            "annotation": _sent(fresh),
             "replaced": [a.id for a, _ in touching],
         }
 
@@ -1045,7 +1045,7 @@ class Handler(SimpleHTTPRequestHandler):
         if route.path == "/api/annotations":
             doc_id = self._query(route, "document")
             annotations = self.workspace.annotations_for(doc_id)
-            return HTTPStatus.OK, {"annotations": [a.to_dict() for a in annotations]}
+            return HTTPStatus.OK, {"annotations": [_sent(a) for a in annotations]}
 
         if route.path == "/api/block":
             doc_id = self._query(route, "document")
@@ -1276,7 +1276,7 @@ class Handler(SimpleHTTPRequestHandler):
             )
 
         self.workspace.save(doc_id, candidate)
-        return HTTPStatus.CREATED, {"annotation": annotation.to_dict()}
+        return HTTPStatus.CREATED, {"annotation": _sent(annotation)}
 
     def _api_import(self):
         """Accept a markdown file from the browser and publish it."""
@@ -1689,7 +1689,7 @@ class Handler(SimpleHTTPRequestHandler):
             target.color = _parse_color(payload["color"])
 
         self.workspace.save(doc_id, annotations)
-        return HTTPStatus.OK, {"annotation": target.to_dict()}
+        return HTTPStatus.OK, {"annotation": _sent(target)}
 
     def _api_delete(self):
         route = urlparse(self.path)
@@ -1814,6 +1814,21 @@ class Handler(SimpleHTTPRequestHandler):
     def log_message(self, fmt: str, *args) -> None:
         if self.command != "GET" or "/api/" in self.path:
             super().log_message(fmt, *args)
+
+
+def _sent(annotation: Annotation) -> dict:
+    """An annotation as the browser needs it: its stored form, plus the class.
+
+    `color` is what the sidecar holds -- a slot number, or one of the hue
+    names an older palette used, or a raw CSS colour -- and resolving that to
+    a class is `color_token`'s job, on the server, once. Handing the browser
+    the raw value made it build `hl--3` where the renderer writes `hl--c3`, so
+    a freshly saved highlight was placed correctly and then matched no rule:
+    the mark was there and colourless until a reload replaced it with the
+    server's own markup. The two must never disagree, so only one of them
+    works it out.
+    """
+    return {**annotation.to_dict(), "color_token": annotation.color_token}
 
 
 def _parse_color(raw) -> int:

@@ -655,7 +655,12 @@ looks like. Two consequences, both of them the reason:
   have got without the drag.
 
 Slots are positional in the markup too: `hl--c3`, never `hl--yellow`, because
-a hue in a class name is a lie the moment the reader recolours it.
+a hue in a class name is a lie the moment the reader recolours it. The API
+sends `color_token` alongside the stored `color` for exactly this: the file
+may say `3`, or `amber`, or a raw CSS colour, and turning that into a class is
+the server's job once rather than the browser's again. Handing the browser the
+raw value made it write `hl--3` where the renderer writes `hl--c3` — the
+highlight was placed and matched no rule, so it looked absent until a reload.
 
 Schemes live in `markdown_inputs/.mdweave-theme.json`, beside the prose rather
 than beside the tool: they are the reader's, and they follow the knowledge

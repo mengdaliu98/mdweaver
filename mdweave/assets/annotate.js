@@ -465,7 +465,9 @@
         closeComposer();
 
         if (span) {
-          var token = annotation.color || DEFAULT_COLOR;
+          // `color_token` is the class, worked out by the server; `color` is
+          // what the file holds, which may be a number or an old hue name.
+          var token = annotation.color_token || DEFAULT_COLOR;
           wrapSpan(index, span[0], span[1], "hl hl--" + token + " hl--has-note", annotation.id);
           addNote(annotation);
         } else {
@@ -527,7 +529,7 @@
     var entry = (annotation.thread && annotation.thread[0]) || { author: "me", body: "" };
 
     var note = document.createElement("div");
-    note.className = "note note--" + (annotation.color || DEFAULT_COLOR);
+    note.className = "note note--" + (annotation.color_token || DEFAULT_COLOR);
     note.id = "note-" + annotation.id;
     note.dataset.ann = annotation.id;
     note.dataset.status = annotation.status || "open";
@@ -834,7 +836,10 @@
         var index = buildIndex(doc);
         var span = locate(index, annotation.target);
         if (span) {
-          wrapSpan(index, span[0], span[1], "hl hl--" + annotation.color, annotation.id);
+          wrapSpan(
+            index, span[0], span[1],
+            "hl hl--" + (annotation.color_token || DEFAULT_COLOR), annotation.id
+          );
         } else {
           // Saved, but this side could not work out where it goes. The
           // server can: it renders the page from the same sidecar that was
