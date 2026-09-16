@@ -244,6 +244,27 @@ class Runner:
             timeout=CLAIM_SECONDS + CLAIM_MARGIN,
         )
 
+    def stale(self) -> bool:
+        """Has the source on disk moved on from what this process imported?
+
+        The same disease `mdweave start` already guards the server against: a
+        long-lived process keeps whatever it imported at startup, so an edit is
+        invisible until it restarts. It bites harder here, because the runner
+        imports `serve` lazily when a job arrives -- so a *fresh* serve.py gets
+        loaded against a *stale* cached `tree`, and the failure is an
+        ImportError for a name that is plainly right there in the file. That
+        is a genuinely baffling half hour, and it cost one real job.
+
+        Checked between jobs rather than during one, so a turn in flight is
+        never interrupted by a deploy on another terminal.
+        """
+        from ..serve import RUNNING_FINGERPRINT, source_fingerprint
+
+        try:
+            return source_fingerprint() != RUNNING_FINGERPRINT
+        except OSError:
+            return False  # cannot read the tree; not a reason to fall over
+
     def loop(self) -> int:
         _log(f"talking to {self.config.remote}")
         _log(f"knowledge base at {self.config.inputs}")
@@ -251,6 +272,14 @@ class Runner:
 
         failures = 0
         while True:
+            # Exit rather than reload: a Python process cannot honestly swap
+            # its own imported modules, and systemd is already configured to
+            # bring this straight back. `Restart=always` turns "the code
+            # changed" into a ten second gap instead of a mystery.
+            if self.stale():
+                _log("the source on disk has changed; exiting so systemd restarts me")
+                return 0
+
             try:
                 job = self.claim()
                 if failures:
