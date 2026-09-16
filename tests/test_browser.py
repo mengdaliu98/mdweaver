@@ -638,14 +638,36 @@ def fill_of(page, selector: str) -> str:
 
 
 def select_words(page, first: str, last: str):
+    """Select from the start of `first` to the end of `last`.
+
+    Walks every text node in the paragraph rather than just the first one:
+    once a word has been bolded it lives inside a <strong>, and a helper that
+    only looks at `p.firstChild` stops being able to find it -- which is a
+    property of the helper, not of the page.
+    """
     page.evaluate(
         """([a, b]) => {
              const p = document.querySelector('.doc p');
-             const t = p.firstChild;
-             const text = t.data;
+             const walk = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
+             const nodes = [];
+             let all = '';
+             while (walk.nextNode()) {
+               nodes.push([walk.currentNode, all.length]);
+               all += walk.currentNode.data;
+             }
+             const from = all.indexOf(a);
+             const to = all.indexOf(b) + b.length;
+             if (from < 0 || to < from) throw new Error('not found: ' + a + '/' + b);
+             const at = (off) => {
+               for (let k = nodes.length - 1; k >= 0; k--) {
+                 if (nodes[k][1] <= off) return [nodes[k][0], off - nodes[k][1]];
+               }
+               return [nodes[0][0], 0];
+             };
              const r = document.createRange();
-             r.setStart(t, text.indexOf(a));
-             r.setEnd(t, text.indexOf(b) + b.length);
+             const s0 = at(from), s1 = at(to);
+             r.setStart(s0[0], s0[1]);
+             r.setEnd(s1[0], s1[1]);
              const s = getSelection();
              s.removeAllRanges();
              s.addRange(r);
@@ -685,7 +707,7 @@ def prose(browser, tmp_path):
 def test_a_new_highlight_is_painted_without_a_reload(prose):
     page = prose
     select_words(page, "bravo", "charlie")
-    page.click('.selection-toolbar__row:nth-child(2) .swatch--c3')
+    page.click('.selection-toolbar__row[aria-label="Highlight"] .swatch--c3')
     page.wait_for_selector("mark.hl", timeout=5_000)
 
     painted = fill_of(page, "mark.hl")
@@ -702,7 +724,7 @@ def test_a_new_comment_keeps_its_colour_after_the_composer_closes(prose):
     when the real one is drawn from the server's answer."""
     page = prose
     select_words(page, "bravo", "charlie")
-    page.click('.selection-toolbar__row:nth-child(1) .swatch--c2')
+    page.click('.selection-toolbar__row[aria-label="Comment"] .swatch--c2')
     page.wait_for_selector(".composer textarea", timeout=5_000)
 
     page.fill(".composer textarea", "a note")
@@ -720,3 +742,61 @@ def test_a_new_comment_keeps_its_colour_after_the_composer_closes(prose):
     page.reload(wait_until="networkidle")
     assert "hl--c2" in page.get_attribute("mark.hl", "class")
     assert "note--c2" in page.get_attribute(".note", "class")
+
+
+# --- the format half of the menu --------------------------------------------
+
+def test_the_menu_puts_format_above_the_annotations(prose):
+    """Two sections, and the order is the meaning: the top one edits the
+    prose, the bottom one only annotates it."""
+    page = prose
+    select_words(page, "bravo", "charlie")
+
+    rows = page.eval_on_selector_all(
+        ".selection-toolbar__row", "els => els.map(e => e.getAttribute('aria-label'))"
+    )
+    assert rows == ["Format", "Comment", "Highlight"]
+    assert page.locator(".selection-toolbar__split").count() == 1
+
+
+@pytest.mark.parametrize(
+    "style, tag", [("bold", "strong"), ("italic", "em")]
+)
+def test_formatting_a_selection_edits_the_markdown(browser, tmp_path, style, tag):
+    inputs, outputs = tmp_path / "markdown_inputs", tmp_path / "html_outputs"
+    inputs.mkdir()
+    (inputs / "doc.md").write_text("# Doc\n\nalpha bravo charlie.\n", encoding="utf-8")
+    workspace = Workspace(inputs=inputs, outputs=outputs)
+    workspace.rebuild_all()
+
+    httpd = make_server(workspace, "127.0.0.1", 0)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    context = browser.new_context(viewport={"width": 1100, "height": 800})
+    page = context.new_page()
+    try:
+        page.goto(f"http://127.0.0.1:{httpd.server_port}/doc.html", wait_until="networkidle")
+        page.wait_for_selector(".sidebar--manageable", timeout=10_000)
+        select_words(page, "bravo", "bravo")
+        page.click(f'.selection-toolbar__format[data-format="{style}"]')
+        page.wait_for_selector(f".doc {tag}", timeout=10_000)
+
+        # The prose itself changed, which is the whole difference from a
+        # highlight -- this travels with the file.
+        marker = "**" if style == "bold" else "*"
+        assert f"{marker}bravo{marker}" in workspace.source_of("doc")
+        assert page.inner_text(f".doc {tag}") == "bravo"
+
+        # And Plain takes it back off, without opening the raw markdown.
+        select_words(page, "bravo", "bravo")
+        page.click('.selection-toolbar__format[data-format="plain"]')
+        page.wait_for_function(
+            f"() => !document.querySelector('.doc {tag}')", timeout=10_000
+        )
+        assert "bravo" in workspace.source_of("doc")
+        assert marker + "bravo" not in workspace.source_of("doc")
+    finally:
+        context.close()
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)

@@ -201,6 +201,10 @@
    * underneath -- and a press that looked like "make this blue" sometimes
    * meant "make this nothing". A press now always paints, whatever is there,
    * and taking a highlight off has its own button. */
+  var FORMAT_ICON =
+    '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">' +
+    '<path fill="currentColor" d="M6.1 2.3h5.6v1.4H9.4l-2 8.6h2v1.4H3.8v-1.4h2.1l2-8.6H6.1z"/></svg>';
+
   var ERASER_ICON =
     '<svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true">' +
     '<path fill="currentColor" d="M9.1 2.2 14 7.1a1.1 1.1 0 0 1 0 1.6l-4.3 4.3H13v1.3H6.6l-4.3-4.3a1.1 1.1 0 0 1 0-1.6l5.2-5.2a1.1 1.1 0 0 1 1.6 0ZM4.6 8.7l3.1 3.1 1.2-1.2-3.1-3.1z"/></svg>';
@@ -229,10 +233,51 @@
     );
   }
 
+  /* --- the format row ------------------------------------------------------
+   *
+   * Above the annotations, and separated from them, because the two do
+   * different things to different files. Bold and italic put `**` and `*` in
+   * the markdown: the document itself changes, and travels that way to
+   * anything else that reads it. A comment or a highlight never touches the
+   * prose -- it lives in the sidecar and only ever reaches the HTML. Putting
+   * them in one undifferentiated list would hide that.
+   *
+   * Plain is here rather than as a second press of Bold for the same reason
+   * the eraser is a button: a press that sometimes adds and sometimes removes
+   * depends on state the reader cannot see, and the alternative to a Plain
+   * button is opening the raw markdown to delete a pair of asterisks. */
+  var FORMATS = [
+    { style: "bold", label: "Bold", glyph: "B", weight: "700" },
+    { style: "italic", label: "Italic", glyph: "I", style_: "italic" },
+    { style: "plain", label: "Plain", glyph: "P" },
+  ];
+
+  function formatRow() {
+    var buttons = FORMATS.map(function (item) {
+      var css = item.weight
+        ? ' style="font-weight:' + item.weight + '"'
+        : item.style_
+        ? ' style="font-style:' + item.style_ + '"'
+        : "";
+      return (
+        '<button type="button" class="selection-toolbar__format"' +
+        ' data-format="' + item.style + '" title="' + item.label + '"' +
+        ' aria-label="' + item.label + '"' + css + ">" + item.glyph + "</button>"
+      );
+    }).join("");
+    return (
+      '<div class="selection-toolbar__row" role="group" aria-label="Format">' +
+      '<span class="selection-toolbar__what">' + FORMAT_ICON + " Format</span>" +
+      '<span class="selection-toolbar__swatches">' + buttons + "</span></div>"
+    );
+  }
+
   var toolbar = document.createElement("div");
   toolbar.className = "selection-toolbar";
   toolbar.hidden = true;
   toolbar.innerHTML =
+    formatRow() +
+    '<div class="selection-toolbar__split" aria-hidden="true"></div>' +
     toolbarRow("comment", COMMENT_ICON, "Comment") +
     toolbarRow("highlight", HIGHLIGHT_ICON, "Highlight");
   document.body.appendChild(toolbar);
@@ -717,6 +762,17 @@
   });
 
   toolbar.addEventListener("click", function (event) {
+    var format = event.target.closest
+      ? event.target.closest(".selection-toolbar__format")
+      : null;
+    if (format) {
+      // edit.js owns source edits; this file owns the menu. It reads the
+      // selection itself, so nothing has to be handed over.
+      hideToolbar();
+      if (window.mdweaveFormat) window.mdweaveFormat(format.dataset.format);
+      return;
+    }
+
     var swatch = event.target.closest
       ? event.target.closest(".selection-toolbar__swatch")
       : null;

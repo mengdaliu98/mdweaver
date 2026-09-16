@@ -51,6 +51,36 @@
 
 .selection-toolbar__swatches { display: flex; align-items: center; gap: 0.24rem; }
 
+/* The line between what edits the prose and what only annotates it. Format
+   writes `**` into the markdown; a comment or a highlight never touches it. */
+.selection-toolbar__split {
+  height: 1px;
+  margin: 0.25rem 0.35rem;
+  background: color-mix(in srgb, var(--surface) 22%, transparent);
+}
+
+.selection-toolbar__format {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 19px;
+  height: 17px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--surface) 40%, transparent);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--surface);
+  font: inherit;
+  font-size: 0.74rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.selection-toolbar__format:hover {
+  background: color-mix(in srgb, var(--surface) 22%, transparent);
+  border-color: var(--surface);
+}
+
 /* The eraser sits with the colours but is not one of them: no fill, and a
    little air before it so the row reads as "six colours, then remove".
    Its ink is the toolbar's own text colour, not the page's -- the toolbar is

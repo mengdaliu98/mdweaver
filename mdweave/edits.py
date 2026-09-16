@@ -267,6 +267,175 @@ def replace_block(markdown: str, line: int, end: int, text: str) -> str:
     return normalise("\n".join(lines))
 
 
+# --- emphasis ---------------------------------------------------------------
+#
+# Bold and italic are *source* edits, unlike a highlight: `**` goes into the
+# markdown and travels with the file to anything else that reads it. That is
+# the whole difference between the two halves of the selection menu.
+
+MARKERS = {"bold": "**", "italic": "*"}
+
+# An emphasis run and its delimiters. Non-greedy, and the lookarounds are
+# markdown's own rule: a delimiter has to sit against non-space to open or
+# close, which is why `a * b * c` is not italic.
+_EMPHASIS_RUN = re.compile(r"(\*\*|__|\*|_)(?=\S)(.+?)(?<=\S)\1", re.S)
+
+# Code spans are literal, so an asterisk inside one is an asterisk. Masked out
+# before any of this looks for delimiters, and restored afterwards.
+_CODE_SPAN = re.compile(r"(`+)(.+?)\1", re.S)
+
+
+def _mask_code(source: str) -> tuple[str, list[tuple[int, str]]]:
+    """Replace code spans with same-length filler so offsets are unchanged."""
+    saved: list[tuple[int, str]] = []
+    out = list(source)
+    for match in _CODE_SPAN.finditer(source):
+        saved.append((match.start(), match.group(0)))
+        for i in range(match.start(), match.end()):
+            out[i] = "\x00"
+    return "".join(out), saved
+
+
+def _restore_code(source: str, saved: list[tuple[int, str]]) -> str:
+    out = list(source)
+    for at, text in saved:
+        out[at : at + len(text)] = list(text)
+    return "".join(out)
+
+
+def _trimmed(rendered: str, start: int, stop: int) -> tuple[int, int]:
+    """The selection without its leading and trailing whitespace.
+
+    Markdown will not open an emphasis run against a space, so `** bold **`
+    is four literal asterisks. A selection made by dragging very often has a
+    space on one end, and the reader did not mean it.
+    """
+    while start < stop and rendered[start].isspace():
+        start += 1
+    while stop > start and rendered[stop - 1].isspace():
+        stop -= 1
+    return start, stop
+
+
+def format_block(
+    block_md: str, start: int, stop: int, style: str, rendered: str | None = None
+) -> str:
+    """The block's markdown with the visible span [start, stop) restyled.
+
+    `bold` and `italic` wrap the span; `plain` takes emphasis off it. Wrapping
+    is idempotent -- a span already wrapped in exactly those markers is left
+    alone rather than nested, because `****x****` is not "more bold" and a
+    second press should not have to mean something different from the first.
+    """
+    if style not in MARKERS and style != "plain":
+        raise ValueError(f"unknown style: {style!r}")
+
+    if rendered is None:
+        rendered = rendered_text(block_md)
+    start = max(0, min(start, len(rendered)))
+    stop = max(start, min(stop, len(rendered)))
+    start, stop = _trimmed(rendered, start, stop)
+    if start == stop:
+        return block_md
+
+    positions = _source_positions(rendered, block_md)
+    first = positions[start]
+    last = max(positions[stop - 1] + 1, first)
+
+    if style == "plain":
+        return _unemphasise(block_md, first, last)
+
+    # A marker dropped inside a code span is a literal asterisk and breaks the
+    # span besides, so a boundary that lands inside one is pushed out to its
+    # edge. The reader selected visible text and cannot see where the backticks
+    # are; bolding slightly more is the only answer that keeps the code intact.
+    first, last = _outside_code(block_md, first, last)
+
+    marker = MARKERS[style]
+    before, after = block_md[:first], block_md[last:]
+
+    # Whether the span already carries this style, read off the delimiter runs
+    # around it. A run of n asterisks means: 1 italic, 2 bold, 3 both. So bold
+    # is present at 2 or more, and italic at any odd length -- which is why
+    # neither a suffix test nor a length test works. `**` ends with `*`, and
+    # `***` is bold without being two characters long.
+    opening = len(before) - len(before.rstrip(marker[0]))
+    closing = len(after) - len(after.lstrip(marker[0]))
+    already = (
+        min(opening, closing) >= 2
+        if style == "bold"
+        else opening % 2 == 1 and closing % 2 == 1
+    )
+    if already:
+        return block_md  # nesting it would not make it more so
+
+    return before + marker + block_md[first:last] + marker + after
+
+
+def _outside_code(source: str, first: int, last: int) -> tuple[int, int]:
+    for match in _CODE_SPAN.finditer(source):
+        if match.start() < first < match.end():
+            first = match.start()
+        if match.start() < last < match.end():
+            last = match.end()
+    return first, last
+
+
+def _unemphasise(block_md: str, first: int, last: int) -> str:
+    """Drop the delimiters of every emphasis run the span touches.
+
+    Whole runs, not just the selected part of one. Removing half of a pair
+    would leave the other half behind as a literal asterisk, and splitting a
+    run in two -- closing it before the selection and reopening after -- is a
+    larger promise than "make this plain" makes. So selecting one word of a
+    bold phrase unbolds the phrase, which is at least predictable.
+    """
+    masked, saved = _mask_code(block_md)
+
+    for _ in range(8):  # nested emphasis: `**bold *and italic* **`
+        hit = None
+        for match in _EMPHASIS_RUN.finditer(masked):
+            if match.start() < last and first < match.end():
+                hit = match
+                break
+        if hit is None:
+            break
+
+        width = len(hit.group(1))
+        inner = (hit.start() + width, hit.end() - width)
+        masked = masked[: hit.start()] + masked[inner[0] : inner[1]] + masked[hit.end() :]
+        saved = [
+            (at - (width * 2 if at >= hit.end() else width if at >= inner[0] else 0), text)
+            for at, text in saved
+        ]
+        # Everything after the opening delimiter shifted left by its width.
+        if hit.start() < first:
+            first = max(hit.start(), first - width)
+            last -= width
+        elif hit.start() < last:
+            last -= width
+
+    return _restore_code(masked, saved)
+
+
+def apply_formats(markdown: str, spans: list[Span], style: str) -> str:
+    """Restyle every span, bottom block first so line numbers stay valid."""
+    lines = markdown.splitlines()
+    visible = rendered_texts_in(markdown, [(s.line, s.end) for s in spans])
+
+    for span in sorted(spans, key=lambda s: s.line, reverse=True):
+        if not 0 <= span.line < len(lines) or span.end <= span.line:
+            continue
+        block = "\n".join(lines[span.line : span.end]).rstrip("\n")
+        styled = format_block(
+            block, span.start, span.stop, style,
+            rendered=visible.get((span.line, span.end)),
+        )
+        lines[span.line : span.end] = styled.splitlines()
+
+    return normalise("\n".join(lines))
+
+
 def apply_cuts(markdown: str, cuts: list[Cut]) -> str:
     """Remove every cut span, bottom block first so line numbers stay valid."""
     lines = markdown.splitlines()

@@ -439,3 +439,134 @@ def test_notes_are_re_adopted_after_a_swap():
     assert "window.mdweave.refresh()" in ui
     assert "ui.adopt(" in edit
     assert "refresh: refresh" in notes
+
+
+# --- bold, italic, and back to plain ----------------------------------------
+#
+# The other half of the selection menu. Unlike a comment or a highlight this
+# edits the *markdown*: `**` goes into the file and travels with it. Everything
+# below is about the seam between what the reader can see -- visible characters
+# of a rendered block -- and where those characters came from in the source.
+
+from mdweave.edits import Span, apply_formats, format_block  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    "source, start, stop, style, want",
+    [
+        ("alpha bravo charlie", 6, 11, "bold", "alpha **bravo** charlie"),
+        ("alpha bravo charlie", 6, 11, "italic", "alpha *bravo* charlie"),
+        # A drag very often takes a space with it, and markdown will not open
+        # an emphasis run against one -- `** bravo **` is four asterisks.
+        ("alpha bravo charlie", 5, 12, "bold", "alpha **bravo** charlie"),
+        ("alpha bravo charlie", 0, 19, "bold", "**alpha bravo charlie**"),
+        # Already exactly this: nesting it would not make it more bold.
+        ("alpha **bravo** charlie", 6, 11, "bold", "alpha **bravo** charlie"),
+        # Emphasis inside emphasis is a real thing and stays one.
+        ("alpha **bravo** charlie", 6, 11, "italic", "alpha ***bravo*** charlie"),
+        ("alpha *bravo* charlie", 6, 11, "bold", "alpha ***bravo*** charlie"),
+        # A run of three is bold *and* italic, so both are already on. Neither
+        # a suffix test nor a length test sees that: `**` ends with `*`, and
+        # `***` is bold without being two characters long.
+        ("alpha ***bravo*** charlie", 6, 11, "bold", "alpha ***bravo*** charlie"),
+        ("alpha ***bravo*** charlie", 6, 11, "italic", "alpha ***bravo*** charlie"),
+        ("alpha *bravo* charlie", 6, 11, "italic", "alpha *bravo* charlie"),
+    ],
+)
+def test_wrapping_a_selection(source, start, stop, style, want):
+    assert format_block(source, start, stop, style) == want
+
+
+@pytest.mark.parametrize(
+    "source, start, stop, want",
+    [
+        ("alpha **bravo** charlie", 6, 11, "alpha bravo charlie"),
+        ("alpha *bravo* charlie", 6, 11, "alpha bravo charlie"),
+        ("alpha ***bravo*** charlie", 6, 11, "alpha bravo charlie"),
+        # Part of a run: the whole run goes. Removing half a pair would leave
+        # the other half as a literal asterisk, and splitting the run in two is
+        # a larger promise than "make this plain" makes.
+        ("alpha **bravo charlie** delta", 6, 11, "alpha bravo charlie delta"),
+        ("nothing to undo here", 0, 7, "nothing to undo here"),
+    ],
+)
+def test_taking_emphasis_off(source, start, stop, want):
+    assert format_block(source, start, stop, "plain") == want
+
+
+def test_a_marker_is_never_put_inside_a_code_span():
+    """The reader selected visible text and cannot see where the backticks
+    are. A marker dropped between them is a literal asterisk and breaks the
+    span, so a boundary landing inside one is pushed out to its edge."""
+    # Visible text is "use a*b here"; 4..9 is "a*b h", which starts inside the
+    # code span.
+    assert format_block("use `a*b` here", 4, 9, "bold") == "use **`a*b` h**ere"
+    assert "`a*b`" in format_block("use `a*b` here", 4, 9, "bold")
+
+
+def test_an_asterisk_inside_code_is_not_an_emphasis_delimiter():
+    assert format_block("a `x*y*z` b", 0, 1, "plain") == "a `x*y*z` b"
+
+
+def test_a_selection_with_nothing_in_it_changes_nothing():
+    assert format_block("alpha bravo", 3, 3, "bold") == "alpha bravo"
+    assert format_block("alpha bravo", 5, 6, "bold") == "alpha bravo"  # just a space
+
+
+def test_an_unknown_style_is_refused():
+    with pytest.raises(ValueError):
+        format_block("alpha", 0, 5, "underline")
+
+
+def test_formatting_spans_several_blocks_one_at_a_time():
+    """A selection across two paragraphs cannot be one emphasis run, so each
+    block gets its own -- and the blocks are done bottom-first, or the line
+    numbers in the ones above would be stale by the time they are reached."""
+    source = "# Title\n\nfirst paragraph\n\nsecond paragraph\n"
+    out = apply_formats(
+        source, [Span(2, 3, 0, 5), Span(4, 5, 0, 6)], "bold"
+    )
+    assert "**first** paragraph" in out
+    assert "**second** paragraph" in out
+
+
+# --- through the endpoint ---------------------------------------------------
+
+def test_the_endpoint_rewrites_the_markdown_and_the_page(server):
+    base, workspace = server
+    line, end, start, stop = _first_paragraph(workspace)
+
+    status, _ = call(base, "POST", "/api/format", {
+        "document": "doc",
+        "style": "bold",
+        "spans": [{"start": line, "end": end, "from": start, "to": stop}],
+    })
+
+    assert status == 200
+    assert "**First**" in workspace.source_of("doc")
+    assert "<strong>First</strong>" in (workspace.outputs / "doc.html").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_the_endpoint_refuses_a_style_it_does_not_know(server):
+    base, workspace = server
+    line, end, start, stop = _first_paragraph(workspace)
+    before = workspace.source_of("doc")
+
+    status, payload = call(base, "POST", "/api/format", {
+        "document": "doc", "style": "blink",
+        "spans": [{"start": line, "end": end, "from": start, "to": stop}],
+    })
+
+    assert status == 400 and "unknown style" in payload["error"]
+    assert workspace.source_of("doc") == before
+
+
+def _first_paragraph(workspace):
+    """The line range of the first paragraph, and the first word in it."""
+    lines = workspace.source_of("doc").splitlines()
+    for n, text in enumerate(lines):
+        if text.strip() and not text.startswith("#"):
+            return n, n + 2, 0, len(text.split()[0])
+    raise AssertionError("no paragraph in the fixture")

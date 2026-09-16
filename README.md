@@ -511,8 +511,31 @@ not load-bearing is a thing to maintain and explain rather than a defence.
 
 ## Adding comments in the browser
 
-Select any text and a menu appears with two rows — **Comment** and
-**Highlight** — each showing the six slots of the active scheme. The colour *is* the button, so
+Select any text and a menu appears in two sections, and the division is the
+point: the top one **edits your prose**, the bottom one only annotates it.
+
+**Format** — `B`, `I`, `P` — writes to the markdown. Bold puts `**` in the
+file and italic puts `*`, and they travel with the document to anything else
+that reads it. `P` is plain: it takes the emphasis back off, so undoing a bold
+does not mean opening the raw markdown to delete a pair of asterisks. Pressing
+a style the selection already has does nothing rather than nesting it —
+`****x****` is not more bold — which is why removing has its own button and is
+not a second press.
+
+Three details the seam between visible text and source forces:
+
+- A drag usually takes a space with it, and markdown will not open an emphasis
+  run against one, so the selection is trimmed before the markers go in.
+- A boundary landing inside a code span is pushed out to its edge. You
+  selected visible text and cannot see where the backticks are; a marker
+  between them is a literal asterisk and breaks the span.
+- `P` removes whole emphasis runs the selection touches, not just the selected
+  part of one. Removing half a pair would leave the other half behind as a
+  stray asterisk, and splitting a run in two is a bigger promise than "make
+  this plain" makes.
+
+**Annotations** — **Comment** and **Highlight** — each showing the six slots of
+the active scheme. The colour *is* the button, so
 either is one click rather than "make it, then recolour it". A highlight has
 nothing to type and so skips the composer entirely; a comment opens one,
 already in the colour you picked.

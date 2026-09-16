@@ -1194,6 +1194,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self._api_block()
         if route.path == "/api/cut":
             return self._api_cut()
+        if route.path == "/api/format":
+            return self._api_format()
         if route.path == "/api/extract":
             return self._api_extract()
         if route.path == "/api/refresh":
@@ -1417,6 +1419,25 @@ class Handler(SimpleHTTPRequestHandler):
             raise ApiError(HTTPStatus.BAD_REQUEST, str(exc))
 
         return self._rewrite(doc_id, source, updated)
+
+    def _api_format(self):
+        """Make a selection bold or italic, or take the emphasis off it.
+
+        A source edit, not an annotation: `**` goes into the markdown and
+        travels with the file. That is why it lives beside `/api/cut` rather
+        than beside `/api/annotations` -- the two halves of the selection menu
+        write to different places, and the menu says so.
+        """
+        payload = self._json_body(limit=MAX_UPLOAD_BYTES)
+        doc_id = _require(payload, "document")
+
+        style = payload.get("style")
+        if style not in (*edits.MARKERS, "plain"):
+            raise ApiError(HTTPStatus.BAD_REQUEST, f"unknown style: {style!r}")
+
+        spans = _spans(payload, "spans", edits.Span)
+        source = self.workspace.source_of(doc_id)
+        return self._rewrite(doc_id, source, edits.apply_formats(source, spans, style))
 
     def _api_cut(self):
         """Remove a selection that may run across several blocks."""

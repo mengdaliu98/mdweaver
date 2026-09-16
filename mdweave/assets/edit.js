@@ -169,6 +169,36 @@
 
   /* --- cutting a selection ------------------------------------------------ */
 
+  /* Bold, italic, and back to plain. Exposed for annotate.js, which owns the
+   * selection menu -- but the work belongs here: this is a source edit, the
+   * same kind as a cut, and it comes back the same way (the server rewrites
+   * the markdown and hands back the re-rendered page). */
+  function formatSelection(style) {
+    var selection = window.getSelection();
+    if (!selection || selection.isCollapsed || !selection.rangeCount) return false;
+
+    var range = selection.getRangeAt(0);
+    if (!doc.contains(range.commonAncestorContainer)) return false;
+
+    var spans = ui.blockRanges(range);
+    if (!spans) return false;
+
+    busy = true;
+    doc.classList.add("doc--saving");
+    selection.removeAllRanges();
+
+    post("/api/format", { document: DOC_ID, style: style, spans: spans })
+      .then(adopt)
+      .catch(failed)
+      .then(function () {
+        busy = false;
+        doc.classList.remove("doc--saving");
+      });
+    return true;
+  }
+
+  window.mdweaveFormat = formatSelection;
+
   function cutSelection() {
     var selection = window.getSelection();
     if (!selection || selection.isCollapsed || !selection.rangeCount) return false;
