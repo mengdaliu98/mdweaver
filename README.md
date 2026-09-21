@@ -97,6 +97,58 @@ before replacing. Filenames are reduced to something safe to write and link to:
 any path is discarded down to the bare name, spaces become underscores, and
 characters that break filenames or URLs are dropped.
 
+**Importing a Google Doc.** The tray arrow offers two routes: a `.md` from
+this computer, or a Google Doc URL. The doc is read once and becomes an
+ordinary document here — it renders to a static page, takes highlights and
+comments, and its prose can be edited. Nothing goes back to Google, and
+existing comments on the doc are not brought over.
+
+It lands as **markdown**, not as the HTML export, even though the export is
+higher fidelity. Everything mdweave does to a document it does through the
+markdown: a block edit rewrites a source range, a cut maps visible characters
+back to what produced them. Stored as HTML it would render and annotate but
+could not be edited, and fidelity that costs editing is the wrong trade for a
+knowledge base you write in. Tables, headings, links and emphasis all survive;
+images are dropped, because they arrive as data URIs and a megabyte of base64
+does not belong in a file you edit as text.
+
+The doc's real title becomes the row's label, verbatim — the em dashes and
+capitals `humanize` would eat are exactly what a document title is made of.
+The *filename* is a shortened, plainer version of it, because a filename is a
+URL and a title is prose.
+
+`markdown_inputs/.mdweave-sources.json` records what each imported document
+came from, keyed by document id:
+
+```json
+{
+  "Code Efficiency and Performance AAI New Capability Proposal": {
+    "kind": "gdoc",
+    "google_id": "1YSoXNsDpz…",
+    "url": "https://docs.google.com/document/d/…/edit",
+    "title": "Code Efficiency and Performance — AAI New Capability Proposal",
+    "revision": "2026-09-21T14:38:46-07:00",
+    "imported_at": "2026-09-21T21:47:00+00:00"
+  }
+}
+```
+
+That mapping is load-bearing rather than a note: **importing the same doc
+again updates the document already here** instead of making a second copy, and
+records the new revision. Only the prose is replaced — the annotations, the
+label and the position in the tree are yours and stay.
+
+`revision` is the doc's `modifiedTime`. `google.docs revisions` is the obvious
+answer and is not a reliable one: it returns nothing at all for many
+documents, including the first one this was tried against. `modifiedTime` is
+always there, changes whenever the document does, and identifies the state
+that was imported, which is the question being asked.
+
+The transport is Meta's `meta google.docs` CLI, which already holds your
+credentials — so this is the one feature here that does not work everywhere. A
+container has no `meta`; `/api/health` reports `gdoc: false` and the browser
+hides the option rather than offering one that is going to fail.
+
 **Rearranging.** Drag a document row onto a folder to move it in, onto the
 empty space below the tree to bring it back out to the top level, or between
 two rows to put it exactly there. A document's id is its path, so moving it

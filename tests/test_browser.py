@@ -800,3 +800,64 @@ def test_formatting_a_selection_edits_the_markdown(browser, tmp_path, style, tag
         httpd.shutdown()
         httpd.server_close()
         thread.join(timeout=5)
+
+
+# --- importing a Google Doc -------------------------------------------------
+
+def test_the_import_button_offers_both_routes(page):
+    """Alongside the file picker, not instead of it."""
+    page.click('.sidebar__actions [data-action="import"]')
+    page.wait_for_selector(".tree__menu", timeout=5_000)
+
+    choices = page.eval_on_selector_all(
+        ".tree__menu button", "els => els.map(e => e.textContent.trim())"
+    )
+    assert choices == ["From this computer…", "From a Google Doc…"]
+
+
+def test_the_menu_closes_on_a_click_elsewhere(page):
+    page.click('.sidebar__actions [data-action="import"]')
+    page.wait_for_selector(".tree__menu", timeout=5_000)
+    page.click(".doc")
+    assert page.locator(".tree__menu").count() == 0
+
+
+def test_without_the_cli_the_button_goes_straight_to_the_file_picker(
+    browser, tmp_path, monkeypatch
+):
+    """A container has no `meta`. An option that is always going to fail is
+    worse than one that is not offered -- so with the capability off there is
+    no menu at all, and the button does what it always did."""
+    from mdweave import gdoc
+
+    monkeypatch.setattr(gdoc, "available", lambda: False)
+
+    inputs, outputs = tmp_path / "markdown_inputs", tmp_path / "html_outputs"
+    inputs.mkdir()
+    (inputs / "top.md").write_text("# Top\n\nprose\n", encoding="utf-8")
+    workspace = Workspace(inputs=inputs, outputs=outputs)
+    workspace.rebuild_all()
+
+    httpd = make_server(workspace, "127.0.0.1", 0)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    context = browser.new_context(viewport={"width": 1280, "height": 900})
+    page = context.new_page()
+    try:
+        page.goto(f"http://127.0.0.1:{httpd.server_port}/top.html", wait_until="networkidle")
+        page.wait_for_selector(".sidebar--manageable", timeout=10_000)
+        assert page.evaluate(
+            "async () => (await (await fetch('/api/health')).json()).gdoc"
+        ) is False
+
+        # The file picker is a hidden <input type=file>; clicking import opens
+        # the OS dialog, which Playwright reports as a filechooser event. That
+        # it fires at all is the proof there was no menu in the way.
+        with page.expect_file_chooser(timeout=5_000):
+            page.click('.sidebar__actions [data-action="import"]')
+        assert page.locator(".tree__menu").count() == 0
+    finally:
+        context.close()
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)

@@ -455,3 +455,39 @@ body.sidebar-resizing {
 @media print {
   .tree__actions, .sidebar__root { display: none !important; }
 }
+
+
+/* --- the import menu ------------------------------------------------------ */
+
+/* Two ways to import, so the button opens a choice rather than going straight
+   to the file picker. Fixed rather than absolute: the panel scrolls, and a
+   menu that scrolls away from the button it belongs to is worse than one that
+   stays put. */
+.tree__menu {
+  position: fixed;
+  z-index: 75;
+  min-width: 11.5rem;
+  padding: 0.25rem;
+  border-radius: 8px;
+  background: var(--surface);
+  border: 1px solid var(--rule-strong);
+  box-shadow: var(--shadow-md);
+  font-size: 0.82rem;
+}
+
+.tree__menu button {
+  display: block;
+  width: 100%;
+  padding: 0.35rem 0.5rem;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tree__menu button:hover {
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+}

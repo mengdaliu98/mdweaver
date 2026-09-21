@@ -28,6 +28,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
 
 from . import checkpoint as git_checkpoint
+from . import gdoc
 from . import scheme as schemes
 from . import edits
 from .agent import protocol
@@ -47,7 +48,9 @@ from .tree import (
     folder_paths,
     humanize,
     load_labels,
+    load_sources,
     save_labels,
+    save_sources,
     load_order,
     safe_document_name,
     safe_folder_name,
@@ -211,6 +214,59 @@ class Workspace:
                 if k != key and not k.startswith(f"{key}/")}
         if gone != labels:
             save_labels(self.inputs, gone)
+
+    # --- imported documents -------------------------------------------------
+
+    def import_gdoc(self, url: str, folder: str = "") -> tuple[str, bool]:
+        """Snapshot a Google Doc into the knowledge base. (id, was_update).
+
+        Re-importing one already here rewrites that document rather than
+        making a second copy -- which is what the sources dictionary is *for*.
+        Anything the reader added is theirs, so only the prose is replaced;
+        the annotations, the label and the position in the tree all stay.
+        """
+        snapshot = gdoc.fetch(url)
+
+        existing = next(
+            (doc_id for doc_id, where in load_sources(self.inputs).items()
+             if where.get("google_id") == snapshot.doc_id
+             and doc_id in self.documents()),
+            None,
+        )
+
+        if existing:
+            doc_id = existing
+            self.markdown_for(doc_id).write_text(
+                snapshot.markdown + "\n", encoding="utf-8"
+            )
+        else:
+            name = gdoc.filename_for(snapshot.title)
+            doc_id, path = self.destination(f"{folder}/{name}" if folder else name)
+            if path.exists():
+                raise ApiError(
+                    HTTPStatus.CONFLICT, f"a document called {doc_id!r} already exists"
+                )
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(snapshot.markdown + "\n", encoding="utf-8")
+            # The real title, kept verbatim. `humanize` would eat the em dash
+            # and the capitals, and a Google Doc's name is already prose.
+            self.set_label(doc_id, snapshot.title)
+
+        sources = load_sources(self.inputs)
+        sources[doc_id] = gdoc.record(snapshot, doc_id)
+        save_sources(self.inputs, sources)
+        return doc_id, bool(existing)
+
+    def forget_source(self, doc_id: str) -> None:
+        sources = load_sources(self.inputs)
+        if sources.pop(doc_id, None) is not None:
+            save_sources(self.inputs, sources)
+
+    def move_source(self, old: str, new: str) -> None:
+        sources = load_sources(self.inputs)
+        if old in sources:
+            sources[new] = sources.pop(old)
+            save_sources(self.inputs, sources)
 
     def remap_slots(self, moved: list[int]) -> int:
         """Renumber every annotation so a reordered scheme looks unchanged.
@@ -492,6 +548,7 @@ class Workspace:
 
         self._reindex(doc_id, new_id)
         self.move_labels(doc_id, new_id)
+        self.move_source(doc_id, new_id)
         return new_id
 
     def delete_document(self, doc_id: str) -> None:
@@ -507,6 +564,7 @@ class Workspace:
 
         self._reindex(doc_id, None)
         self.forget_label(doc_id)
+        self.forget_source(doc_id)
 
     # --- folders ----------------------------------------------------------
 
@@ -1031,6 +1089,10 @@ class Handler(SimpleHTTPRequestHandler):
                 "pid": os.getpid(),  # how `mdweave stop` finds this process
                 "fingerprint": RUNNING_FINGERPRINT,
                 "autosave": self.autosave.status(),
+                # The Google Docs import shells out to Meta's `meta` CLI,
+                # which a container does not have. The browser hides the
+                # option rather than offering one that cannot work.
+                "gdoc": gdoc.available(),
                 "documents": sorted(self.workspace.documents()),
             }
 
@@ -1182,6 +1244,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self._api_folder_delete()
         if route.path == "/api/documents/create":
             return self._api_create()
+        if route.path == "/api/documents/import-gdoc":
+            return self._api_import_gdoc()
         if route.path == "/api/documents/move":
             return self._api_move()
         if route.path == "/api/documents/delete":
@@ -1339,6 +1403,30 @@ class Handler(SimpleHTTPRequestHandler):
         doc_id = self.workspace.create_document(_require(payload, "path"))
         self.workspace.rebuild_tree({doc_id})
         return HTTPStatus.CREATED, _with_panel(self, payload, _described(doc_id))
+
+    def _api_import_gdoc(self):
+        """Snapshot a Google Doc as a document here.
+
+        A snapshot and not a link: from now on it is an ordinary document,
+        with its own annotations and its own edits, and nothing goes back to
+        Google. What it came from is recorded in `.mdweave-sources.json` so a
+        later import of the same doc updates this one rather than making a
+        second copy.
+        """
+        payload = self._json_body()
+        try:
+            doc_id, updated = self.workspace.import_gdoc(
+                _require(payload, "url"), str(payload.get("folder", ""))
+            )
+        except gdoc.GDocError as exc:
+            # Not a 500: the reader can act on every one of these -- a bad
+            # URL, a document they cannot see, a machine without the CLI.
+            raise ApiError(HTTPStatus.BAD_GATEWAY, str(exc))
+
+        self.workspace.rebuild_tree({doc_id})
+        body = _described(doc_id)
+        body["updated"] = updated
+        return HTTPStatus.CREATED, _with_panel(self, payload, body)
 
     def _api_move(self):
         """Move a document into another folder, or rename it -- one operation.

@@ -220,6 +220,81 @@
       .catch(fail);
   }
 
+  /* --- importing ------------------------------------------------------------
+   *
+   * Two ways in, so the button opens a little menu rather than going straight
+   * to the file picker. The Google Doc option is only drawn when the server
+   * says it can read one: it shells out to Meta's `meta` CLI, which a
+   * container does not have, and an option that is always going to fail is
+   * worse than one that is not there. */
+  var canGdoc = false;
+  ui.api().then(function (health) {
+    canGdoc = !!(health && health.gdoc);
+  });
+
+  function closeImportMenu() {
+    // On `document`, not the sidebar: the menu is appended to the body so it
+    // can escape the panel's scroll box, which is also why it is position:fixed.
+    var open = document.querySelector(".tree__menu");
+    if (open) open.parentNode.removeChild(open);
+  }
+
+  function importMenu(button) {
+    var folder = folderAt(button);
+    var api = window.mdweaveSidebar;
+
+    // Nothing to choose between: go where the only door is.
+    if (!canGdoc) {
+      if (api) api.importInto(folder);
+      return;
+    }
+
+    closeImportMenu();
+    var menu = document.createElement("div");
+    menu.className = "tree__menu";
+    menu.innerHTML =
+      '<button type="button" data-from="file">From this computer…</button>' +
+      '<button type="button" data-from="gdoc">From a Google Doc…</button>';
+
+    var box = button.getBoundingClientRect();
+    menu.style.top = box.bottom + 4 + "px";
+    menu.style.left = Math.max(6, box.right - 190) + "px";
+    document.body.appendChild(menu);
+
+    menu.addEventListener("click", function (event) {
+      var pick = event.target.closest("button");
+      if (!pick) return;
+      closeImportMenu();
+      if (pick.dataset.from === "file") {
+        if (api) api.importInto(folder);
+      } else {
+        importGdoc(folder);
+      }
+    });
+
+    window.setTimeout(function () {
+      document.addEventListener("click", closeImportMenu, { once: true });
+    }, 0);
+  }
+
+  function importGdoc(folder) {
+    var url = window.prompt("Paste the Google Doc URL", "");
+    if (url === null) return;
+    url = url.trim();
+    if (!url) return;
+
+    // Reading a long document takes a few seconds, and the panel going quiet
+    // for that long looks like nothing happened.
+    busy(true);
+    ui.toast("Reading the Google Doc…", "info");
+    post("/api/documents/import-gdoc", { url: url, folder: folder })
+      .then(function (payload) {
+        if (payload.updated) ui.toast("Updated to the current revision", "info");
+        window.location.href = PREFIX + payload.document.href;
+      })
+      .catch(fail);
+  }
+
   /* --- folders -------------------------------------------------------------
    *
    * A folder row's buttons act *inside* it; the root's act at the top level.
@@ -285,8 +360,7 @@
     create: create,
     "new-folder": newFolder,
     import: function (button) {
-      var api = window.mdweaveSidebar;
-      if (api) api.importInto(folderAt(button));
+      importMenu(button);
     },
     rename: rename,
     "rename-folder": renameFolder,

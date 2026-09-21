@@ -24,6 +24,10 @@ ORDER_FILE = ".mdweave-order.json"
 # way to know. This is where the exceptions live, so the rule can stay simple.
 LABELS_FILE = ".mdweave-labels.json"
 
+# Where an imported document came from, keyed by document id. Only imports
+# appear here -- a document written by hand has no source to record.
+SOURCES_FILE = ".mdweave-sources.json"
+
 
 def load_labels(root: Path) -> dict[str, str]:
     """Hand-written labels, keyed by document id or folder path.
@@ -55,6 +59,28 @@ def save_labels(root: Path, labels: dict[str, str]) -> None:
     root.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(trimmed, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+
+def load_sources(root: Path) -> dict[str, dict]:
+    """What each imported document was taken from, keyed by document id."""
+    try:
+        data = json.loads((root / SOURCES_FILE).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(k): v for k, v in data.items() if isinstance(v, dict)}
+
+
+def save_sources(root: Path, sources: dict[str, dict]) -> None:
+    path = root / SOURCES_FILE
+    if not sources:
+        path.unlink(missing_ok=True)
+        return
+    root.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(sources, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
 
 

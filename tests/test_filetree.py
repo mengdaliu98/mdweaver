@@ -1198,8 +1198,9 @@ def test_every_prompt_that_makes_a_path_escapes_a_slash(tmp_path):
     assert source.count("askName(") == 3, "a create prompt is bypassing askName"
     # One definition, two callers: renaming a document and renaming a folder.
     assert source.count("renameLabel(") == 3
-    # Which accounts for every prompt in the file.
-    assert len(re.findall(r"window\.prompt\(", source)) == 2
+    # Three prompts in the file: those two, and the Google Doc URL -- which is
+    # neither a name nor a caption. It is a URL, and the server parses it.
+    assert len(re.findall(r"window\.prompt\(", source)) == 3
 
 
 def test_a_name_that_escapes_to_nothing_is_refused(server):
