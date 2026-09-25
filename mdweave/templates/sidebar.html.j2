@@ -107,6 +107,20 @@
            whichever row was clicked, not a property of the picker. #}
         <input type="file" id="sidebar-file" accept=".md,text/markdown" multiple hidden>
 {{ row_actions("root", "the top level") }}
+        {# Take what another machine has written. Hidden until the server says
+           these documents came from a remote at all -- pulling from nowhere
+           is not an idea. Distinct from the refresh beside Checkpoint, which
+           re-renders *this page* from the disk it already has; this one goes
+           and gets the disk. #}
+        <button class="tree__action" type="button" id="sidebar-pull"
+                data-action="pull" title="Pull the latest from the remote"
+                aria-label="Pull the latest from the remote" hidden>
+          <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+            <path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"
+                  d="M13.3 7.2a5.4 5.4 0 1 1-1.6-3.4"/>
+            <path fill="currentColor" d="M13.9 1.9v4.2H9.7z"/>
+          </svg>
+        </button>
         {# Settings sits with the row controls but is not one of them: it acts
            on the whole knowledge base rather than on a folder, which is why it
            is last, next to the panel's own control rather than among the four

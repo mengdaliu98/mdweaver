@@ -419,6 +419,16 @@ body.sidebar-resizing {
 
 .tree__action svg { width: 12px; height: 12px; }
 
+/* Turning while the fetch is out. The button is the only thing on screen that
+   knows a pull is happening, and a pull that looks like nothing gets pressed
+   again. */
+@keyframes mdweave-tree-spin { to { transform: rotate(360deg); } }
+
+.tree__action--spinning svg {
+  animation: mdweave-tree-spin 0.9s linear infinite;
+  transform-origin: 50% 50%;
+}
+
 .tree__action:hover {
   background: color-mix(in srgb, var(--ink) 12%, transparent);
   color: var(--sidebar-ink);

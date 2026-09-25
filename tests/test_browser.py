@@ -238,15 +238,28 @@ def slot_pickers(page):
     )
 
 
-def test_the_gear_sits_between_import_and_the_collapse_control(page):
-    """Where it was asked for, and the order is the meaning: it acts on the
-    whole knowledge base, so it belongs past the four that write files and
-    beside the panel's own control."""
+def test_the_head_controls_are_in_their_two_groups(page):
+    """The order is the meaning. First the three that write a file into the
+    tree, then the two that act on the whole knowledge base, then the panel's
+    own control."""
     order = page.eval_on_selector_all(
         ".sidebar__actions button",
         "els => els.map(e => e.id || e.dataset.action)",
     )
-    assert order[-3:] == ["import", "sidebar-settings", "sidebar-collapse"]
+    assert order == [
+        "create", "new-folder", "import",       # write into the tree
+        "sidebar-pull", "sidebar-settings",     # act on the whole base
+        "sidebar-collapse",                     # the panel itself
+    ]
+
+
+def test_pull_is_hidden_when_there_is_nowhere_to_pull_from(page):
+    """The fixture's knowledge base is a bare directory, not a checkout.
+    Offering to fetch from a remote that does not exist is offering nothing."""
+    assert page.locator("#sidebar-pull").is_hidden()
+    assert page.evaluate(
+        "async () => (await (await fetch('/api/health')).json()).remote"
+    ) is False
 
 
 def test_the_window_opens_and_can_be_moved(page):

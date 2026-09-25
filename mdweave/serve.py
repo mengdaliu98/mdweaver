@@ -30,6 +30,7 @@ from urllib.parse import parse_qs, quote, urlparse
 from . import checkpoint as git_checkpoint
 from . import gdoc
 from . import scheme as schemes
+from .sync import DEFAULT_INTERVAL, Pull
 from . import edits
 from .agent import protocol
 from .autosave import DEFAULT_DELAY, AutoCommit
@@ -216,6 +217,14 @@ class Workspace:
             save_labels(self.inputs, gone)
 
     # --- imported documents -------------------------------------------------
+
+    def has_remote(self) -> bool:
+        """Whether these documents came from somewhere there is to pull from."""
+        try:
+            repo = git_checkpoint.repo_root(self.inputs)
+            return bool(git_checkpoint._git(repo, "remote").strip())
+        except git_checkpoint.GitError:
+            return False
 
     def import_gdoc(self, url: str, folder: str = "") -> tuple[str, bool]:
         """Snapshot a Google Doc into the knowledge base. (id, was_update).
@@ -945,10 +954,13 @@ class Handler(SimpleHTTPRequestHandler):
     # with every error path audited, and not as a side effect of adding SSE.
 
     def __init__(
-        self, *args, workspace: Workspace, autosave=None, jobs=None, **kwargs
+        self, *args, workspace: Workspace, autosave=None, jobs=None, puller=None, **kwargs
     ) -> None:
         self.workspace = workspace
         self.autosave = autosave or AutoCommit(workspace.inputs, workspace.outputs)
+        self.puller = puller or Pull(
+            workspace.inputs, workspace.outputs, workspace.rebuild_all
+        )
         self.jobs = jobs
         super().__init__(*args, directory=str(workspace.outputs), **kwargs)
 
@@ -1093,6 +1105,9 @@ class Handler(SimpleHTTPRequestHandler):
                 # which a container does not have. The browser hides the
                 # option rather than offering one that cannot work.
                 "gdoc": gdoc.available(),
+                "pull": self.puller.status(),
+                # Whether "take what is on the remote" means anything here.
+                "remote": self.workspace.has_remote(),
                 "documents": sorted(self.workspace.documents()),
             }
 
@@ -1264,6 +1279,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self._api_extract()
         if route.path == "/api/refresh":
             return self._api_refresh()
+        if route.path == "/api/pull":
+            return self._api_pull()
         if route.path == "/api/checkpoint":
             return self._api_checkpoint()
         if route.path == "/api/schemes":
@@ -1734,6 +1751,22 @@ class Handler(SimpleHTTPRequestHandler):
         except ValueError:
             return False
 
+    def _api_pull(self):
+        """Take whatever another machine has written, now rather than on the timer.
+
+        The same merge the timer and the boot script run. Synchronous because
+        the reader pressed a button and is waiting to see the answer -- the
+        background one exists precisely so that nobody has to.
+        """
+        outcome = self.puller.run_now()
+        if outcome.error:
+            raise ApiError(HTTPStatus.BAD_GATEWAY, outcome.error)
+
+        payload = self._json_body() if self._has_body() else {}
+        return HTTPStatus.OK, _with_panel(
+            self, payload, {"merged": outcome.merged, "at": outcome.at}
+        )
+
     def _api_checkpoint(self):
         """Commit and push one document, with the message the reader wrote."""
         payload = self._json_body()
@@ -2076,6 +2109,29 @@ def _require(payload: dict, key: str) -> str:
     return value
 
 
+def puller_for(workspace: Workspace, lock) -> Pull:
+    """Read the background-pull setting from the environment.
+
+    Off unless MDWEAVE_PULL names a number of seconds. Opt-in for the same
+    reason auto-commit is: merging somebody else's work into a checkout
+    without being asked is not a default to assume. The container sets it --
+    it is the machine that had no other way to hear about a change.
+    """
+    raw = os.environ.get("MDWEAVE_PULL", "").strip()
+    try:
+        interval = float(raw)
+    except ValueError:
+        interval = 0.0
+    return Pull(
+        inputs=workspace.inputs,
+        outputs=workspace.outputs,
+        rebuild=workspace.rebuild_all,
+        interval=interval or DEFAULT_INTERVAL,
+        enabled=interval > 0,
+        lock=lock,
+    )
+
+
 def autocommit_for(workspace: Workspace) -> AutoCommit:
     """Read the auto-commit setting from the environment.
 
@@ -2117,11 +2173,14 @@ def make_server(
     port: int,
     autosave: AutoCommit | None = None,
     jobs=None,
+    puller: Pull | None = None,
 ) -> ThreadingHTTPServer:
     workspace.outputs.mkdir(parents=True, exist_ok=True)
     return ThreadingHTTPServer(
         (host, port),
-        partial(Handler, workspace=workspace, autosave=autosave, jobs=jobs),
+        partial(
+            Handler, workspace=workspace, autosave=autosave, jobs=jobs, puller=puller
+        ),
     )
 
 
@@ -2133,15 +2192,20 @@ def serve(inputs: Path, outputs: Path, host: str = "127.0.0.1", port: int = 8765
 
     workspace = Workspace(inputs=inputs, outputs=outputs)
     autosave = autocommit_for(workspace)
+    # One lock between them: a fetch landing between a commit and its push
+    # would leave the commit stranded behind a remote that had just moved.
+    puller = puller_for(workspace, autosave.lock)
     jobs = broker_for(workspace)
-    httpd = make_server(workspace, host, port, autosave, jobs)
+    httpd = make_server(workspace, host, port, autosave, jobs, puller)
+    puller.start()
 
     guarded = " [password required]" if credentials() else ""
     saving = f"  [auto-commit after {autosave.delay:g}s]" if autosave.enabled else ""
+    pulling = f"  [pulling every {puller.interval:g}s]" if puller.enabled else ""
     bridge = "  [agent bridge open]" if jobs is not None else ""
     print(
         f"mdweave serving http://{host}:{httpd.server_port}/  "
-        f"[{RUNNING_FINGERPRINT}]{guarded}{saving}{bridge}  (Ctrl-C to stop)"
+        f"[{RUNNING_FINGERPRINT}]{guarded}{saving}{pulling}{bridge}  (Ctrl-C to stop)"
     )
     for name in workspace.documents():
         print(f"  http://{host}:{httpd.server_port}/{name}.html")
@@ -2152,6 +2216,7 @@ def serve(inputs: Path, outputs: Path, host: str = "127.0.0.1", port: int = 8765
     finally:
         # Anything written in the last few seconds has an armed timer that will
         # never fire now. Commit it rather than leaving it on the disk only.
+        puller.stop()
         autosave.cancel()
         if autosave.enabled:
             autosave.run_now()

@@ -71,6 +71,12 @@ mkdir -p "$CONTENTS/markdown_inputs" "$CONTENTS/html_outputs"
 
 # serve, not start: a container wants one process in the foreground, not a
 # daemon that forks away and lets the entrypoint exit.
+# Pull every few minutes. Until this existed the container only fetched at
+# boot, so a document written on a laptop did not appear here until the
+# service restarted -- the push half of the loop worked and the pull half
+# did not. 180s is well under the time it takes to notice.
+export MDWEAVE_PULL="${MDWEAVE_PULL:-180}"
+
 exec mdweave serve \
   --host 0.0.0.0 \
   --port "${PORT:-8765}" \

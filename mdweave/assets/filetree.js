@@ -230,7 +230,15 @@
   var canGdoc = false;
   ui.api().then(function (health) {
     canGdoc = !!(health && health.gdoc);
+    // Pulling from nowhere is not an idea, so the button only appears once
+    // the server has said these documents have a remote.
+    if (health && health.remote) showPull();
   });
+
+  function showPull() {
+    var button = document.getElementById("sidebar-pull");
+    if (button) button.hidden = false;
+  }
 
   function closeImportMenu() {
     // On `document`, not the sidebar: the menu is appended to the body so it
@@ -293,6 +301,32 @@
         window.location.href = PREFIX + payload.document.href;
       })
       .catch(fail);
+  }
+
+  /* Take what another machine has written, now rather than on the timer.
+   *
+   * Not the same as the refresh beside Checkpoint: that one re-renders the
+   * page being read from the files already on disk, which is the right answer
+   * when something edited the markdown underneath. This goes to the remote
+   * first. Both exist because they answer different questions -- "has this
+   * file changed?" and "has anyone else written anything?" */
+  function pull(button) {
+    var spin = button || document.getElementById("sidebar-pull");
+    if (spin) spin.classList.add("tree__action--spinning");
+    busy(true);
+
+    post("/api/pull", {})
+      .then(function (payload) {
+        ui.toast(
+          payload.merged ? "Took the latest from the remote" : "Already up to date",
+          "info"
+        );
+        settle(payload);
+      })
+      .catch(fail)
+      .then(function () {
+        if (spin) spin.classList.remove("tree__action--spinning");
+      });
   }
 
   /* --- folders -------------------------------------------------------------
@@ -362,6 +396,7 @@
     import: function (button) {
       importMenu(button);
     },
+    pull: pull,
     rename: rename,
     "rename-folder": renameFolder,
     delete: remove,

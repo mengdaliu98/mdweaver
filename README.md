@@ -407,6 +407,43 @@ into this page is wrong too, so the button falls back to a real reload rather
 than leaving you with a navigation that lies. It also waits for an edit that
 is still saving, instead of replacing the prose out from under it.
 
+## Taking in what another machine wrote
+
+The container pushes what it writes, and used to fetch only at boot. So
+writing on a laptop and reading on the deployed instance was one directional:
+the documents sat on the remote and the container had no reason to look. The
+only ways round it were to restart the service, or to edit something there and
+have its push rejected, which merged as a side effect.
+
+Two ways in now.
+
+**On a timer.** `MDWEAVE_PULL=<seconds>` polls the remote and merges. Off
+unless set, for the same reason auto-commit is — merging somebody else's work
+into a checkout unasked is not a default to assume. `deploy/start.sh` sets it
+to 180, because the container is the machine with no other way to hear.
+
+**On demand.** The circular arrow beside **Documents** does it now, and spins
+while the fetch is out. It is hidden unless `/api/health` reports a remote:
+offering to fetch from nowhere is offering nothing.
+
+It is not the same control as the refresh beside **Checkpoint**. That one
+re-renders the page you are reading from the files already on disk, which is
+what you want when something edited the markdown underneath. This one goes and
+gets the disk. Different questions — "has this file changed?" and "has anyone
+else written anything?"
+
+Both share one merge policy with the boot script and with a rejected push:
+`reconcile`. Generated pages are resolved by rebuilding over the prose that
+arrived; a conflict in `markdown_inputs` is aborted and left for a person,
+which is the one thing a background job must never guess at. The pull also
+shares the auto-commit's lock — two `git` processes in one repository is an
+`index.lock` error, and a fetch landing between a commit and its push strands
+the commit behind a remote that just moved.
+
+A failed tick is reported and the timer re-arms. A poller that gives up on its
+first network blip is a poller that stops, and nobody notices until they
+wonder why nothing is arriving.
+
 ## Saving on its own
 
 Set `MDWEAVE_AUTOCOMMIT` to a number of seconds and the server commits and

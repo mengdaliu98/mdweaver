@@ -54,10 +54,13 @@ class AutoCommit:
     # the container serves someone else's writing through its own stale HTML.
     rebuild: Callable[[], None] | None = None
 
-    _timer: threading.Timer | None = field(default=None, init=False, repr=False)
     # One git process at a time. A manual checkpoint can land mid-timer, and
-    # two `git commit`s in one repository at once is an index.lock error.
-    _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
+    # two `git commit`s in one repository at once is an index.lock error. The
+    # background pull shares this, so a fetch cannot land between a commit and
+    # its push -- hence a constructor argument rather than a private field.
+    lock: threading.Lock = field(default_factory=threading.Lock)
+
+    _timer: threading.Timer | None = field(default=None, init=False, repr=False)
     _last: Outcome = field(default_factory=Outcome, init=False, repr=False)
 
     # --- the request side, which must stay cheap --------------------------
@@ -66,7 +69,7 @@ class AutoCommit:
         """Note that something changed. Returns immediately."""
         if not self.enabled:
             return
-        with self._lock:
+        with self.lock:
             if self._timer is not None:
                 self._timer.cancel()
             self._timer = threading.Timer(self.delay, self._fire)
@@ -74,7 +77,7 @@ class AutoCommit:
             self._timer.start()
 
     def cancel(self) -> None:
-        with self._lock:
+        with self.lock:
             if self._timer is not None:
                 self._timer.cancel()
                 self._timer = None
@@ -99,7 +102,7 @@ class AutoCommit:
     # --- the timer's side -------------------------------------------------
 
     def _fire(self) -> None:
-        with self._lock:
+        with self.lock:
             self._timer = None
         self.run_now()
 
@@ -109,7 +112,7 @@ class AutoCommit:
 
         stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
         try:
-            with self._lock:
+            with self.lock:
                 repo = git.repo_root(self.inputs)
                 paths = [self.inputs, self.outputs]
                 result = git.checkpoint(
