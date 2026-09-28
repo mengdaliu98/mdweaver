@@ -22,6 +22,7 @@ import pytest
 from mdweave.serve import Workspace, make_server
 from mdweave.tree import (
     LABELS_FILE,
+    broken_links,
     ORDER_FILE,
     build_tree,
     document_ids,
@@ -1304,3 +1305,75 @@ def test_a_mangled_label_file_costs_a_caption_not_a_document(server, tmp_path):
 
     workspace.rebuild_all()
     assert "Top" in (workspace.outputs / "top.html").read_text(encoding="utf-8")
+
+
+# --- a symlink that points at nothing ---------------------------------------
+#
+# The deployed container crash-looped on this. One document in the knowledge
+# base was a symlink to a sibling checkout -- fine on the laptop it was made
+# on, nothing at all in a container -- and `rglob` lists a dangling symlink
+# happily while `read_text` raises on it. The whole build died on the one file,
+# so thirty-five other documents went down with it, on every boot.
+
+def test_a_symlink_that_resolves_is_an_ordinary_document(tmp_path):
+    inputs = tmp_path / "markdown_inputs"
+    inputs.mkdir()
+    (tmp_path / "elsewhere").mkdir()
+    (tmp_path / "elsewhere" / "target.md").write_text("# Target\n\nlinked.\n", encoding="utf-8")
+    (inputs / "linked.md").symlink_to("../elsewhere/target.md")
+
+    assert "linked" in document_ids(inputs)
+    assert broken_links(inputs) == []
+
+
+def test_a_symlink_to_nothing_is_not_a_document(tmp_path):
+    """Because a document you cannot read is not a document. `is_file`
+    follows the link, which is the one cheap check that tells the two apart."""
+    inputs = tmp_path / "markdown_inputs"
+    inputs.mkdir()
+    (inputs / "real.md").write_text("# Real\n", encoding="utf-8")
+    (inputs / "gone.md").symlink_to("../nowhere/gone.md")
+
+    assert sorted(document_ids(inputs)) == ["real"]
+
+
+def test_a_broken_link_is_reported_rather_than_merely_skipped(tmp_path):
+    """Skipping it quietly would leave the reader wondering where a document
+    went. Something has to be able to say it was meant to be here."""
+    inputs = tmp_path / "markdown_inputs"
+    inputs.mkdir()
+    (inputs / "gone.md").symlink_to("../nowhere/gone.md")
+
+    assert broken_links(inputs) == ["gone"]
+
+
+def test_the_build_survives_one_unreadable_document(tmp_path, capsys):
+    """The crash itself: one file the build could not open took the other
+    thirty-five with it, and it did so before the loop's own failure
+    counter could see it."""
+    import argparse
+    from mdweave.cli import cmd_build
+
+    inputs, outputs = tmp_path / "markdown_inputs", tmp_path / "html_outputs"
+    inputs.mkdir()
+    (inputs / "real.md").write_text("# Real\n\nprose\n", encoding="utf-8")
+    (inputs / "gone.md").symlink_to("../nowhere/gone.md")
+
+    code = cmd_build(argparse.Namespace(input=inputs, outdir=outputs, strict=False))
+
+    assert code == 0
+    assert (outputs / "real.html").exists()
+    assert "symlink to nothing" in capsys.readouterr().err
+
+
+def test_the_server_does_not_offer_a_document_it_cannot_read(tmp_path):
+    inputs, outputs = tmp_path / "markdown_inputs", tmp_path / "html_outputs"
+    inputs.mkdir()
+    (inputs / "real.md").write_text("# Real\n\nprose\n", encoding="utf-8")
+    (inputs / "gone.md").symlink_to("../nowhere/gone.md")
+
+    workspace = Workspace(inputs=inputs, outputs=outputs)
+    workspace.rebuild_all()  # used to raise
+
+    assert sorted(workspace.documents()) == ["real"]
+    assert (outputs / "real.html").exists()

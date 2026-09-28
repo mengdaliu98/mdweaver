@@ -165,8 +165,32 @@ def document_ids(root: Path) -> dict[str, Path]:
         # Skip dotted directories -- .obsidian and friends are not documents.
         if any(part.startswith(".") for part in relative.parts):
             continue
+        # A document has to be readable to be a document. `rglob` lists a
+        # dangling symlink happily and `read_text` then raises, which is how
+        # one link pointing at a sibling checkout that exists on a laptop and
+        # not in a container put the whole knowledge base into a crash loop.
+        # `is_file` follows the link, so this is the one cheap check that
+        # tells a real document from a promise of one.
+        if not path.is_file():
+            continue
         found[relative.with_suffix("").as_posix()] = path
     return found
+
+
+def broken_links(root: Path) -> list[str]:
+    """Markdown symlinks that point at nothing, as ids.
+
+    Separated from `document_ids` so that skipping one is not the same as
+    hiding it: something has to be able to say "this was meant to be here".
+    """
+    if not root.is_dir():
+        return []
+    return sorted(
+        path.relative_to(root).with_suffix("").as_posix()
+        for path in root.rglob("*.md")
+        if path.is_symlink() and not path.exists()
+        and not any(p.startswith(".") for p in path.relative_to(root).parts)
+    )
 
 
 def folder_paths(root: Path) -> list[str]:

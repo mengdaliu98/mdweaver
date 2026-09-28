@@ -24,7 +24,14 @@ from pathlib import Path
 from . import scheme as schemes
 from .render import render_document, write_assets
 from .sources import obsidian_inline, sidecar
-from .tree import build_tree, document_ids, folder_paths, humanize, load_order
+from .tree import (
+    broken_links,
+    build_tree,
+    document_ids,
+    folder_paths,
+    humanize,
+    load_order,
+)
 
 
 def contents_root() -> Path:
@@ -326,9 +333,22 @@ def cmd_build(args) -> int:
     # silently reverted the reader's colours.
     write_assets(outdir, schemes.load(root).current())
 
+    for missing in broken_links(root):
+        print(
+            f"warning: {missing}.md is a symlink to nothing here -- skipped",
+            file=sys.stderr,
+        )
+
     failures = 0
     for doc_id, path in selected.items():
-        markdown = path.read_text(encoding="utf-8")
+        try:
+            markdown = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            # One unreadable file must not cost the other thirty-five. The
+            # loop already counts failures; this one was simply outside it.
+            print(f"error: {doc_id}: {exc}", file=sys.stderr)
+            failures += 1
+            continue
         annotations = sidecar.load(sidecar.sidecar_path(path))
 
         # A document that still carries inline markup renders correctly without

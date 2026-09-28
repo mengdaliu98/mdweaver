@@ -20,6 +20,13 @@ checked out separately, as its sibling:
 `markdown_inputs/` is the root of the sidebar. Its layout, including folders,
 is the navigation -- add a subdirectory and it becomes a collapsible group.
 
+A `.md` symlink is followed and rendered like any other document. One whose
+target is missing is skipped with a warning rather than being an error: a link
+to a sibling checkout resolves on the machine it was made on and dangles in a
+container, and one of those took the deployed instance into a crash loop --
+`rglob` lists a dangling symlink and `read_text` raises on it, so thirty-five
+good documents went down with the one bad link, on every boot.
+
 ## Setting up on a new machine
 
 ```bash
