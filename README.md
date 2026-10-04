@@ -870,6 +870,20 @@ which is the way to try it without leaving anything running.
 `serve` is what `start` puts in the background; run it directly when you want
 the request log in front of you and Ctrl-C to stop it.
 
+`mdweave serve --monolithic` adds the agent runner to that same process,
+pointed at the server it is sharing a process with. The two halves normally
+sit on two machines and talk over the internet, which is why the runner polls
+rather than being called -- and none of that changes here. It is the same loop
+making the same requests to `127.0.0.1` instead of to Railway, so there is one
+transport rather than a second code path that could rot unobserved.
+
+It is for working on the knowledge base locally without also remembering to
+start a runner. `--permission-mode` and `--model` carry through to the
+sessions it runs. One consequence worth knowing: when the source on disk moves
+past what the process imported, the runner stops -- and in this mode it takes
+the server with it, because the server imported the same code and is exactly
+as stale. It says so and exits; start it again.
+
 `extract` is a one-time migration for documents annotated with the Obsidian
 `document-comments` plugin. `build` also reads that markup inline, so a
 document renders correctly whether or not it has been migrated; the sidecar

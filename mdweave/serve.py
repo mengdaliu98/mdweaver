@@ -2184,7 +2184,74 @@ def make_server(
     )
 
 
-def serve(inputs: Path, outputs: Path, host: str = "127.0.0.1", port: int = 8765) -> int:
+def start_bridge(
+    httpd,
+    inputs: Path,
+    outputs: Path,
+    host: str,
+    *,
+    model: str | None = None,
+    permission_mode: str = "bypassPermissions",
+) -> None:
+    """Run the agent runner in this process, against this server.
+
+    The two halves normally sit on two machines and talk over the internet,
+    which is the whole reason the runner polls rather than being called. None
+    of that changes here -- it is the same loop making the same requests, to
+    `127.0.0.1` instead of to Railway. Collapsing them into one process is a
+    convenience for working locally, not a second code path: a bug that only
+    appears in one of the two arrangements would be a bug in the transport,
+    and there is only one transport.
+
+    Loopback rather than `host`: bound to `0.0.0.0` the server is reachable on
+    every interface, and none of them is an address to dial.
+    """
+    import socket as _socket
+    import threading
+
+    from .agent.daemon import Config, Runner
+
+    where = "127.0.0.1" if host in ("0.0.0.0", "::", "") else host
+    runner = Runner(
+        Config(
+            remote=f"http://{where}:{httpd.server_port}",
+            inputs=inputs,
+            outputs=outputs,
+            runner_name=f"{_socket.gethostname()} (in-process)",
+            model=model,
+            permission_mode=permission_mode,
+        )
+    )
+
+    def pump() -> None:
+        try:
+            runner.loop()
+        except Exception as exc:  # noqa: BLE001 -- a thread's crash is silent
+            print(f"mdweave: the in-process runner stopped: {exc!r}", flush=True)
+        # `loop` returns when the source on disk has moved past what this
+        # process imported. The server is exactly as stale as the runner is --
+        # same process, same modules -- so bringing the whole thing down is
+        # the honest response, and says why on the way out.
+        print(
+            "mdweave: stopping the server too; it imported the same code. "
+            "Start it again to pick up the change.",
+            flush=True,
+        )
+        httpd.shutdown()
+
+    thread = threading.Thread(target=pump, name="mdweave-bridge", daemon=True)
+    thread.start()
+
+
+def serve(
+    inputs: Path,
+    outputs: Path,
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    monolithic: bool = False,
+    model: str | None = None,
+    permission_mode: str = "bypassPermissions",
+) -> int:
     refusal = refuse_insecure_bind(host)
     if refusal:
         print(f"error: {refusal}", file=sys.stderr)
@@ -2203,12 +2270,27 @@ def serve(inputs: Path, outputs: Path, host: str = "127.0.0.1", port: int = 8765
     saving = f"  [auto-commit after {autosave.delay:g}s]" if autosave.enabled else ""
     pulling = f"  [pulling every {puller.interval:g}s]" if puller.enabled else ""
     bridge = "  [agent bridge open]" if jobs is not None else ""
+    if monolithic:
+        bridge = f"  [runner in-process, {permission_mode}]"
     print(
         f"mdweave serving http://{host}:{httpd.server_port}/  "
         f"[{RUNNING_FINGERPRINT}]{guarded}{saving}{pulling}{bridge}  (Ctrl-C to stop)"
     )
     for name in workspace.documents():
         print(f"  http://{host}:{httpd.server_port}/{name}.html")
+
+    # After the socket is bound -- `make_server` binds, `serve_forever` only
+    # begins accepting -- so the runner's first claim cannot race the listen.
+    if monolithic:
+        start_bridge(
+            httpd,
+            inputs,
+            outputs,
+            host,
+            model=model,
+            permission_mode=permission_mode,
+        )
+
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

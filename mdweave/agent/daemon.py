@@ -273,11 +273,13 @@ class Runner:
         failures = 0
         while True:
             # Exit rather than reload: a Python process cannot honestly swap
-            # its own imported modules, and systemd is already configured to
-            # bring this straight back. `Restart=always` turns "the code
-            # changed" into a ten second gap instead of a mystery.
+            # its own imported modules. Under the systemd unit `Restart=always`
+            # turns "the code changed" into a ten second gap; run from a
+            # terminal, or in-process behind `serve --monolithic`, it is a stop
+            # and the next start picks the new code up. The wording stays true
+            # of both rather than promising a supervisor that may not be there.
             if self.stale():
-                _log("the source on disk has changed; exiting so systemd restarts me")
+                _log("the source on disk has changed; stopping so a restart picks it up")
                 return 0
 
             try:

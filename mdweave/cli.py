@@ -135,6 +135,19 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="serve what is already on disk instead of rebuilding first",
     )
+    p_serve.add_argument(
+        "--monolithic",
+        action="store_true",
+        help="also run the agent runner in this process, against this server",
+    )
+    p_serve.add_argument(
+        "--model", default=None, help="model for the sessions (with --monolithic)"
+    )
+    p_serve.add_argument(
+        "--permission-mode",
+        default="bypassPermissions",
+        help="what the sessions may do (with --monolithic)",
+    )
 
     p_rec = sub.add_parser(
         "reconcile",
@@ -456,7 +469,15 @@ def cmd_serve(args) -> int:
         if cmd_build(build) != 0:
             return 1
 
-    return serve(args.indir, args.outdir, host=args.host, port=args.port)
+    return serve(
+        args.indir,
+        args.outdir,
+        host=args.host,
+        port=args.port,
+        monolithic=args.monolithic,
+        model=args.model,
+        permission_mode=args.permission_mode,
+    )
 
 
 if __name__ == "__main__":
