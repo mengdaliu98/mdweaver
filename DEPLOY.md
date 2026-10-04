@@ -94,7 +94,7 @@ until then the queue is inert and the button never appears. See the README for
 what it does and why it polls.
 
 There is nothing to configure on Railway for it. On the machine that has
-the checkouts and the Claude sessions:
+the checkouts and the `claude` CLI:
 
 ```bash
 mdweave agent --remote https://<app>.up.railway.app

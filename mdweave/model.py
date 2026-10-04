@@ -13,7 +13,7 @@ from typing import Any
 
 from .scheme import SLOT_CLASSES, slot_of
 
-# A colour is a *slot*, not a hue: "the third colour", whatever the active
+# A color is a *slot*, not a hue: "the third color", whatever the active
 # scheme says that looks like. See mdweave/scheme.py for why -- briefly,
 # storing a hue means renaming yellow restyles every note that mentions it,
 # and switching to a scheme with no yellow leaves them resolving to nothing.
@@ -25,7 +25,7 @@ DEFAULT_COLOR = 5  # where yellow sat when the six were hues
 
 
 def resolve_color_token(color) -> str | None:
-    """The class `color` names -- `c1`..`c6` -- or None for a raw CSS colour."""
+    """The class `color` names -- `c1`..`c6` -- or None for a raw CSS color."""
     slot = slot_of(color)
     return f"c{slot}" if slot else None
 
@@ -107,10 +107,17 @@ class Offset:
 
 @dataclass
 class Annotation:
-    """A highlight, optionally carrying a comment thread."""
+    """A highlight, optionally carrying a comment thread.
+
+    `target` is optional, and its absence is a kind of annotation rather than a
+    missing field: a **document-level** comment, about the piece as a whole
+    rather than about any sentence in it. There is no quote to anchor, so there
+    is no highlight and nothing for the prose to reflow away from -- the card
+    is placed in the margin and stays where it is put.
+    """
 
     id: str
-    target: TextTarget
+    target: TextTarget | None = None
     kind: str = "comment"  # "comment" (highlight + card) | "highlight" (no card)
     color: str | int = DEFAULT_COLOR
     status: str = "open"  # "open" | "resolved"
@@ -118,23 +125,45 @@ class Annotation:
     tags: list[str] = field(default_factory=list)
     # None means "wherever the anchor puts it" -- the default placement.
     offset: Offset | None = None
+    # What *kind* of remark this is -- "question", "needs a citation" -- naming
+    # one of the reader's own types. The type carries an instruction for Claude,
+    # which is the point: the comment says what is wrong, the type says how that
+    # sort of thing should be put right. Optional; most comments are just prose.
+    semantic_type: str | None = None
+    # Whether this comment is part of the next request to Claude.
+    #
+    # Defaults to True, which is the one judgement call in this dataclass. A
+    # comment written in a knowledge base that has a Claude button attached is
+    # usually written *so that* something will be done about it, and the review
+    # screen makes you look at the whole list and deselect before anything runs
+    # -- so the cost of a wrong default is one unticked box, not a surprise edit.
+    send_to_claude: bool = True
     # Free-form escape hatch so new features do not require a schema change.
     extra: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Annotation:
-        known = {"id", "target", "kind", "color", "status", "thread", "tags", "offset"}
+        known = {
+            "id", "target", "kind", "color", "status", "thread", "tags", "offset",
+            "semantic_type", "send_to_claude",
+        }
         raw_offset = d.get("offset")
         offset = Offset.from_dict(raw_offset) if isinstance(raw_offset, dict) else None
+        raw_target = d.get("target")
+        # A sidecar written before document-level comments existed always has a
+        # target; one written after may legitimately not.
+        target = TextTarget.from_dict(raw_target) if isinstance(raw_target, dict) else None
         return cls(
             id=d["id"],
-            target=TextTarget.from_dict(d["target"]),
+            target=target,
             kind=d.get("kind", "comment"),
             color=d.get("color", DEFAULT_COLOR),
             status=d.get("status", "open"),
             thread=[Comment.from_dict(c) for c in d.get("thread", [])],
             tags=list(d.get("tags", [])),
             offset=offset or None,
+            semantic_type=(d.get("semantic_type") or None),
+            send_to_claude=bool(d.get("send_to_claude", True)),
             extra={k: v for k, v in d.items() if k not in known},
         )
 
@@ -144,16 +173,34 @@ class Annotation:
             "kind": self.kind,
             "color": self.color,
             "status": self.status,
-            "target": self.target.to_dict(),
         }
+        if self.target is not None:
+            d["target"] = self.target.to_dict()
         if self.thread:
             d["thread"] = [c.to_dict() for c in self.thread]
         if self.tags:
             d["tags"] = self.tags
         if self.offset:
             d["offset"] = self.offset.to_dict()
+        if self.semantic_type:
+            d["semantic_type"] = self.semantic_type
+        # Written only when false. The default is true, so recording it every
+        # time would churn every sidecar in the knowledge base for a value that
+        # was never set by anybody.
+        if not self.send_to_claude:
+            d["send_to_claude"] = False
         d.update(self.extra)
         return d
+
+    @property
+    def anchored(self) -> bool:
+        """Is this about a span of text, rather than the document as a whole?"""
+        return self.target is not None
+
+    @property
+    def quote(self) -> str:
+        """The text this is about, or "" for a document-level comment."""
+        return self.target.quote if self.target else ""
 
     @property
     def has_card(self) -> bool:
@@ -161,7 +208,7 @@ class Annotation:
 
     @property
     def color_token(self) -> str:
-        """Token name for the CSS class, or "custom" for a raw CSS colour.
+        """Token name for the CSS class, or "custom" for a raw CSS color.
 
         A legacy token resolves to its replacement here rather than in the
         stored `color`, so `to_dict` still writes back what was read.
@@ -170,14 +217,14 @@ class Annotation:
 
     @property
     def custom_color(self) -> str | None:
-        """The raw CSS colour, when `color` is not a slot."""
+        """The raw CSS color, when `color` is not a slot."""
         if resolve_color_token(self.color):
             return None
         return self.color if isinstance(self.color, str) else None
 
     @property
     def slot(self) -> int | None:
-        """Which of the six, 1-based, or None for a raw CSS colour."""
+        """Which of the six, 1-based, or None for a raw CSS color."""
         return slot_of(self.color)
 
 

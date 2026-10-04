@@ -30,6 +30,7 @@ from urllib.parse import parse_qs, quote, urlparse
 from . import checkpoint as git_checkpoint
 from . import gdoc
 from . import scheme as schemes
+from . import semantics
 from .sync import DEFAULT_INTERVAL, Pull
 from . import edits
 from .agent import protocol
@@ -42,7 +43,7 @@ from .render import (
     splice_sidebar,
     write_assets,
 )
-from .sources import obsidian_inline, session as session_store, sidecar
+from .sources import obsidian_inline, sidecar
 from .tree import (
     build_tree,
     document_ids,
@@ -99,9 +100,11 @@ def _writes_something(path: str) -> bool:
     if path in READ_ONLY_POSTS:
         return False
     if path.startswith("/api/agent/"):
-        # `reconcile` is the exception: it pulls in real prose and re-renders
-        # over it, and the rebuilt pages are worth committing.
-        return path == "/api/agent/reconcile"
+        # Two exceptions, both of which put prose on the disk. `reconcile`
+        # pulls in what the runner pushed and re-renders over it; `apply`
+        # writes the version of a reviewed document the reader accepted. The
+        # rest of the bridge's traffic is talk about a job.
+        return path == "/api/agent/reconcile" or path.endswith("/apply")
     return True
 
 # A dragged note may not be flung arbitrarily far from its anchor.
@@ -157,7 +160,7 @@ class Workspace:
         """Every document under the markdown root, keyed by id."""
         return document_ids(self.inputs)
 
-    # --- colour schemes ----------------------------------------------------
+    # --- color schemes ----------------------------------------------------
 
     def theme(self) -> schemes.Theme:
         """The reader's schemes, read fresh: another machine may have pushed."""
@@ -280,8 +283,8 @@ class Workspace:
     def remap_slots(self, moved: list[int]) -> int:
         """Renumber every annotation so a reordered scheme looks unchanged.
 
-        `moved[i]` is the slot whose colour now sits at position i+1. Moving
-        the colours without moving the annotations would repaint the whole
+        `moved[i]` is the slot whose color now sits at position i+1. Moving
+        the colors without moving the annotations would repaint the whole
         knowledge base, which is the opposite of what dragging a swatch means:
         the reader is arranging the palette, not restyling their notes.
 
@@ -479,6 +482,76 @@ class Workspace:
         target.write_text(content, encoding="utf-8")
         return self._id_of(target)
 
+    def link_document(
+        self, source: str, folder: str = "", name: str = ""
+    ) -> tuple[str, Path]:
+        """Adopt a file that lives elsewhere on this machine, as a symlink.
+
+        The opposite trade from an import, and the reason both exist. A copy
+        is a second file that drifts: the design note beside a codebase gets
+        edited in the editor the codebase is open in, and the knowledge base
+        quietly serves last month's version of it. A link has one file, so
+        there is nothing to diverge.
+
+        What it costs is portability, and the cost is already known and
+        already handled: a link to a sibling checkout resolves on the laptop
+        that made it and dangles in the container, which took the deployed
+        instance into a crash loop once. `document_ids` skips a link that
+        does not resolve and `broken_links` names it, so a dangling one costs
+        a row in the sidebar and never a boot -- this writes the kind of link
+        those two were written for, and must not invent a second convention.
+
+        The validation is strict for the same reason. Everything about the
+        path is checked *through* the link -- `is_file` follows -- because a
+        link to a link to nothing is exactly the shape that was allowed to be
+        created once and then crashed something else later.
+        """
+        original = Path(source)
+        if not original.is_absolute():
+            raise ApiError(
+                HTTPStatus.BAD_REQUEST,
+                f"{source!r} must be an absolute path on this machine",
+            )
+        # `exists` and `is_file` both follow links, so a dangling one is
+        # caught here rather than becoming a second dangling one inside the
+        # knowledge base.
+        if not original.exists():
+            raise ApiError(HTTPStatus.BAD_REQUEST, f"there is nothing at {source!r}")
+        if not original.is_file():
+            raise ApiError(
+                HTTPStatus.BAD_REQUEST, f"{source!r} is not a regular file"
+            )
+        if not os.access(original, os.R_OK):
+            raise ApiError(HTTPStatus.BAD_REQUEST, f"{source!r} cannot be read")
+        if not original.name.lower().endswith(".md"):
+            raise ApiError(HTTPStatus.BAD_REQUEST, "only .md files can be linked")
+
+        directory = self.folder_for(folder)  # looked up, never joined
+        wanted = (name or "").strip() or original.name
+        # Tolerate a name typed without the suffix, the way `destination`
+        # does: somebody naming the row "design" means `design.md`, and
+        # refusing that is pedantry about a detail the reader cannot see.
+        if not wanted.lower().endswith(".md"):
+            wanted += ".md"
+        try:
+            leaf = safe_document_name(wanted)
+        except ValueError as exc:
+            raise ApiError(HTTPStatus.BAD_REQUEST, str(exc))
+
+        target = directory / leaf
+        # `exists` alone would miss a dangling link already sitting there and
+        # then `symlink_to` would raise FileExistsError as a 500.
+        if target.exists() or target.is_symlink():
+            raise ApiError(
+                HTTPStatus.CONFLICT, f"a document called {leaf!r} already exists"
+            )
+
+        try:
+            target.symlink_to(original)
+        except OSError as exc:
+            raise ApiError(HTTPStatus.BAD_REQUEST, f"could not link {source!r}: {exc}")
+        return self._id_of(target), original
+
     # --- rearranging the tree ---------------------------------------------
 
     def _id_of(self, path: Path) -> str:
@@ -538,17 +611,13 @@ class Workspace:
                 HTTPStatus.CONFLICT, f"a document called {new_id!r} already exists"
             )
 
-        # Both sidecars' names are derived from the markdown's, so leaving
-        # either behind would silently orphan it -- the annotations on the
-        # document, and the Claude session that has been co-writing it.
+        # The sidecar's name is derived from the markdown's, so leaving it
+        # behind would silently orphan every annotation on the document.
         beside = sidecar.sidecar_path(source)
-        owning = session_store.session_path(source)
         path.parent.mkdir(parents=True, exist_ok=True)
         source.rename(path)
         if beside.exists():
             beside.rename(sidecar.sidecar_path(path))
-        if owning.exists():
-            owning.rename(session_store.session_path(path))
 
         # The generated page is named after the old id, which no document
         # claims any more; `rebuild_all` writes the new one but has no reason
@@ -564,11 +633,9 @@ class Workspace:
         """Remove a document, its annotations, and the page built from them."""
         markdown = self.markdown_for(doc_id)
         beside = sidecar.sidecar_path(markdown)
-        owning = session_store.session_path(markdown)
 
         markdown.unlink()
         beside.unlink(missing_ok=True)
-        owning.unlink(missing_ok=True)
         (self.outputs / f"{doc_id}.html").unlink(missing_ok=True)
 
         self._reindex(doc_id, None)
@@ -765,23 +832,16 @@ class Workspace:
     def files_of(self, doc_id: str) -> list[Path]:
         """Everything that belongs to one document.
 
-        The prose, the annotations beside it, the Claude session co-writing it,
-        and the page built from them -- but not `assets/`, which is shared and
-        would drag every other document's rebuild into a commit meant for this
-        one.
+        The prose, the annotations beside it, and the page built from them --
+        but not `assets/`, which is shared and would drag every other
+        document's rebuild into a commit meant for this one.
         """
         markdown = self.markdown_for(doc_id)
         return [
             markdown,
             sidecar.sidecar_path(markdown),
-            session_store.session_path(markdown),
             self.outputs / f"{doc_id}.html",
         ]
-
-    def session_of(self, doc_id: str) -> session_store.Session:
-        return session_store.load(
-            session_store.session_path(self.markdown_for(doc_id))
-        )
 
     # --- highlighting over what is already there --------------------------
 
@@ -804,6 +864,13 @@ class Workspace:
 
         found = []
         for annotation in self.annotations_for(doc_id):
+            # A document-level comment occupies no span, so it cannot overlap
+            # a selection and has no place on this ruler. Skipping it is not a
+            # special case so much as the definition: this function answers
+            # "what is already highlighted here", and the answer never
+            # includes a comment about the document as a whole.
+            if annotation.target is None:
+                continue
             where = index.find(annotation.target)
             if where is not None:
                 found.append((annotation, where))
@@ -812,14 +879,14 @@ class Workspace:
     def apply_highlight(self, doc_id: str, target: TextTarget, color: int) -> dict:
         """Paint a selection. One rule, no exceptions.
 
-        Picking a colour means "make the whole selection this colour",
-        whatever is underneath -- so re-colouring part of a highlight, or a
-        patch of mixed colours, both end up as one clean highlight.
+        Picking a color means "make the whole selection this color",
+        whatever is underneath -- so re-coloring part of a highlight, or a
+        patch of mixed colors, both end up as one clean highlight.
 
         It used to also *clear*, when the selection was already entirely and
-        only the colour pressed. That made a press ambiguous: the same gesture
+        only the color pressed. That made a press ambiguous: the same gesture
         painted or erased depending on state the reader could not reliably
-        see, and pressing a colour by accident on already-coloured text took
+        see, and pressing a color by accident on already-colored text took
         the highlight off. Erasing is its own button now -- `erase_highlight`.
         """
         placed, index = self.spans_in(doc_id)
@@ -835,12 +902,12 @@ class Workspace:
         ]
 
         # A comment's highlight is the handle for a thread. Absorbing it would
-        # delete the conversation, which no colour press should ever mean.
+        # delete the conversation, which no color press should ever mean.
         commented = [a for a, _ in touching if a.has_card]
         if commented:
             raise ApiError(
                 HTTPStatus.CONFLICT,
-                "that text carries a comment — change its colour from its own card",
+                "that text carries a comment — change its color from its own card",
             )
 
         absorbed = {a.id for a, _ in touching}
@@ -866,11 +933,11 @@ class Workspace:
         }
 
     def erase_highlight(self, doc_id: str, target: TextTarget) -> dict:
-        """Take the highlighting off a selection, whatever colours it had.
+        """Take the highlighting off a selection, whatever colors it had.
 
-        The counterpart to a colour press, and the reason a press can be
+        The counterpart to a color press, and the reason a press can be
         unconditional. Comments are left where they are: their highlight is
-        the handle for a thread, and an eraser aimed at colour should not
+        the handle for a thread, and an eraser aimed at color should not
         delete a conversation. Removing one is what its own card is for.
         """
         placed, index = self.spans_in(doc_id)
@@ -1119,6 +1186,9 @@ class Handler(SimpleHTTPRequestHandler):
                 "slots": schemes.SLOTS,
             }
 
+        if route.path == "/api/semantics":
+            return HTTPStatus.OK, _semantics_sent(semantics.load(self.workspace.inputs))
+
         if route.path == "/api/annotations":
             doc_id = self._query(route, "document")
             annotations = self.workspace.annotations_for(doc_id)
@@ -1133,6 +1203,19 @@ class Handler(SimpleHTTPRequestHandler):
 
         if route.path == "/api/agent/status":
             return HTTPStatus.OK, self._agent_status(route)
+
+        if route.path == "/api/agent/comments":
+            return HTTPStatus.OK, self._api_agent_comments(
+                self._query(route, "document")
+            )
+
+        # Checked before the job lookup below, which treats everything after
+        # the prefix as an id and would go looking for a job called
+        # "abc123/diff".
+        if route.path.startswith("/api/agent/jobs/") and route.path.endswith("/diff"):
+            return HTTPStatus.OK, self._api_agent_diff(
+                route.path[len("/api/agent/jobs/") : -len("/diff")]
+            )
 
         if route.path.startswith("/api/agent/jobs/"):
             job = self._broker().get(route.path[len("/api/agent/jobs/") :])
@@ -1158,10 +1241,6 @@ class Handler(SimpleHTTPRequestHandler):
         document = parse_qs(route.query).get("document", [""])[0]
         if document:
             status["recent"] = [j.summary() for j in broker.recent(document, limit=5)]
-            try:
-                status["session"] = self.workspace.session_of(document).to_dict()
-            except ApiError:
-                status["session"] = {}
         return status
 
     # --- the agent bridge --------------------------------------------------
@@ -1259,6 +1338,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self._api_folder_delete()
         if route.path == "/api/documents/create":
             return self._api_create()
+        if route.path == "/api/documents/link":
+            return self._api_link()
         if route.path == "/api/documents/import-gdoc":
             return self._api_import_gdoc()
         if route.path == "/api/documents/move":
@@ -1285,6 +1366,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self._api_checkpoint()
         if route.path == "/api/schemes":
             return self._api_schemes()
+        if route.path == "/api/semantics":
+            return self._api_semantics()
         if route.path.startswith("/api/agent/"):
             return self._api_agent(route.path)
         if route.path == "/api/annotations/erase":
@@ -1306,15 +1389,33 @@ class Handler(SimpleHTTPRequestHandler):
 
         payload = self._json_body()
         doc_id = _require(payload, "document")
-        quote = _require(payload, "quote")
 
         # A highlight is a comment with nothing to say: the same anchor and the
-        # same colour, no thread, and so no card. Its body is not merely
+        # same color, no thread, and so no card. Its body is not merely
         # optional -- it must be absent, or the card would come back.
         kind = str(payload.get("kind", "comment"))
         if kind not in ("comment", "highlight"):
             raise ApiError(HTTPStatus.BAD_REQUEST, f"unknown kind: {kind!r}")
 
+        quote = payload.get("quote")
+        if quote is not None and not isinstance(quote, str):
+            raise ApiError(HTTPStatus.BAD_REQUEST, "'quote' must be a string")
+
+        # A comment about the whole document has no quote, and saying so
+        # explicitly is what distinguishes it from a selection that was lost
+        # somewhere between the page and here. An empty `quote` on its own is
+        # a bug in the caller and still gets the 400 it always got; `level`
+        # is the client saying it meant it.
+        if not (quote or "").strip() and str(payload.get("level", "")) == "document":
+            if kind == "highlight":
+                raise ApiError(
+                    HTTPStatus.BAD_REQUEST,
+                    "a document-level annotation is a comment; "
+                    "there is no text to highlight",
+                )
+            return self._api_document_comment(doc_id, payload)
+
+        quote = _require(payload, "quote")
         target = TextTarget(
             quote=quote,
             prefix=str(payload.get("prefix", "")),
@@ -1323,7 +1424,7 @@ class Handler(SimpleHTTPRequestHandler):
         )
 
         # A highlight goes through the painting rule rather than being
-        # appended: a colour pressed over an existing highlight recolours it,
+        # appended: a color pressed over an existing highlight recolors it,
         # unconditionally. Taking one off is /api/annotations/erase.
         if kind == "highlight":
             return HTTPStatus.OK, self.workspace.apply_highlight(
@@ -1345,6 +1446,8 @@ class Handler(SimpleHTTPRequestHandler):
                     at=payload.get("at"),
                 )
             ],
+            semantic_type=_parse_semantic_type(payload.get("semantic_type")),
+            send_to_claude=_parse_sending(payload, True),
         )
 
         # Round-trip check before writing: confirm the anchor the browser
@@ -1360,6 +1463,113 @@ class Handler(SimpleHTTPRequestHandler):
 
         self.workspace.save(doc_id, candidate)
         return HTTPStatus.CREATED, {"annotation": _sent(annotation)}
+
+    def _api_document_comment(self, doc_id: str, payload: dict):
+        """A remark about the piece as a whole, with no sentence to pin it to.
+
+        "This needs an introduction" is about the document, and before this
+        there was nowhere to write it: the only way to leave a comment was to
+        select some prose, so a note about what is *missing* had to be
+        attached to whatever happened to be nearby, where it then read as a
+        remark about that paragraph.
+
+        The round-trip anchor check that guards every other comment is skipped
+        here, and not as an optimisation: it renders the document and asks
+        whether the selector resolves, and there is no selector. Running it
+        would be asking an empty question and believing the answer.
+        """
+        self.workspace.markdown_for(doc_id)  # 404s a document that is not here
+        body = _require(payload, "body")
+
+        annotations = self.workspace.annotations_for(doc_id)
+        annotation = Annotation(
+            id=self.workspace.new_id({a.id for a in annotations}),
+            target=None,
+            kind="comment",
+            color=_parse_color(payload.get("color", DEFAULT_COLOR)),
+            thread=[
+                Comment(
+                    body=body,
+                    author=str(payload.get("author", "me")),
+                    at=payload.get("at"),
+                )
+            ],
+            semantic_type=_parse_semantic_type(payload.get("semantic_type")),
+            send_to_claude=_parse_sending(payload, True),
+        )
+
+        self.workspace.save(doc_id, annotations + [annotation])
+        return HTTPStatus.CREATED, {"annotation": _sent(annotation)}
+
+    def _api_semantics(self):
+        """Save the reader's vocabulary of comment types.
+
+        Validated by `semantics.from_payload` rather than here, so the one
+        definition of what a type is lives beside the file it is written to.
+        What comes back is read off the disk again, not echoed: `save` drops
+        a default pointing at a type that was deleted in the same request, and
+        the settings window should see the state it actually produced.
+        """
+        payload = self._json_body()
+        try:
+            parsed = semantics.from_payload(payload)
+        except ValueError as exc:
+            raise ApiError(HTTPStatus.BAD_REQUEST, str(exc))
+
+        semantics.save(self.workspace.inputs, parsed)
+        return HTTPStatus.OK, _semantics_sent(semantics.load(self.workspace.inputs))
+
+    def _api_link(self):
+        """Adopt a file from elsewhere on this machine without copying it.
+
+        Committed and pushed on the spot rather than left to the auto-commit
+        timer, because a link is the one addition that means nothing on the
+        other machine until the commit arrives: the file it points at is not
+        in the repository, so what travels is the link, and until it travels
+        the container has a sidebar row this machine can see and it cannot.
+        """
+        payload = self._json_body()
+        doc_id, original = self.workspace.link_document(
+            _require(payload, "path"),
+            folder=_optional(payload, "folder"),
+            name=_optional(payload, "name"),
+        )
+        self.workspace.rebuild_tree({doc_id})
+
+        body = _described(doc_id)
+        body["linked"] = str(original)
+        body.update(self._publish_link(doc_id, original))
+        return HTTPStatus.CREATED, _with_panel(self, payload, body)
+
+    def _publish_link(self, doc_id: str, original: Path) -> dict:
+        """Commit and push the new link, reporting a failure rather than raising.
+
+        The link is already on the disk by the time this runs, and that is the
+        whole reason it cannot be allowed to fail the request: answering 502
+        would tell the reader nothing happened, they would press the button
+        again, and the second attempt would come back 409 about a document
+        they were just told did not exist. So the outcome of the push is
+        *data* in a successful response, and the browser says which of the two
+        things happened.
+        """
+        try:
+            repo = git_checkpoint.repo_root(self.workspace.inputs)
+            result = git_checkpoint.checkpoint(
+                repo,
+                [self.workspace.inputs, self.workspace.outputs],
+                f"link {doc_id} to {original}",
+                generated=self.workspace.outputs,
+                on_merge=self.workspace.rebuild_all,
+            )
+        except git_checkpoint.GitError as exc:
+            return {"revision": "", "committed": False, "pushed": False, "error": str(exc)}
+
+        return {
+            "revision": result.revision,
+            "committed": result.committed,
+            "pushed": result.pushed,
+            "error": "",
+        }
 
     def _api_import(self):
         """Accept a markdown file from the browser and publish it."""
@@ -1595,7 +1805,7 @@ class Handler(SimpleHTTPRequestHandler):
         renumbering goes first, because it is expressed in the slots as they
         are *now*; then the file; then one rebuild, which repaints every page
         from whichever scheme ended up active. Rebuilding before the
-        renumbering would publish pages in colours that are about to move.
+        renumbering would publish pages in colors that are about to move.
         """
         payload = self._json_body()
 
@@ -1683,6 +1893,7 @@ class Handler(SimpleHTTPRequestHandler):
                 str(payload.get("detail", ""))[:2000],
                 str(payload.get("revision", ""))[:80],
                 str(payload.get("session", ""))[:80] or None,
+                after=self._reviewed_markdown(broker.get(job_id)),
             )
             if job is None:
                 raise ApiError(HTTPStatus.NOT_FOUND, "no such job")
@@ -1721,7 +1932,182 @@ class Handler(SimpleHTTPRequestHandler):
             job = broker.submit(doc_id, action.name, instruction[:8000])
             return HTTPStatus.ACCEPTED, {"job": job.summary()}
 
+        if path == "/api/agent/review":
+            return self._api_agent_review(broker)
+
+        if path.startswith("/api/agent/jobs/") and path.endswith("/apply"):
+            return self._api_agent_apply(
+                broker, path[len("/api/agent/jobs/") : -len("/apply")]
+            )
+
         raise ApiError(HTTPStatus.NOT_FOUND, f"no such endpoint: {path}")
+
+    def _api_agent_review(self, broker):
+        """Queue a turn that answers the comments the reader ticked.
+
+        The comments are resolved into quotes, bodies, types and the types'
+        instructions *here*, and carried on the job. The runner could read
+        them from its own checkout instead, and that would be wrong: it does
+        not pull before a turn, so its sidecars lag the ones being looked at
+        by however long it has been since the last push, and a review of a
+        comment as it was yesterday is worse than no review.
+        """
+        from .agent import actions as agent_actions
+
+        payload = self._json_body()
+        doc_id = _require(payload, "document")
+        before = self.workspace.source_of(doc_id)  # 404s a document that is gone
+
+        raw = payload.get("ids")
+        if not isinstance(raw, list) or not all(isinstance(i, str) for i in raw):
+            raise ApiError(HTTPStatus.BAD_REQUEST, "'ids' must be a list of comment ids")
+        if not raw:
+            raise ApiError(
+                HTTPStatus.BAD_REQUEST, "no comments were selected, so there is nothing to ask"
+            )
+
+        action = agent_actions.find(self.workspace.inputs, agent_actions.REVIEW)
+        if action is None:
+            raise ApiError(
+                HTTPStatus.BAD_REQUEST,
+                f"this knowledge base's {agent_actions.REGISTRY} has no "
+                f"{agent_actions.REVIEW!r} action; add one or delete the file "
+                "to fall back to the shipped one",
+            )
+
+        chosen = self._selected_comments(doc_id, raw)
+        if not broker.status()["connected"]:
+            raise ApiError(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                "no runner is connected — start `mdweave agent` on the devserver",
+            )
+
+        job = broker.submit(
+            doc_id,
+            action.name,
+            _optional(payload, "instruction").strip()[:8000],
+            comments=chosen,
+            before=before,
+        )
+        return HTTPStatus.ACCEPTED, {"job": job.summary()}
+
+    def _api_agent_apply(self, broker, job_id: str):
+        """Write the version of a reviewed document the reader accepted.
+
+        The runner could have written this itself and saved a round trip, and
+        the round trip is the point: what it produced is one end of a diff,
+        and the reader goes through that diff hunk by hunk. What lands on
+        disk is a mixture -- their prose where they kept it, Claude's where
+        they took it -- and nobody knows which mixture until they have
+        looked. The job holds the proposal; this is the acceptance.
+
+        The same write `/api/block` uses, so an accepted review and a typed
+        edit are indistinguishable afterwards, and the ordinary auto-commit
+        timer picks it up -- `_writes_something` knows about this route.
+        """
+        payload = self._json_body(limit=MAX_UPLOAD_BYTES)
+        markdown = payload.get("markdown")
+        if not isinstance(markdown, str):
+            raise ApiError(HTTPStatus.BAD_REQUEST, "'markdown' must be a string")
+
+        job = broker.get(job_id)
+        if job is None:
+            raise ApiError(HTTPStatus.NOT_FOUND, "no such job")
+
+        before = self.workspace.source_of(job.document)  # 404s a document that is gone
+        return self._rewrite(job.document, before, markdown)
+
+    def _api_agent_comments(self, doc_id: str) -> dict:
+        """Every comment on one document, and the vocabulary to read them by.
+
+        Both halves in one response because the review screen needs both to
+        draw a single row: the remark, and what its type means. Two requests
+        would be two chances for the list to be drawn against a vocabulary
+        that had just been edited in the other window.
+        """
+        vocabulary = semantics.load(self.workspace.inputs)
+        return {
+            "comments": [
+                _as_comment(a)
+                for a in self.workspace.annotations_for(doc_id)
+                if a.has_card
+            ],
+            "types": _semantics_sent(vocabulary)["types"],
+        }
+
+    def _api_agent_diff(self, job_id: str) -> dict:
+        """What a review job did to the document, as two whole versions.
+
+        Whole versions rather than a computed diff: the browser is drawing
+        it, hunk by hunk, with a control on each -- so it needs both sides,
+        and a diff format agreed here would be one more thing for the two
+        ends to disagree about.
+        """
+        job = self._broker().get(job_id)
+        if job is None:
+            raise ApiError(HTTPStatus.NOT_FOUND, "no such job")
+
+        after = job.after
+        if not after and job.finished:
+            # A job from before this was recorded, or one whose document
+            # could not be read when it finished. What is on the disk now is
+            # what the reader would see on a reload, so it is the honest
+            # answer -- and if nothing was written it matches `before` and
+            # the diff is correctly empty.
+            after = self._reviewed_markdown(job, always=True)
+        return {"before": job.before, "after": after}
+
+    def _reviewed_markdown(self, job, always: bool = False) -> str:
+        """The document behind a review job, as it stands right now.
+
+        Read only for a review, because this ends up stored on the job and
+        two hundred of them holding a copy of a document each is a job store
+        that grows with the size of the prose rather than the number of
+        presses. Returns "" for anything else, which `finish` takes as "leave
+        it alone".
+        """
+        from .agent import actions as agent_actions
+
+        if job is None or (not always and job.action != agent_actions.REVIEW):
+            return ""
+        try:
+            return self.workspace.source_of(job.document)
+        except (ApiError, OSError):
+            # The document was deleted or renamed while the turn ran. A diff
+            # against nothing is still better than failing the runner's
+            # report, which would strand the job as `claimed` until it
+            # stalled.
+            return ""
+
+    def _selected_comments(self, doc_id: str, ids: list[str]) -> list[dict]:
+        """Resolve the ticked comment ids into everything the prompt needs.
+
+        An id that names no comment is an error rather than something to skip
+        over. The reader ticked a row, and silently dropping it would produce
+        a turn that answered four of their five remarks and reported success
+        -- the one failure mode here that nobody would ever notice.
+        """
+        vocabulary = semantics.load(self.workspace.inputs)
+        by_id = {
+            a.id: a for a in self.workspace.annotations_for(doc_id) if a.has_card
+        }
+
+        chosen = []
+        for ann_id in ids:
+            annotation = by_id.get(ann_id)
+            if annotation is None:
+                raise ApiError(
+                    HTTPStatus.BAD_REQUEST,
+                    f"no comment {ann_id!r} on {doc_id!r} — reload the page",
+                )
+            entry = _as_comment(annotation)
+            # The instruction is resolved now, against the registry as it
+            # stands, rather than being looked up by name on the other
+            # machine: a type the reader renames an hour later must not
+            # change what a queued job was asked to do.
+            entry["instruction"] = vocabulary.instruction_for(annotation.semantic_type)
+            chosen.append(entry)
+        return chosen
 
     def _api_agent_reconcile(self) -> dict:
         """Take in what the runner just pushed, and rebuild over it.
@@ -1829,6 +2215,13 @@ class Handler(SimpleHTTPRequestHandler):
             target.offset = _parse_offset(payload["offset"])
         if "color" in payload:
             target.color = _parse_color(payload["color"])
+        # Tested for membership rather than read with a default, because null
+        # is a value here: clearing the type is `{"semantic_type": null}`, and
+        # a `.get` could not tell that from a PATCH that only moved the card.
+        if "semantic_type" in payload:
+            target.semantic_type = _parse_semantic_type(payload["semantic_type"])
+        if "send_to_claude" in payload:
+            target.send_to_claude = _parse_sending(payload, target.send_to_claude)
 
         self.workspace.save(doc_id, annotations)
         return HTTPStatus.OK, {"annotation": _sent(target)}
@@ -1962,21 +2355,104 @@ def _sent(annotation: Annotation) -> dict:
     """An annotation as the browser needs it: its stored form, plus the class.
 
     `color` is what the sidecar holds -- a slot number, or one of the hue
-    names an older palette used, or a raw CSS colour -- and resolving that to
+    names an older palette used, or a raw CSS color -- and resolving that to
     a class is `color_token`'s job, on the server, once. Handing the browser
     the raw value made it build `hl--3` where the renderer writes `hl--c3`, so
     a freshly saved highlight was placed correctly and then matched no rule:
-    the mark was there and colourless until a reload replaced it with the
+    the mark was there and colorless until a reload replaced it with the
     server's own markup. The two must never disagree, so only one of them
     works it out.
     """
     return {**annotation.to_dict(), "color_token": annotation.color_token}
 
 
-def _parse_color(raw) -> int:
-    """Validate a client-supplied colour: one of the six slots, nothing else.
+def _as_comment(annotation: Annotation) -> dict:
+    """One comment as the review screen needs it.
 
-    A raw CSS colour is legitimate in a hand-edited sidecar, but it reaches the
+    Flatter than `_sent`, and deliberately a different shape: this is a row
+    in a list of remarks to tick, not an annotation to re-render. `body` is
+    the first thread entry because that is the comment -- anything after it
+    is a reply, and a reply is not a thing to send to Claude as a request.
+
+    `semantic_type` is "" rather than null when there is none, matching what
+    `render.py` puts in the page, so the browser has one convention for an
+    unset type rather than two. `color` is the stored value and `color_token`
+    the class it resolves to, exactly as everywhere else -- see `_sent` for
+    why the server resolves it and the browser never does.
+    """
+    return {
+        "id": annotation.id,
+        "anchored": annotation.anchored,
+        "quote": annotation.quote,
+        "body": annotation.thread[0].body if annotation.thread else "",
+        "semantic_type": annotation.semantic_type or "",
+        "send_to_claude": annotation.send_to_claude,
+        "color": annotation.color,
+        "color_token": annotation.color_token,
+    }
+
+
+def _semantics_sent(vocabulary: semantics.Semantics) -> dict:
+    """The type registry as the browser reads it.
+
+    `instruction` is always present, empty string and all, where the stored
+    form leaves it out -- a settings window binding a text box to it should
+    not have to know that an absent key and a blank one mean the same thing.
+    `defaults` is taken from `to_dict` rather than rebuilt, so the rule about
+    dropping a default that names a deleted type is written once.
+    """
+    return {
+        "types": [
+            {"name": t.name, "instruction": t.instruction} for t in vocabulary.types
+        ],
+        "defaults": vocabulary.to_dict()["defaults"],
+    }
+
+
+def _parse_semantic_type(raw) -> str | None:
+    """Validate a client-supplied type name. Null or blank means "none".
+
+    Not checked against the registry, on purpose. The vocabulary is the
+    reader's and they edit it; a comment may name a type they are about to
+    add, or one they removed and will put back, and refusing it would make
+    deleting a type an operation that silently broke the comments using it.
+    `instruction_for` already answers "" for a name it does not know, so an
+    unknown type costs the instruction and never the comment.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise ApiError(
+            HTTPStatus.BAD_REQUEST, "'semantic_type' must be a string or null"
+        )
+    # Same normalisation the registry applies to a name it stores, so the two
+    # can be compared at all: a type saved as "needs a citation" must match a
+    # comment that arrived with a newline in the middle of it.
+    cleaned = " ".join(raw.split())[: semantics.MAX_NAME]
+    return cleaned or None
+
+
+def _parse_sending(payload: dict, fallback: bool) -> bool:
+    """Validate `send_to_claude`. Absent means leave it as it was.
+
+    Strict about the type rather than truthy: `"false"` is a string, it is
+    true, and a checkbox serialised the wrong way would silently put every
+    comment into the next request to Claude.
+    """
+    if "send_to_claude" not in payload:
+        return fallback
+    raw = payload["send_to_claude"]
+    if not isinstance(raw, bool):
+        raise ApiError(
+            HTTPStatus.BAD_REQUEST, "'send_to_claude' must be true or false"
+        )
+    return raw
+
+
+def _parse_color(raw) -> int:
+    """Validate a client-supplied color: one of the six slots, nothing else.
+
+    A raw CSS color is legitimate in a hand-edited sidecar, but it reaches the
     page as an inline custom property -- so taking one from the browser would
     be writing a client string into a style attribute. A slot is all the picker
     can produce anyway.
@@ -1985,11 +2461,11 @@ def _parse_color(raw) -> int:
     the page wears, but writing that into a sidecar would put a presentation
     detail in a data file; the file says 3. `slot_of` also takes the number and
     the hue names the palette used to have, which costs nothing -- all three
-    name a slot, and none of them can name a colour.
+    name a slot, and none of them can name a color.
     """
     slot = schemes.slot_of(raw)
     if slot is None:
-        raise ApiError(HTTPStatus.BAD_REQUEST, f"unknown colour {raw!r}")
+        raise ApiError(HTTPStatus.BAD_REQUEST, f"unknown color {raw!r}")
     return slot
 
 
@@ -2018,7 +2494,7 @@ def _covers(span: tuple[int, int], others: list[tuple[int, int]], text: str) -> 
 
     Whitespace is skipped. Two highlights sitting either side of a space do
     cover the phrase they spell out, and treating that space as a hole would
-    make pressing their colour repaint rather than clear -- a distinction with
+    make pressing their color repaint rather than clear -- a distinction with
     nothing behind it, since a space carries no highlight to speak of.
     """
     inside = set()

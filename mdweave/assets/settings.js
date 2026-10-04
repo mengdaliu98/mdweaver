@@ -1,12 +1,21 @@
-/* Settings: a floating window, and the colour schemes inside it.
+/* Settings: a floating window, and the two things the reader owns inside it.
  *
- * Three ideas hold this together.
+ * Two sections, because two different things are configured here and they fail
+ * differently. **Color schemes** repaint every page in the knowledge base, so
+ * saving one rewrites the HTML and reloads. **Comment card semantic types** --
+ * what kinds of remark exist, and what Claude is told to do about each -- touch
+ * no document at all: they are a vocabulary, read by the composer when a
+ * comment is written. Each section therefore carries its own save button,
+ * since one Apply over both would promise that the cheap edit costs what the
+ * expensive one does.
  *
- * A colour is a **slot**, not a hue. An annotation says "the third colour",
- * so switching schemes moves every highlight to the third colour of the new
+ * Three ideas hold the color half together.
+ *
+ * A color is a **slot**, not a hue. An annotation says "the third color",
+ * so switching schemes moves every highlight to the third color of the new
  * one and nothing has to be rewritten. Dragging the swatches is the opposite
- * case: the colours move, so the annotations have to move with them to stay
- * the colour they were -- that is the `remap` the server is sent, and it is
+ * case: the colors move, so the annotations have to move with them to stay
+ * the color they were -- that is the `remap` the server is sent, and it is
  * the one edit here that touches a sidecar.
  *
  * **Preview is a lie told carefully.** It writes the same custom properties
@@ -16,7 +25,7 @@
  *
  * **The window is not a modal.** It is moved by its title bar and leaves the
  * document underneath live, because the whole point is to watch the prose
- * change colour while you pick.
+ * change color while you pick.
  */
 (function () {
   "use strict";
@@ -45,14 +54,43 @@
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }).then(function (r) {
-      return r.json().then(function (data) {
-        if (!r.ok) throw new Error(data.error || "the server refused it");
-        return data;
-      });
+      // The body may not be JSON at all: a server too old to know a route
+      // answers with an HTML 404, and letting the parse failure through would
+      // report a syntax error where the truth is "that endpoint is not there".
+      return r
+        .json()
+        .catch(function () {
+          return null;
+        })
+        .then(function (data) {
+          if (!r.ok) {
+            throw new Error((data && data.error) || "the server refused it");
+          }
+          return data;
+        });
     });
   }
 
-  /* --- the colours, worked out the way the server works them out ----------
+  /* The vocabulary, or an empty one.
+   *
+   * Soft, where the schemes are not. A knowledge base has never had a semantic
+   * type until somebody adds one, and a server that predates the feature has
+   * no route to answer with -- neither is an error, and neither may be allowed
+   * to cost the reader the color section sitting above it. */
+  function getSemantics() {
+    return fetch("/api/semantics", { headers: { Accept: "application/json" } })
+      .then(function (r) {
+        return r.ok ? r.json() : null;
+      })
+      .catch(function () {
+        return null;
+      })
+      .then(function (data) {
+        return data || { types: [], defaults: {} };
+      });
+  }
+
+  /* --- the colors, worked out the way the server works them out -----------
    *
    * Only the fill is chosen; the pin and the card are derived from it. The
    * arithmetic is mirrored from scheme.derive in the Python -- if the two ever
@@ -202,6 +240,15 @@
     return node;
   }
 
+  /* One of the window's two halves: a heading and whatever follows it. A
+   * heading rather than a bare label, because these are the two topics the
+   * window covers and a screen reader should be able to jump between them. */
+  function section(title) {
+    var node = el("div", "settings__section");
+    node.appendChild(el("h2", "settings__title", title));
+    return node;
+  }
+
   /* Moved by its bar, and kept on screen: a window dragged off the edge is a
    * window you cannot get back without knowing where it went. */
   function draggable(node, handle) {
@@ -229,7 +276,7 @@
   function swatchRow() {
     var row = el("div", "settings__slots");
     row.setAttribute("role", "list");
-    row.setAttribute("aria-label", "The six colours, in order. Drag to rearrange.");
+    row.setAttribute("aria-label", "The six colors, in order. Drag to rearrange.");
 
     state.editing.colors.forEach(function (fill, index) {
       var cell = el("div", "settings__slot");
@@ -241,7 +288,7 @@
       picker.type = "color";
       picker.value = fill;
       picker.className = "settings__picker";
-      picker.setAttribute("aria-label", "Colour " + (index + 1));
+      picker.setAttribute("aria-label", "Color " + (index + 1));
       picker.addEventListener("input", function () {
         state.editing.colors[index] = picker.value;
         repaint();
@@ -256,8 +303,8 @@
     return row;
   }
 
-  /* Dragging a swatch moves the colour and takes its annotations with it, so
-   * the arrangement has to remember where each colour *started*: `order` is
+  /* Dragging a swatch moves the color and takes its annotations with it, so
+   * the arrangement has to remember where each color *started*: `order` is
    * the original 1-based slots in their new positions, which is exactly what
    * the server needs to renumber by. */
   function wireSlotDrag(row) {
@@ -345,6 +392,19 @@
     add.title = "Add a scheme, starting from this one";
     add.addEventListener("click", addScheme);
     chooser.appendChild(add);
+
+    // Absent at one scheme rather than present and dead. A scheme is what the
+    // page is painted with, so there has to be one; a disabled Delete would
+    // only invite a reader to work out why, and the answer is a rule they can
+    // already see -- there is nothing else in the list.
+    if (state.schemes.length > 1) {
+      var drop = el("button", "settings__button settings__button--drop", "Delete");
+      drop.type = "button";
+      drop.title = "Delete this scheme";
+      drop.addEventListener("click", deleteScheme);
+      chooser.appendChild(drop);
+    }
+
     wrap.appendChild(chooser);
 
     var name = el("label", "settings__field");
@@ -364,14 +424,6 @@
 
     wrap.appendChild(el("span", "settings__label", "Highlights and comments"));
     wrap.appendChild(swatchRow());
-    wrap.appendChild(
-      el(
-        "p",
-        "settings__hint",
-        "Six, always. Drag to rearrange — existing highlights keep the colour " +
-          "they have and follow it to its new place."
-      )
-    );
 
     return wrap;
   }
@@ -399,6 +451,250 @@
     return bar;
   }
 
+  /* --- comment card semantic types -----------------------------------------
+   *
+   * A comment says what is wrong; its semantic type says what kind of remark
+   * it is, and carries the instruction Claude is given for putting that kind
+   * of thing right. This section is where the vocabulary is written: the kinds
+   * themselves, their instructions, and which kind each of the six colors
+   * reaches for when a comment is started in it.
+   *
+   * Neither half of a pairing is required. A color need not have a default --
+   * most do not -- and a kind need not have an instruction, since an
+   * unexplained kind still groups remarks usefully and still tells a model
+   * that these three are the same sort of thing.
+   *
+   * Types are held by POSITION while the window is open, not by name. A select
+   * stores the index of the kind it points at, so renaming "question" to
+   * "query" in the field above does not have to chase down and rewrite every
+   * default that named it -- the name is only read back at Save, which is also
+   * the only moment any of this is a vocabulary rather than a form.
+   */
+
+  /** The server's shape -- names everywhere -- turned into the editing shape. */
+  function adoptSemantics(data) {
+    var types = (data.types || []).map(function (kind) {
+      return { name: kind.name || "", instruction: kind.instruction || "" };
+    });
+
+    var slots = [];
+    for (var n = 1; n <= SLOTS; n++) {
+      var wanted = String((data.defaults || {})[String(n)] || "").toLowerCase();
+      var at = -1;
+      types.forEach(function (kind, index) {
+        if (wanted && kind.name.toLowerCase() === wanted) at = index;
+      });
+      // A default naming a kind that no longer exists is no default at all,
+      // which is the same reading the Python takes of the file on disk.
+      slots.push(at);
+    }
+    return { types: types, slots: slots };
+  }
+
+  function text(value, placeholder, label, onInput) {
+    var input = document.createElement("input");
+    input.type = "text";
+    input.className = "semantics__field";
+    input.value = value;
+    input.placeholder = placeholder;
+    input.setAttribute("aria-label", label);
+    input.addEventListener("input", function () {
+      onInput(input.value);
+    });
+    return input;
+  }
+
+  function typeRow(kind, index) {
+    var row = el("div", "semantics__type");
+
+    var head = el("div", "semantics__head");
+    var name = text(kind.name, "Name", "Name of kind " + (index + 1), function (value) {
+      kind.name = value;
+      // The selects below point at this row by position, so their labels are
+      // the one thing a rename has to keep in step with by hand.
+      relabel(index, value);
+    });
+    name.className = "semantics__field semantics__name";
+    head.appendChild(name);
+
+    var drop = el("button", "semantics__drop", "×");
+    drop.type = "button";
+    drop.title = "Delete this kind";
+    drop.setAttribute("aria-label", "Delete the kind " + (kind.name || index + 1));
+    drop.addEventListener("click", function () {
+      dropType(index);
+    });
+    head.appendChild(drop);
+    row.appendChild(head);
+
+    row.appendChild(
+      text(
+        kind.instruction,
+        "What Claude should do about it (optional)",
+        "Claude instruction for kind " + (index + 1),
+        function (value) {
+          kind.instruction = value;
+        }
+      )
+    );
+
+    return row;
+  }
+
+  /* Rename in place rather than re-render: redrawing the section on every
+   * keystroke would take the focus out of the field being typed into. */
+  function relabel(index, value) {
+    if (!win) return;
+    win.querySelectorAll(".semantics__pick").forEach(function (select) {
+      var option = select.options[index + 1]; // 0 is "no default"
+      if (option) option.textContent = value || "untitled";
+    });
+  }
+
+  function dropType(index) {
+    state.kinds.types.splice(index, 1);
+    state.kinds.slots = state.kinds.slots.map(function (at) {
+      if (at === index) return -1; // the color loses a default it no longer has
+      return at > index ? at - 1 : at;
+    });
+    renderSemantics();
+  }
+
+  function addType() {
+    state.kinds.types.push({ name: "", instruction: "" });
+    renderSemantics();
+    // Straight into the field that has to be filled in: a nameless kind is the
+    // one thing the server will refuse.
+    var fields = win.querySelectorAll(".semantics__name");
+    if (fields.length) fields[fields.length - 1].focus();
+  }
+
+  /* One row per color slot: the color itself, and the kind a comment started
+   * in it is given. The swatch is drawn from the same generated `--hl-*`
+   * variables the highlights use, so this is the color as the page paints it
+   * and not a second copy of the palette. */
+  function defaultRow(slot) {
+    var row = el("div", "semantics__default");
+
+    var dot = el("span", "semantics__dot swatch--c" + slot);
+    dot.setAttribute("aria-hidden", "true");
+    row.appendChild(dot);
+    row.appendChild(el("span", "semantics__ordinal", String(slot)));
+
+    var select = document.createElement("select");
+    select.className = "semantics__pick";
+    select.setAttribute("aria-label", "Default kind for color " + slot);
+
+    var none = document.createElement("option");
+    none.value = "-1";
+    none.textContent = "No default";
+    select.appendChild(none);
+
+    state.kinds.types.forEach(function (kind, index) {
+      var option = document.createElement("option");
+      option.value = String(index);
+      option.textContent = kind.name || "untitled";
+      select.appendChild(option);
+    });
+
+    select.value = String(state.kinds.slots[slot - 1]);
+    select.addEventListener("change", function () {
+      state.kinds.slots[slot - 1] = Number(select.value);
+    });
+
+    row.appendChild(select);
+    return row;
+  }
+
+  function semanticsBody() {
+    var wrap = el("div", "semantics");
+
+    var list = el("div", "semantics__list");
+    if (!state.kinds.types.length) {
+      list.appendChild(
+        el(
+          "p",
+          "semantics__empty",
+          "No kinds yet. Add one and it appears under every comment box."
+        )
+      );
+    }
+    state.kinds.types.forEach(function (kind, index) {
+      list.appendChild(typeRow(kind, index));
+    });
+    wrap.appendChild(list);
+
+    var add = el("button", "semantics__add", "Add a kind");
+    add.type = "button";
+    add.addEventListener("click", addType);
+    wrap.appendChild(add);
+
+    // Read as a sentence down the column: color 3, question. Most colors will
+    // say "No default", which is the honest resting state -- a default is a
+    // shortcut for the one or two kinds somebody reaches for constantly.
+    wrap.appendChild(el("span", "settings__label", "Default kind for each color"));
+    var defaults = el("div", "semantics__defaults");
+    for (var slot = 1; slot <= SLOTS; slot++) defaults.appendChild(defaultRow(slot));
+    wrap.appendChild(defaults);
+
+    var bar = el("div", "semantics__footer");
+    var save = el("button", "semantics__save", "Save kinds");
+    save.type = "button";
+    save.addEventListener("click", saveSemantics);
+    bar.appendChild(save);
+    wrap.appendChild(bar);
+
+    return wrap;
+  }
+
+  function saveSemantics() {
+    var types = state.kinds.types.map(function (kind) {
+      return { name: (kind.name || "").trim(), instruction: (kind.instruction || "").trim() };
+    });
+
+    // Checked here as well as on the server, because the server can only
+    // answer about the first offender and the reader is looking at all of
+    // them. The two refusals are the same two: nameless, and named twice.
+    var seen = {};
+    for (var i = 0; i < types.length; i++) {
+      if (!types[i].name) {
+        ui.toast("A kind needs a name", "error");
+        return;
+      }
+      var key = types[i].name.toLowerCase();
+      if (seen[key]) {
+        ui.toast('Two kinds are both called "' + types[i].name + '"', "error");
+        return;
+      }
+      seen[key] = true;
+    }
+
+    var defaults = {};
+    state.kinds.slots.forEach(function (at, index) {
+      if (at >= 0 && types[at]) defaults[String(index + 1)] = types[at].name;
+    });
+
+    post("/api/semantics", { types: types, defaults: defaults })
+      .then(function (data) {
+        state.kinds = adoptSemantics(data || { types: types, defaults: defaults });
+        renderSemantics();
+        // No reload. Nothing on disk was re-rendered -- a vocabulary is read
+        // when a comment is written, not baked into the HTML -- so the one
+        // thing that has to hear about this is the composer's own copy.
+        if (window.mdweaveSemantics) window.mdweaveSemantics.reload();
+        ui.toast("Saved");
+      })
+      .catch(function (error) {
+        ui.toast(error.message, "error");
+      });
+  }
+
+  function renderSemantics() {
+    if (!win) return;
+    var old = win.querySelector(".semantics");
+    if (old) old.parentNode.replaceChild(semanticsBody(), old);
+  }
+
   function render() {
     if (!win) return;
     var old = win.querySelector(".settings__body");
@@ -418,7 +714,7 @@
     // Apply, which is what makes Preview safe to leave on.
     state.editing = JSON.parse(JSON.stringify(found));
     state.from = name;
-    // Identity of each colour before any dragging, so a reorder can be
+    // Identity of each color before any dragging, so a reorder can be
     // described to the server as "slot 5 is now first".
     state.order = [1, 2, 3, 4, 5, 6];
     render();
@@ -442,6 +738,80 @@
     repaint();
   }
 
+  /* Deleting is saving the list without it.
+   *
+   * There is no delete route and there does not need to be: /api/schemes is
+   * given the whole list every time and writes it over the theme file, so an
+   * entry that is simply not in the list is gone. The one shape that request
+   * cannot express is an empty list -- which is also the one state the reader
+   * must not be left in, since a scheme is what the page is painted with. The
+   * button is therefore absent at a single scheme rather than disabled.
+   *
+   * What takes over is deliberately not whatever is being edited. The active
+   * scheme is kept if it survives, so deleting one you are not looking at
+   * leaves every page exactly as it was; only when the active one is the one
+   * going does anything repaint, and then it is the first of what is left,
+   * because something has to paint the page.
+   */
+  function deleteScheme() {
+    if (state.schemes.length < 2) return;
+
+    // The entry on the list, which is not `state.editing`: that is a copy,
+    // and the Name field may have renamed it since. A scheme made with New is
+    // its own entry, so it is the one case matched by identity rather than by
+    // the name it was opened under.
+    var doomed = null;
+    state.schemes.forEach(function (scheme) {
+      var mine = state.from === null ? scheme === state.editing
+                                     : scheme.name === state.from;
+      if (mine) doomed = scheme;
+    });
+    if (!doomed) return;
+
+    var left = state.schemes.filter(function (scheme) {
+      return scheme !== doomed;
+    });
+    var surviving = {};
+    left.forEach(function (scheme) { surviving[scheme.name] = true; });
+    var takesOver = surviving[state.wasActive] ? state.wasActive : left[0].name;
+
+    var sure = window.confirm(
+      'Delete the scheme "' + doomed.name + '"?\n\n' +
+        (takesOver === state.wasActive
+          ? "Nothing on the pages changes; only the scheme goes. "
+          : 'Every page is repainted in "' + takesOver + '". ') +
+        "Highlights name a slot rather than a hue, so no comment and no " +
+        "choice of slot is lost.\n\nThis cannot be undone."
+    );
+    if (!sure) return;
+
+    // Made with New and never applied: the knowledge base never heard of it,
+    // so there is nothing to ask the server to forget. Dropping it here spares
+    // a rebuild of every page, and the reload after one, for no change at all.
+    if (state.from === null) {
+      state.schemes = left;
+      edit(takesOver);
+      return;
+    }
+
+    // No `remap`. A reorder is the one edit here that renumbers sidecars, and
+    // the only slots dragged were the ones about to stop existing -- renumbering
+    // the reader's annotations on the way out would be a rewrite nobody asked
+    // for, in aid of a scheme that is being thrown away.
+    post("/api/schemes", { active: takesOver, schemes: left })
+      .then(function (data) {
+        clearPreview();
+        (data.warnings || []).forEach(function (warning) {
+          ui.toast(warning, "error");
+        });
+        // Every page was rewritten, including this one.
+        window.location.reload();
+      })
+      .catch(function (error) {
+        ui.toast(error.message, "error");
+      });
+  }
+
   function apply_() {
     var name = (state.editing.name || "").trim();
     if (!name) {
@@ -459,7 +829,7 @@
 
     var payload = { active: name, schemes: schemes };
 
-    // Whenever the colours moved, whichever scheme they moved in.
+    // Whenever the colors moved, whichever scheme they moved in.
     //
     // This used to be conditional on editing the scheme already in use, on the
     // theory that renumbering for a scheme nobody is looking at would repaint
@@ -505,8 +875,13 @@
       return;
     }
 
-    get("/api/schemes")
-      .then(function (data) {
+    // Both at once. The vocabulary cannot fail the window -- `getSemantics`
+    // resolves to an empty one rather than rejecting -- so the only thing that
+    // can keep the window shut is still the schemes, which is right: a scheme
+    // is what the page is painted with and there always has to be one.
+    Promise.all([get("/api/schemes"), getSemantics()])
+      .then(function (answers) {
+        var data = answers[0];
         state = {
           schemes: data.schemes,
           wasActive: data.active,
@@ -514,6 +889,7 @@
           from: null,
           order: [1, 2, 3, 4, 5, 6],
           previewing: false,
+          kinds: adoptSemantics(answers[1]),
         };
 
         win = el("div", "settings");
@@ -524,7 +900,9 @@
         win.style.top = "4rem";
 
         var bar = el("div", "settings__bar");
-        bar.appendChild(el("span", "settings__heading", "Colour schemes"));
+        // The bar names the window now that there is more than one thing in
+        // it; each section names itself below.
+        bar.appendChild(el("span", "settings__heading", "Settings"));
         var shut = el("button", "settings__close", "×");
         shut.type = "button";
         shut.setAttribute("aria-label", "Close settings");
@@ -532,8 +910,16 @@
         bar.appendChild(shut);
 
         win.appendChild(bar);
-        win.appendChild(el("div", "settings__body"));
-        win.appendChild(el("div", "settings__footer"));
+
+        var colors = section("Color schemes");
+        colors.appendChild(el("div", "settings__body"));
+        colors.appendChild(el("div", "settings__footer"));
+        win.appendChild(colors);
+
+        var kinds = section("Comment card semantic types");
+        kinds.appendChild(el("div", "semantics"));
+        win.appendChild(kinds);
+
         document.body.appendChild(win);
         draggable(win, bar);
 
@@ -541,6 +927,7 @@
         if (button) button.setAttribute("aria-expanded", "true");
 
         edit(data.active);
+        renderSemantics();
       })
       .catch(function (error) {
         ui.toast(error.message, "error");

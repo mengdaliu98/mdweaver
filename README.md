@@ -236,18 +236,18 @@ never something you typed. Typing a slash used to answer `unknown folder:
 drag, where both halves name rows that exist, and wrong for a typed name, where
 the reader never named a parent at all.
 
-**Colours.** The panel is `#D1C7B7` and the reading pane `#F2EFE4`, as
+**Colors.** The panel is `#D1C7B7` and the reading pane `#F2EFE4`, as
 `--sidebar-bg` and `--paper` in `mdweave/theme/base.css`. Every label,
 chevron and icon in the panel is flat black (`--sidebar-ink`): the page's
 three-step ink ramp was de-emphasising against near-white, and on `#D1C7B7`
 its faint end reads muddy rather than quiet, so hierarchy here is weight and
 indentation instead. The row for the document on screen is painted in
-`--paper`, the pane's own colour, so the panel reads as having a piece cut out
+`--paper`, the pane's own color, so the panel reads as having a piece cut out
 of it — it is the only light shape on a darker panel and needs no accent to be
 found. The panel carries no rule down its right-hand edge, so that row runs
 into the prose with no seam; a child cannot paint over an ancestor's border,
 so the border is what had to go. They are deliberately
-not `--surface`, which is still white: that token is also the colour of the
+not `--surface`, which is still white: that token is also the color of the
 text on a dark chip and the fill of the floating re-open button, neither of
 which wants warm paper. Code blocks, table heads and hairlines were warmed to
 match, or they read as patches of a different page. The dark scheme keeps its
@@ -512,28 +512,23 @@ browser ──POST /api/agent/jobs──▶ the site
                                      │  │   (held open until there is work)
                                      │  ▼
                                      │  mdweave agent, on the devserver
-                                     │      claude -p --resume <session>
+                                     │      claude -p  (a new session)
                                      │      edits markdown_inputs/
                                      │      git push
                                      │
                                 POST …/events, …/done, …/reconcile
 ```
 
-**One conversation per document.** Which session owns a document is recorded
-beside it, in `<doc>.session.json` — the same convention `.ann.json` uses, and
-it travels the same way: a move renames it, a delete removes it, a checkpoint
-carries it. Each press resumes that conversation rather than starting a new
-one, so *"tighten the section you just added"* means something.
+**A new conversation every press.** Nothing is kept between jobs. Each one
+starts a fresh Claude session, which reads the document off disk, edits it,
+and exits; no file beside the document records which conversation owns it,
+because none does. The prose is the state, and it is the only state.
 
-Resuming reuses the same session id, which is what makes the last part work:
-
-```bash
-claude --resume $(jq -r .session_id markdown_inputs/metabridge-design-review.session.json)
-```
-
-That is the *same* conversation the buttons are driving, open in your terminal.
-The button's tooltip prints the command. Nothing is being mirrored or replayed
-— there is one session, and two ways to talk to it.
+The cost is that *"tighten the section you just added"* means nothing —
+there is no "just". Say which section. What you get for that is a button
+that does the same thing on the same document today as it did last week,
+rather than one whose behaviour depends on what was asked of it hours ago
+and is no longer visible anywhere on the page.
 
 **The buttons are yours.** An action is a name, a label and a prompt, and they
 live in `markdown_inputs/.mdweave-agent.json`, beside `.mdweave-theme.json` and
@@ -631,29 +626,29 @@ Three details the seam between visible text and source forces:
   this plain" makes.
 
 **Annotations** — **Comment** and **Highlight** — each showing the six slots of
-the active scheme. The colour *is* the button, so
-either is one click rather than "make it, then recolour it". A highlight has
+the active scheme. The color *is* the button, so
+either is one click rather than "make it, then recolor it". A highlight has
 nothing to type and so skips the composer entirely; a comment opens one,
-already in the colour you picked.
+already in the color you picked.
 
-Pressing a colour means *make this selection that colour*, whatever is already
-underneath, with no exceptions — so re-colouring a highlight, or painting over
+Pressing a color means *make this selection that color*, whatever is already
+underneath, with no exceptions — so re-coloring a highlight, or painting over
 a patch of mixed ones, both leave a single clean highlight.
 
 Removing one is the **eraser** at the end of the Highlight row. It used to be
-a second press of the colour the text already was, which made one gesture mean
+a second press of the color the text already was, which made one gesture mean
 two things depending on state the reader could not reliably see: press a
-colour on text that happened to be it and the highlight vanished. A press
+color on text that happened to be it and the highlight vanished. A press
 paints; the eraser erases.
 
 Text carrying a **comment** is never absorbed — its highlight is the handle for
-a thread, and no colour press should mean *delete that*. Recolour it from its
+a thread, and no color press should mean *delete that*. Recolor it from its
 own card instead. The comment is written straight into the
 document's `.ann.json` sidecar and the HTML is regenerated, so a reload shows
 exactly what you just made. Open a note and `Delete` removes it again.
 
-The swatches beside the buttons choose the colour, before or after the fact —
-see [Colours](#colours).
+The swatches beside the buttons choose the color, before or after the fact —
+see [Colors](#colors).
 
 This needs the page to be served, because a `file://` page has no API to write
 to. `mdweave start` handles that.
@@ -712,7 +707,7 @@ block.
 | -------- | ------------------------------------------------------------------ |
 | `id`     | stable identifier; also the DOM id (`hl-<id>`, `note-<id>`)         |
 | `kind`   | `comment` renders a card; `highlight` is a bare highlight           |
-| `color`  | a token name, or any raw CSS colour                                 |
+| `color`  | a token name, or any raw CSS color                                  |
 | `status` | `open` or `resolved` (resolved fades the highlight and the note)    |
 | `thread` | list of `{author, at, body}` — renders as a stacked conversation    |
 | `tags`   | optional pills at the foot of the card                              |
@@ -748,20 +743,31 @@ missed it.
 The file skips, rather than fails, when the browser is not installed, so
 `pytest tests/` still works on a checkout that never ran `playwright install`.
 
-## Colours
+## Colors
 
 Six, and which six is up to you. The gear beside **Documents** opens a
 floating window — moved by its title bar, not a modal, because the point is to
 watch the prose change while you pick.
 
 A scheme is the left panel, the document background, and six highlight
-colours. Six is fixed: it is the width of the picker, the width of the
+colors. Six is fixed: it is the width of the picker, the width of the
 selection menu, and the number a reader can tell apart at a glance. Only the
 *fill* is chosen; the pin, the card and the card's text are derived from it by
 hue, and darkened until they clear WCAG AA — asking anyone to pick four
-colours that stay legible together, six times over, is asking them to do
+colors that stay legible together, six times over, is asking them to do
 arithmetic. A fill too dark for the text on it is reported, never refused;
 the reader picked it, and a veto is someone else's taste in an error message.
+
+**New** copies whatever is on screen into a second scheme; **Delete** takes
+one away, asking first, the way deleting a document does. Deleting is a save
+of the list without that entry — `POST /api/schemes` is handed the whole list
+every time, so there is no delete route and nothing to keep in step. The list
+cannot go empty: at one scheme the Delete button is simply not drawn, because
+a scheme is what the page is painted with and a disabled control only invites
+the reader to work out a rule they can already see. Delete the scheme in use
+and the first of what is left takes over; delete any other and the pages do
+not move. Either way the annotations are untouched — they name a slot, not a
+hue, so nothing in a sidecar depends on which schemes exist.
 
 **Preview** paints the page with exactly the custom properties Apply would
 write, into a single `<style>` element. Nothing reaches the disk until Apply,
@@ -771,7 +777,7 @@ arithmetic, paid for on purpose so dragging a picker does not mean a round
 trip per keystroke, and on the condition that a test compares them, which is
 `test_the_preview_paints_exactly_what_apply_would_write`.
 
-### A colour is a slot
+### A color is a slot
 
 This is the idea the rest of it hangs on. An annotation does not store a hue.
 It stores **which of the six** — `"color": 3` — and the scheme says what three
@@ -782,8 +788,8 @@ looks like. Two consequences, both of them the reason:
   yellow silently restyled every note that mentioned it, and switching to a
   scheme with no yellow left those notes resolving to nothing.
 - **Reordering the six**, by dragging the swatches, is the opposite. The
-  colours move, so every annotation is renumbered to *stay the colour it was*:
-  drag the fifth colour to the front and everything wearing 5 becomes 1. The
+  colors move, so every annotation is renumbered to *stay the color it was*:
+  drag the fifth color to the front and everything wearing 5 becomes 1. The
   page looks identical, which is the point — you are arranging the palette,
   not restyling your notes. It is the one edit here that touches a sidecar.
 
@@ -793,9 +799,9 @@ looks like. Two consequences, both of them the reason:
   have got without the drag.
 
 Slots are positional in the markup too: `hl--c3`, never `hl--yellow`, because
-a hue in a class name is a lie the moment the reader recolours it. The API
+a hue in a class name is a lie the moment the reader recolors it. The API
 sends `color_token` alongside the stored `color` for exactly this: the file
-may say `3`, or `amber`, or a raw CSS colour, and turning that into a class is
+may say `3`, or `amber`, or a raw CSS color, and turning that into a class is
 the server's job once rather than the browser's again. Handing the browser the
 raw value made it write `hl--3` where the renderer writes `hl--c3` — the
 highlight was placed and matched no rule, so it looked absent until a reload.
@@ -803,23 +809,23 @@ highlight was placed and matched no rule, so it looked absent until a reload.
 Schemes live in `markdown_inputs/.mdweave-theme.json`, beside the prose rather
 than beside the tool: they are the reader's, and they follow the knowledge
 base to the next machine. A missing or mangled file falls back to the palette
-that shipped, so a broken dotfile costs a colour and never a document.
+that shipped, so a broken dotfile costs a color and never a document.
 
 **The palette before this one.** Sidecars in the wild say `pink`, `yellow`,
 `amber`, `slate` and the rest. Every one of them resolves to the slot that
-colour occupied at the time, on the way to the page, and the file is left
+color occupied at the time, on the way to the page, and the file is left
 exactly as it is. `LEGACY_SLOTS` in `mdweave/scheme.py` is the map.
 
 A single annotation can still opt out of the palette entirely: put a raw CSS
-colour in its sidecar entry and the fill, pin and card tint are derived from
+color in its sidecar entry and the fill, pin and card tint are derived from
 it with `color-mix()`. That is a hand-edit only — the API refuses anything
-that is not a slot, because a raw colour reaches the page inside a `style`
+that is not a slot, because a raw color reaches the page inside a `style`
 attribute and is not something to take from a browser.
 
 ## Reading the output
 
 Comments are Preview.app-style sticky notes pinned to the upper-right corner
-of the text they annotate: a small coloured square by default, click to open
+of the text they annotate: a small colored square by default, click to open
 the card, click again to close. The pin never moves when the card opens — the
 card is a popover hanging off it, which flips to the other side or upwards when
 it would run off the page.
@@ -864,7 +870,7 @@ mdweave actions [--write-default]         # what buttons this knowledge base off
 ```
 
 `agent` is the long-running one: it belongs on the machine with the checkouts
-and the sessions, not in the container. `--once` takes a single job and exits,
+and the `claude` CLI, not in the container. `--once` takes a single job and exits,
 which is the way to try it without leaving anything running.
 
 `serve` is what `start` puts in the background; run it directly when you want

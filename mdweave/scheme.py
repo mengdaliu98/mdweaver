@@ -1,19 +1,19 @@
-"""Colour schemes: what the page is painted with, and what a highlight means.
+"""Color schemes: what the page is painted with, and what a highlight means.
 
 An annotation used to say `"color": "yellow"`, and yellow was a fixed value in
-a stylesheet. Once the reader can choose the colours, a hue is the wrong thing
+a stylesheet. Once the reader can choose the colors, a hue is the wrong thing
 to store: renaming what yellow looks like would silently restyle every note
 that ever mentioned it, and switching to a scheme with no yellow in it would
 leave those notes with nothing to resolve to.
 
-So an annotation names a **slot** -- first colour, second colour, up to the
+So an annotation names a **slot** -- first color, second color, up to the
 sixth -- and a scheme says what the six slots look like. Two consequences,
 both of them the point:
 
 * Switching schemes moves every highlight to the same position in the new
   one. Nothing is rewritten; the slot is already what the file says.
-* Reordering the slots inside a scheme is the opposite. The colours move, so
-  every annotation has to move with them to stay the colour it was, and that
+* Reordering the slots inside a scheme is the opposite. The colors move, so
+  every annotation has to move with them to stay the color it was, and that
   *is* a rewrite -- see `remap` and its caller.
 
 Six is fixed. It is the width of the picker, the width of the selection menu,
@@ -21,7 +21,7 @@ and the number a reader can tell apart at a glance; making it a setting would
 be four more states to draw and no more expressive.
 
 The other three values per slot -- the pin, the card, the card's text -- are
-derived from the fill rather than chosen. Asking anyone to pick four colours
+derived from the fill rather than chosen. Asking anyone to pick four colors
 that stay legible together, six times over, is asking them to do arithmetic;
 `derive` does it, and lands on WCAG AA by construction.
 """
@@ -38,7 +38,7 @@ SLOTS = 6
 THEME_FILE = ".mdweave-theme.json"
 
 # Slot classes are positional -- `hl--c1`, never `hl--yellow`. A name would be
-# a lie the moment the reader recoloured it.
+# a lie the moment the reader recolored it.
 SLOT_CLASSES = tuple(f"c{i + 1}" for i in range(SLOTS))
 
 _HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
@@ -96,7 +96,7 @@ class Derived:
 
 
 def derive(fill: str) -> Derived:
-    """Everything a slot needs, from the one colour that was chosen.
+    """Everything a slot needs, from the one color that was chosen.
 
     The edge carries white text as the pin, so it is darkened until it clears
     AA against white. The card is a near-white wash of the same hue with ink
@@ -117,7 +117,7 @@ def derive(fill: str) -> Derived:
 
 @dataclass
 class Scheme:
-    """One named set of colours: the two backgrounds, and the six slots."""
+    """One named set of colors: the two backgrounds, and the six slots."""
 
     name: str
     sidebar: str
@@ -140,12 +140,12 @@ class Scheme:
 
         colors = raw.get("colors")
         if not isinstance(colors, list) or len(colors) != SLOTS:
-            raise ValueError(f"a scheme needs exactly {SLOTS} colours")
+            raise ValueError(f"a scheme needs exactly {SLOTS} colors")
 
         cleaned = []
         for value in [raw.get("sidebar"), raw.get("paper"), *colors]:
             if not isinstance(value, str) or not _HEX.match(value.strip()):
-                raise ValueError(f"{value!r} is not a #rrggbb colour")
+                raise ValueError(f"{value!r} is not a #rrggbb color")
             cleaned.append(value.strip().lower())
 
         return cls(name=name, sidebar=cleaned[0], paper=cleaned[1], colors=cleaned[2:])
@@ -163,7 +163,7 @@ DEFAULT_SCHEME = Scheme(
 # What the six were called when they were hues rather than positions, and the
 # palette before that. Sidecars in the wild say these, and a render is no place
 # to rewrite someone's file -- so they resolve on the way out, to the slot the
-# colour occupied at the time.
+# color occupied at the time.
 LEGACY_SLOTS = {
     "pink": 1, "purple": 2, "blue": 3, "green": 4, "yellow": 5, "orange": 6,
     "rose": 1, "violet": 2, "sky": 3, "mint": 4, "slate": 5, "amber": 6,
@@ -171,7 +171,7 @@ LEGACY_SLOTS = {
 
 
 def slot_of(color) -> int | None:
-    """The 1-based slot `color` names, or None if it is a raw CSS colour."""
+    """The 1-based slot `color` names, or None if it is a raw CSS color."""
     if isinstance(color, bool):
         return None
     if isinstance(color, int):
@@ -212,7 +212,7 @@ def load(root: Path) -> Theme:
 
     Unreadable, hand-mangled, or missing all mean the same thing: fall back.
     A broken dotfile must not take the whole page down with it -- the reader
-    would lose the prose over a colour.
+    would lose the prose over a color.
     """
     try:
         raw = json.loads((root / THEME_FILE).read_text(encoding="utf-8"))
@@ -254,7 +254,7 @@ def css(scheme: Scheme) -> str:
     """The scheme as a stylesheet, appended after everything it overrides.
 
     Generated rather than hand-written, and last in the file, so the static
-    themes keep every rule about *structure* and own none of the colour.
+    themes keep every rule about *structure* and own none of the color.
     """
     light: list[str] = [
         f"  --paper: {_rgb_css(_rgb(scheme.paper))};",
@@ -288,7 +288,7 @@ def css(scheme: Scheme) -> str:
     dark_body = "\n".join(dark)
     rules = "\n".join(mapping)
     return (
-        f"/* Generated from the colour scheme {scheme.name!r}. Edited in the\n"
+        f"/* Generated from the color scheme {scheme.name!r}. Edited in the\n"
         f"   browser, under the gear beside DOCUMENTS -- not by hand: the file\n"
         f"   it comes from is markdown_inputs/{THEME_FILE}. */\n"
         f":root {{\n{body}\n}}\n\n"
@@ -309,7 +309,7 @@ def unreadable(scheme: Scheme) -> list[str]:
     poor = []
     for index, fill in enumerate(scheme.colors, start=1):
         if contrast(_rgb(fill), PAGE_INK) < 4.5:
-            poor.append(f"colour {index} ({fill}) is too dark for the text on it")
+            poor.append(f"color {index} ({fill}) is too dark for the text on it")
     if contrast(_rgb(scheme.paper), PAGE_INK) < 4.5:
         poor.append(f"the page background ({scheme.paper}) is too dark for its text")
     return poor

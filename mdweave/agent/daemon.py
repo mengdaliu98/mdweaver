@@ -9,13 +9,15 @@ heals itself on the next pass instead of hanging until some proxy's cap.
 
 What happens to a job, in order:
 
-  1. read the session sidecar beside the document, for the conversation id
-  2. run one Claude turn in the knowledge base checkout, forwarding progress
-  3. write the session id back, so the next press resumes this conversation
-  4. re-render, commit, push
-  5. ask the container to pull and rebuild, so the page shows it
+  1. run one Claude turn in the knowledge base checkout, forwarding progress
+  2. re-render, commit, push
+  3. ask the container to pull and rebuild, so the page shows it
 
-Step 5 is the one that is easy to leave out. Git carries the prose between the
+Every job is a fresh Claude session. Nothing is carried between presses: the
+turn reads the document off disk, which is the only state that was ever
+authoritative anyway, and the prompt says everything it needs to.
+
+Step 3 is the one that is easy to leave out. Git carries the prose between the
 two machines perfectly well, but the container only pulls at boot -- so without
 it the edit is safely committed and invisible.
 """
@@ -103,12 +105,13 @@ class Runner:
 
     def handle(self, job: dict) -> None:
         from ..serve import Workspace
-        from ..sources import session as session_store
 
         job_id = job["id"]
         document = job.get("document", "")
         action_name = job.get("action", "")
         instruction = job.get("instruction", "")
+        raw_comments = job.get("comments") or []
+        comments = [c for c in raw_comments if isinstance(c, dict)]
 
         def note(kind: str, text: str) -> None:
             try:
@@ -122,6 +125,10 @@ class Runner:
                     _log(f"could not post an event: {exc}")
 
         def finish(ok: bool, detail: str, revision: str = "", session: str = "") -> None:
+            # `session` is reported for the record, not to be resumed from:
+            # it is the id of the one fresh session that ran this job, which
+            # is what you need to find its transcript on this machine
+            # afterwards. Nothing reads it back to continue a conversation.
             try:
                 self.http.post(
                     f"/api/agent/jobs/{job_id}/done",
@@ -138,7 +145,10 @@ class Runner:
         workspace = Workspace(inputs=self.config.inputs, outputs=self.config.outputs)
 
         try:
-            markdown = workspace.markdown_for(document)
+            # A job naming a document that is not here should fail now and say
+            # so, rather than as a Claude turn that spends a minute looking for
+            # a file nobody has.
+            path = workspace.markdown_for(document)
         except Exception as exc:  # ApiError, mostly
             finish(False, f"no document called {document!r} here ({exc})")
             return
@@ -152,37 +162,28 @@ class Runner:
             finish(False, f"{action.label} needs something to be asked")
             return
 
-        sidecar = session_store.session_path(markdown)
-        session = session_store.load(sidecar)
-
-        if action.mode == "warm" and not session.warm:
-            # Recorded rather than acted on. A resumed one-shot reuses the same
-            # session id, so the conversation is already joinable from a
-            # terminal -- which is what `warm` was really for.
-            session.warm = True
-
         _log(f"{job_id}: {action.name} on {document}")
         note("status", f"{action.label} — {document}")
 
-        prompt = action.render(document, instruction)
+        location, extra_dirs = self.locate(path, document)
+        if action.name == registry.REVIEW:
+            prompt = registry.review_prompt(action, location, instruction, comments)
+            if not comments:
+                note(
+                    "status",
+                    "no comments were selected; asking for a read-through instead",
+                )
+        else:
+            prompt = action.render(document, instruction)
+
         outcome = runner.run(
             prompt,
             root=self.config.inputs.parent,
-            session=session.session_id,
             on_event=note,
             model=self.config.model,
             permission_mode=self.config.permission_mode,
-            add_dirs=list(self.config.add_dirs),
+            add_dirs=[*self.config.add_dirs, *extra_dirs],
         )
-
-        if outcome.session_id:
-            session.session_id = outcome.session_id
-            session.cwd = str(self.config.inputs.parent)
-            session.turns += max(outcome.turns, 1)
-            try:
-                session_store.save(sidecar, session)
-            except OSError as exc:
-                note("error", f"could not record the session id: {exc}")
 
         if not outcome.ok:
             _log(f"{job_id}: failed — {outcome.error}")
@@ -209,6 +210,39 @@ class Runner:
 
         _log(f"{job_id}: done — {outcome.summary}")
         finish(True, outcome.summary, revision, outcome.session_id or "")
+
+    def locate(self, path: Path, document: str) -> tuple[str, list[str]]:
+        """Where to send Claude for this document, and what else to open up.
+
+        For an ordinary file that is `markdown_inputs/<id>.md`, relative to
+        the checkout the turn runs in.
+
+        A symlink is the interesting case, and following it is not a tidiness
+        measure. A linked document almost always lives beside the thing it
+        describes -- a design note in a codebase, a plan in a project
+        directory -- and that neighbourhood is most of why the document is
+        worth editing at all: the model needs to read the code to answer a
+        comment about it. Handing over the link inside `markdown_inputs/`
+        instead gives a model that can open one file and see nothing around
+        it, in a directory full of unrelated notes.
+
+        So the real path goes in the prompt, and the original's parent goes to
+        `--add-dir`. Without the second half the first is a cruelty: the path
+        resolves, the edit is refused, and the turn reports a permission error
+        about a file it was told to work on.
+        """
+        try:
+            if not path.is_symlink():
+                return f"markdown_inputs/{document}.md", []
+            real = path.resolve()
+        except OSError:
+            # A link we cannot resolve is one we should not be inventing a
+            # path for. The checkout-relative name still opens it, because
+            # everything that reads it follows the link anyway.
+            return f"markdown_inputs/{document}.md", []
+
+        _log(f"{document} is a link to {real}; working there instead")
+        return str(real), [str(real.parent)]
 
     def publish(self, workspace, document: str, action, instruction: str) -> str:
         """Re-render, commit and push whatever the turn changed.

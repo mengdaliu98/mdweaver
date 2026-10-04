@@ -1,19 +1,20 @@
 """Running one Claude turn on the devserver.
 
-`claude -p --resume <session>` in the knowledge base checkout, with its
-`stream-json` output parsed back into the small event vocabulary the page
-understands. One turn per job: the process starts, edits the markdown, and
-exits, so nothing is resident between button presses and a devserver drain
-costs at most the turn that was in flight.
+`claude -p` in the knowledge base checkout, with its `stream-json` output
+parsed back into the small event vocabulary the page understands. One turn per
+job: the process starts, edits the markdown, and exits, so nothing is resident
+between button presses and a devserver drain costs at most the turn that was
+in flight.
 
-Resuming reuses the *same* session id rather than minting a new one, which is
-the property the whole design leans on -- it means the conversation a button is
-driving is the same conversation you get by typing
+Every turn is a *fresh* session. There is deliberately no resuming: the
+document on disk is the only state worth carrying between presses, and the
+prompt hands that over every time. A conversation that accumulated instead
+would make the same button do different things depending on what had been
+asked of it hours earlier, which is not something a reader of the page can
+see or reason about.
 
-    claude --resume <session-id>
-
-in a terminal on this machine. The sidecar beside the document holds that id,
-so joining the session Claude is having about a document is a copy and a paste.
+The session id the turn mints is still reported, because it is how you find
+that turn's transcript on this machine afterwards.
 """
 
 from __future__ import annotations
@@ -85,7 +86,6 @@ def describe_tool(name: str, payload: dict, root: Path) -> str:
 
 def build_argv(
     prompt: str,
-    session: str | None,
     *,
     model: str | None = None,
     permission_mode: str = "bypassPermissions",
@@ -112,8 +112,6 @@ def build_argv(
         "--permission-prompts",
         "none",
     ]
-    if session:
-        argv += ["--resume", session]
     if model:
         argv += ["--model", model]
     for directory in add_dirs or []:
@@ -133,7 +131,6 @@ def _pump(stream, sink: "queue.Queue", tag: str) -> None:
 def run(
     prompt: str,
     root: Path,
-    session: str | None = None,
     *,
     on_event=None,
     model: str | None = None,
@@ -157,14 +154,13 @@ def run(
 
     argv = build_argv(
         prompt,
-        session,
         model=model,
         permission_mode=permission_mode,
         add_dirs=add_dirs,
         extra=extra,
     )
 
-    emit("status", f"resuming {session[:8]}" if session else "starting a new session")
+    emit("status", "starting a new session")
 
     try:
         process = subprocess.Popen(
@@ -193,7 +189,7 @@ def run(
     # clock can tell them apart.
     last_heard = started
 
-    result = RunResult(ok=False, session_id=session)
+    result = RunResult(ok=False)
     stderr_tail: list[str] = []
     open_streams = 2
     reason = ""

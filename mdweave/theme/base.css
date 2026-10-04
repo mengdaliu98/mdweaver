@@ -26,7 +26,7 @@
   --ink-muted:    rgb( 99, 108, 124);
   --ink-faint:    rgb(148, 157, 172);
   /* The two backgrounds the reader actually looks at, kept apart from
-     `--surface`: that one is still white, because it is also the colour of
+     `--surface`: that one is still white, because it is also the color of
      the text on a dark chip and the fill of a floating control, and warm
      paper is not what either of those wants. */
   --paper:        rgb(242, 239, 228);   /* #F2EFE4 -- the reading pane */

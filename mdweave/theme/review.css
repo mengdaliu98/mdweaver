@@ -1,0 +1,396 @@
+/* ==========================================================================
+   mdweave -- reviewing comments and accepting what Claude did with them.
+   The Claude button's list of comments, and the before/after view that
+   follows a run. Loaded last, after editor.css.
+   ========================================================================== */
+
+/* The dialog element is the one the template ships, so everything that makes
+   it a dialog -- the backdrop, the shadow, the border, the print rule -- is
+   already `checkpoint-dialog`'s and is not restated here. What is restated is
+   the width, because the two screens behind this button want different ones:
+   a list of comments reads as a mistake when it is floating in a wide box,
+   and two columns of prose are unreadable in a narrow one. Same specificity
+   as `.agent-dialog`, later in the bundle, so it wins on source order. */
+.review-dialog { width: min(40rem, calc(100vw - 3rem)); }
+.review-dialog--wide { width: min(74rem, calc(100vw - 2rem)); }
+
+.review__note {
+  margin: 0 0 0.6rem;
+  color: var(--ink-muted);
+  font: 400 0.8rem/1.5 var(--font-body);
+}
+
+/* --- stage one: the comments on this document ----------------------------- */
+
+/* Scrolls inside the dialog rather than growing it. A document with thirty
+   comments on it would otherwise push the Send button off the bottom of the
+   screen, which is the one control the screen exists for. */
+.review__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: min(26rem, 52vh);
+  overflow-y: auto;
+}
+
+/* The tick, then everything else. A fixed first column keeps the bodies left
+   aligned with each other no matter how long the quoted text runs. */
+.review__row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.55rem;
+  align-items: start;
+  padding: 0.55rem 0.6rem 0.6rem;
+  border: 1px solid var(--rule);
+  border-left-width: 3px;
+  /* `--hl-edge` is set by the `note--cN` class the row wears, which is the
+     generated mapping from the active scheme. A row with no recognisable
+     color falls back to the hairline rather than to nothing. */
+  border-left-color: var(--hl-edge, var(--rule));
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.review__row + .review__row { margin-top: 0.4rem; }
+
+.review__tick {
+  width: 15px;
+  height: 15px;
+  margin: 0.18rem 0 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.review__main { min-width: 0; }
+
+.review__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem;
+  margin-bottom: 0.2rem;
+}
+
+/* The semantic type as a pill: it is a label on the comment, not part of what
+   the comment says, and it has to be distinguishable from the quoted text
+   sitting beside it at a glance. */
+.review__type {
+  flex: none;
+  padding: 0.08rem 0.4rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--hl-edge, var(--ink)) 16%, transparent);
+  color: color-mix(in srgb, var(--hl-edge, var(--ink)) 75%, var(--ink));
+  font: 500 0.68rem/1.5 var(--font-body);
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+/* One line, elided. The quote is here to say *where* the comment points; the
+   whole of a long sentence would crowd out the remark itself, which is the
+   part worth reading. */
+.review__quote {
+  min-width: 0;
+  flex: 1 1 8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-muted);
+  font: italic 400 0.76rem/1.5 var(--font-body);
+}
+
+/* A document-level comment anchors to nothing, and the row has to say so
+   rather than leave a gap where the quote would be. Not italic: it is this
+   page's words, not the author's. */
+.review__quote--whole {
+  font-style: normal;
+  color: var(--ink-faint);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Three lines, clamped in CSS so the whole comment is still in the document.
+   Trimming the string in script would make this dialog the only place the
+   remark is incomplete, and leave no way to tell a cut-off comment from a
+   terse one -- or to copy the rest of it.
+
+   `-webkit-line-clamp` needs the `-webkit-box` display to do anything, and
+   that pair is supported everywhere that has `fetch`. The `max-height` behind
+   it is the fallback for anything that is not: three lines of this exact
+   line-height, hard, with the overflow hidden either way. */
+.review__body {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+  max-height: calc(3 * 1.45em);
+  margin: 0;
+  color: var(--ink);
+  font: 400 0.82rem/1.45 var(--font-body);
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+/* Clicking a clamped comment opens it. The clamp is the right default for
+   scanning thirty of them; it is the wrong one the moment somebody wants to
+   read a particular remark before deciding to send it. */
+.review__body--full {
+  display: block;
+  max-height: none;
+  -webkit-line-clamp: none;
+  line-clamp: none;
+}
+
+/* --- stage two: before and after ------------------------------------------ */
+
+/* The tints. Named here once, and derived from the page's own surface so they
+   sit on warm paper in the light scheme and on near-black in the dark one --
+   a fixed pastel green would glow in the dark scheme and a fixed dark one
+   would vanish in the light. */
+.merge {
+  --gone: rgb(190 18 60);
+  --came: rgb(21 128 61);
+  --gone-bg: color-mix(in srgb, var(--gone) 10%, var(--surface));
+  --came-bg: color-mix(in srgb, var(--came) 10%, var(--surface));
+
+  /* The two columns, declared once, because four separate grids have to agree
+     on them or the view stops lining up: the headings, the body of every
+     hunk, and the two stacks of comment cards underneath. */
+  --sides: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+@media (prefers-color-scheme: dark) {
+  .merge {
+    --gone: rgb(248 113 133);
+    --came: rgb(74 222 128);
+    --gone-bg: color-mix(in srgb, var(--gone) 14%, var(--surface));
+    --came-bg: color-mix(in srgb, var(--came) 14%, var(--surface));
+  }
+}
+
+.merge__bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.merge__count {
+  flex: 1;
+  color: var(--ink-muted);
+  font: 500 0.78rem/1.4 var(--font-body);
+}
+
+.merge__sweep {
+  padding: 0.25rem 0.55rem;
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--ink-muted);
+  font: 500 0.72rem/1 var(--font-body);
+  cursor: pointer;
+}
+
+.merge__sweep:hover { color: var(--ink); border-color: var(--rule-strong); }
+
+.merge__heads,
+.merge__pair,
+.merge__cards {
+  display: grid;
+  grid-template-columns: var(--sides);
+  gap: 0.5rem;
+}
+
+.merge__heads { margin-bottom: 0.3rem; }
+
+.merge__label {
+  padding: 0.2rem 0.5rem;
+  border-radius: 6px;
+  font: 600 0.72rem/1.5 var(--font-body);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.merge__label--before { background: var(--gone-bg); color: var(--gone); }
+.merge__label--after { background: var(--came-bg); color: var(--came); }
+
+/* Scrolls inside the dialog for the same reason the comment list does: a
+   rewrite of a long document must not push accept and reject off the screen. */
+.merge__body {
+  max-height: min(30rem, 50vh);
+  overflow-y: auto;
+  padding: 0.4rem;
+  border: 1px solid var(--rule);
+  border-radius: 9px;
+  background: var(--surface-sunk);
+}
+
+.merge__lines {
+  margin: 0;
+  font: 400 0.74rem/1.55 var(--font-mono, ui-monospace, monospace);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 2;
+}
+
+/* Unchanged text spans both columns rather than being printed twice: showing
+   a line nobody touched under both headings invites a comparison with no
+   answer at the end of it. Quiet, because it is there for orientation. */
+.merge__same {
+  padding: 0.25rem 0.45rem;
+  color: var(--ink-muted);
+  opacity: 0.75;
+}
+
+.merge__skip {
+  margin: 0.15rem 0;
+  color: var(--ink-faint);
+  font: 400 0.7rem/1.6 var(--font-body);
+  text-align: center;
+  user-select: none;
+}
+
+.merge__hunk {
+  margin: 0.35rem 0;
+  padding: 0.35rem;
+  border: 1px solid var(--rule-strong);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.merge__hunkbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.3rem;
+}
+
+.merge__hunkname {
+  flex: 1;
+  color: var(--ink-faint);
+  font: 500 0.68rem/1.5 var(--font-body);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.merge__choice { display: flex; gap: 0.25rem; }
+
+.merge__pick {
+  padding: 0.2rem 0.6rem;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink-muted);
+  font: 500 0.72rem/1.2 var(--font-body);
+  cursor: pointer;
+}
+
+/* The pressed one is filled, not merely outlined. Two buttons that differ
+   only by a border are read as "one of these is hovered", and the state of a
+   hunk is the thing the reader has to be able to see without looking. */
+.merge__pick--yes.merge__pick--on {
+  border-color: transparent;
+  background: var(--came);
+  color: var(--surface);
+}
+
+.merge__pick--no.merge__pick--on {
+  border-color: transparent;
+  background: var(--gone);
+  color: var(--surface);
+}
+
+.merge__side {
+  padding: 0.3rem 0.45rem;
+  border-radius: 6px;
+}
+
+.merge__side--before { background: var(--gone-bg); }
+.merge__side--after { background: var(--came-bg); }
+
+/* A pure insertion has nothing on the left and a pure deletion nothing on the
+   right, and the empty cell still has to be there -- the moment the two sides
+   stop lining up the view is a diff only by accident. */
+.merge__side--empty {
+  color: var(--ink-faint);
+  font: italic 400 0.72rem/1.6 var(--font-body);
+  background: none;
+  border: 1px dashed var(--rule);
+}
+
+/* The side that will not be written is dimmed rather than hidden: the choice
+   is still changeable, so both halves have to stay legible. */
+.merge__hunk--accepted .merge__side--before,
+.merge__hunk--rejected .merge__side--after {
+  opacity: 0.45;
+}
+
+/* --- the comment cards on each side --------------------------------------- */
+
+.merge__cards { margin-top: 0.7rem; }
+
+.merge__heading {
+  margin: 0 0 0.35rem;
+  color: var(--ink-faint);
+  font: 600 0.68rem/1.5 var(--font-body);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.merge__cardlist {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  max-height: 14rem;
+  overflow-y: auto;
+}
+
+.merge__card {
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--hl-edge, var(--rule));
+  border-radius: 7px;
+  background: var(--note-bg, var(--surface));
+  color: var(--note-ink, var(--ink));
+}
+
+.merge__cardhead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.3rem;
+  margin-bottom: 0.15rem;
+}
+
+/* A card on the left that is not coming back. Struck through rather than
+   greyed out: this one is about to be deleted, and "faded" is already what
+   the rejected half of a hunk looks like a few centimetres above. */
+.merge__card--handled {
+  border-style: dashed;
+  opacity: 0.7;
+}
+
+.merge__card--handled .review__body { text-decoration: line-through; }
+
+.merge__gone {
+  margin: 0.25rem 0 0;
+  color: var(--gone);
+  font: 500 0.68rem/1.4 var(--font-body);
+}
+
+/* Not an error and not a result -- the honest answer to a question nobody
+   needs to act on, so it stays out of the way. */
+.merge__hint {
+  margin: 0;
+  color: var(--ink-faint);
+  font: italic 400 0.75rem/1.5 var(--font-body);
+}
+
+/* The cards are reference material while the hunks above are the decision, so
+   they never scroll the text off the screen: on a short window the two stacks
+   go under each other and the whole dialog scrolls instead. */
+@media (max-height: 620px) {
+  .merge__cards { grid-template-columns: minmax(0, 1fr); }
+  .merge__cardlist { max-height: 8rem; }
+}

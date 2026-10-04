@@ -140,9 +140,29 @@ class Broker:
 
     # --- the browser's side ------------------------------------------------
 
-    def submit(self, document: str, action: str, instruction: str = "") -> Job:
+    def submit(
+        self,
+        document: str,
+        action: str,
+        instruction: str = "",
+        comments: list[dict] | None = None,
+        before: str = "",
+    ) -> Job:
+        """Queue one job.
+
+        `comments` and `before` belong to the review flow and are snapshots,
+        taken now on purpose. The reader's ticked comments and the markdown
+        they were looking at are both free to change between this call and the
+        runner picking the job up, and a review that ran against a later state
+        than the one it was asked about would be unexplainable from the page.
+        """
         job = Job(
-            id=new_id(), document=document, action=action, instruction=instruction
+            id=new_id(),
+            document=document,
+            action=action,
+            instruction=instruction,
+            comments=list(comments or []),
+            before=before,
         )
         with self._condition:
             self._expire()
@@ -270,11 +290,23 @@ class Broker:
         detail: str = "",
         revision: str = "",
         session: str | None = None,
+        after: str | None = None,
     ) -> Job | None:
+        """Close a job out, optionally recording what the document became.
+
+        `after` is the other half of the review flow's diff. It is taken here,
+        at the last moment the two are known to line up: the runner pushes,
+        asks the container to pull, and only then reports done -- so by the
+        time this is called the markdown on this machine is the markdown the
+        turn produced. Reading it when the browser asks instead would show a
+        diff against whatever had been written since.
+        """
         with self._condition:
             job = self._jobs.get(job_id)
             if job is None:
                 return None
+            if after is not None:
+                job.after = after
             job.state = DONE if ok else FAILED
             job.detail = detail
             job.revision = revision

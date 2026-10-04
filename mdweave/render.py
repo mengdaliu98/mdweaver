@@ -240,7 +240,13 @@ def _note_context(ann: Annotation) -> dict:
         "status": ann.status,
         "tags": ann.tags,
         "offset": ann.offset.to_dict() if ann.offset else None,
-        "quote": ann.target.quote,
+        # "" for a document-level comment, which anchors to nothing. The
+        # template uses this for the pin's tooltip and the screen-reader
+        # label, both of which have to read sensibly when it is empty.
+        "quote": ann.quote,
+        "anchored": ann.anchored,
+        "semantic_type": ann.semantic_type or "",
+        "send_to_claude": ann.send_to_claude,
         "author": ann.thread[0].author if ann.thread else "",
         "initial": (ann.thread[0].author[:1].upper() if ann.thread else "•"),
         "thread": [
@@ -285,14 +291,14 @@ def write_assets(outdir: Path, scheme) -> None:
 
     The active scheme is generated onto the end of the stylesheet rather than
     linked as a second file: last wins, so the static themes keep every rule
-    about structure and own none of the colour, and switching schemes rewrites
+    about structure and own none of the color, and switching schemes rewrites
     one file instead of every page.
 
     `scheme` is required, and used to be optional with the shipped palette as
     its default. That made forgetting it silent: `mdweave build` did, so every
-    boot wrote the default colours over the reader's scheme and the page stayed
+    boot wrote the default colors over the reader's scheme and the page stayed
     that way until the server happened to rebuild for some other reason. Two
-    tabs on one URL came out different colours. Pass `scheme.load(inputs).
+    tabs on one URL came out different colors. Pass `scheme.load(inputs).
     current()` -- there is no sensible default, because the answer lives beside
     the documents and this function is not given them.
     """
@@ -303,7 +309,9 @@ def write_assets(outdir: Path, scheme) -> None:
 
     css = "\n".join(
         (THEME / name).read_text(encoding="utf-8")
-        for name in ("base.css", "sidebar.css", "annotations.css", "editor.css")
+        for name in (
+            "base.css", "sidebar.css", "annotations.css", "editor.css", "review.css"
+        )
     )
     css += "\n\n" + schemes.css(scheme)
     (assets / "mdweave.css").write_text(css, encoding="utf-8")

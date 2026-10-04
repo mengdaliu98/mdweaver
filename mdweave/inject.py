@@ -40,6 +40,16 @@ def inject(soup: BeautifulSoup, annotations: list[Annotation]) -> list[Placement
     claimed: dict[int, list[tuple[int, int]]] = {}
 
     for ann in annotations:
+        # A document-level comment is about the piece, not about a sentence in
+        # it, so there is nothing to wrap. It still *resolves* -- it has a card
+        # and that card must render -- it simply places no `<mark>`. Reporting
+        # it as unresolved instead would file every one of them as a lost
+        # anchor, and `build --strict` would start failing on comments that are
+        # exactly where they are supposed to be.
+        if ann.target is None:
+            placements.append(Placement(ann, True))
+            continue
+
         span = index.find(ann.target)
         if span is None:
             placements.append(

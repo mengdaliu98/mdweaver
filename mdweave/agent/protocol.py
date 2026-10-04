@@ -150,6 +150,19 @@ class Job:
     `session` is filled in by the runner, not the browser: which conversation
     owns a document is recorded beside the document on the devserver, and the
     container has no business knowing it.
+
+    `comments` is the review flow's payload: one entry per comment the reader
+    ticked, already resolved into the quote, the body, the semantic type and
+    that type's instruction. Resolved *here*, when the button is pressed,
+    rather than looked up by the runner from its own checkout -- the runner
+    does not pull before a turn, so its `.ann.json` can be minutes behind the
+    one the reader is looking at, and a review of comments that have since
+    been edited is worse than no review at all.
+
+    `before` and `after` are the document's markdown either side of the turn.
+    They exist so the browser can draw a diff once the job is done, which it
+    cannot reconstruct afterwards: the file on disk has already moved, and git
+    is on the other machine until the push lands.
     """
 
     id: str
@@ -164,13 +177,21 @@ class Job:
     detail: str = ""
     revision: str = ""
     events: list[Event] = field(default_factory=list)
+    comments: list[dict] = field(default_factory=list)
+    before: str = ""
+    after: str = ""
 
     @property
     def finished(self) -> bool:
         return self.state in TERMINAL
 
     def summary(self) -> dict:
-        """What the browser is told about a job, without the event log."""
+        """What the browser is told about a job, without the event log.
+
+        `comments` is a count here for the same reason `events` is, and
+        `before`/`after` are left out entirely: a summary is polled, and two
+        whole documents in it would be two whole documents on every poll.
+        """
         return {
             "id": self.id,
             "document": self.document,
@@ -181,6 +202,7 @@ class Job:
             "detail": self.detail,
             "revision": self.revision,
             "events": len(self.events),
+            "comments": len(self.comments),
         }
 
     def to_dict(self) -> dict:
@@ -191,6 +213,9 @@ class Job:
                 "claimed_at": self.claimed_at,
                 "lease_until": self.lease_until,
                 "events": [e.to_dict() for e in self.events],
+                "comments": list(self.comments),
+                "before": self.before,
+                "after": self.after,
             }
         )
         return payload
@@ -199,6 +224,12 @@ class Job:
     def from_dict(cls, data: dict) -> "Job":
         raw = data.get("events") or []
         events = [Event.from_dict(e) for e in raw] if isinstance(raw, list) else []
+        # A job written by an older process has no `comments` at all, and one
+        # whose count survived a `summary()` round trip has an integer there.
+        # Neither is a list of comments, and both must read back as "none"
+        # rather than taking the whole store down on load.
+        stored = data.get("comments")
+        comments = [c for c in stored if isinstance(c, dict)] if isinstance(stored, list) else []
         return cls(
             id=str(data.get("id") or new_id()),
             document=str(data.get("document", "")),
@@ -212,15 +243,25 @@ class Job:
             detail=str(data.get("detail", "")),
             revision=str(data.get("revision", "")),
             events=events,
+            comments=comments,
+            before=str(data.get("before", "")),
+            after=str(data.get("after", "")),
         )
 
 
 def dispatch(job: Job) -> dict:
-    """What a runner is handed when it claims a job."""
+    """What a runner is handed when it claims a job.
+
+    The comments go over the wire rather than being re-read on the devserver,
+    because they are the instruction: a review job with an empty list is a
+    turn that will read the document and guess. `before`/`after` do not --
+    they are for the browser's diff, and the runner has the file itself.
+    """
     return {
         "id": job.id,
         "document": job.document,
         "action": job.action,
         "instruction": job.instruction,
+        "comments": job.comments,
         "lease": LEASE_SECONDS,
     }

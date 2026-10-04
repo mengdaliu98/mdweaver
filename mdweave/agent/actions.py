@@ -31,10 +31,6 @@ class Action:
     #  nothing to type; "ask Claude to..." is all typing.
     needs_instruction: bool = True
     placeholder: str = ""
-    #  `oneshot` runs `claude -p --resume` and exits. `warm` keeps a
-    #  `claude --bg` agent resident for the document, which is the one you can
-    #  `claude attach` into from a terminal.
-    mode: str = "oneshot"
 
     def render(self, document: str, instruction: str) -> str:
         """Fill the template. Missing braces are the author's, not a crash."""
@@ -49,49 +45,115 @@ class Action:
             "label": self.label,
             "needs_instruction": self.needs_instruction,
             "placeholder": self.placeholder,
-            "mode": self.mode,
         }
 
 
-# The prompts say where the document is and that the answer is an edit, not a
+# The one action that ships. `revise`, `probe` and `tighten` used to sit here
+# -- three ways of typing a sentence at a document -- and the comment review
+# replaces all of them: the comments *are* the instruction, written in place
+# over days, with a semantic type on each saying how that kind of remark is
+# meant to be answered. A free-text box beside that is a worse way of saying
+# the same thing, and nothing was ever asked of it that a comment could not
+# carry better.
+#
+# The name is reserved: `daemon.py` recognises it and builds the prompt itself,
+# because the comment list is not something a `{}` placeholder can hold. What
+# stays templated is the framing below, so a knowledge base can reword how it
+# talks to Claude without reimplementing any of the machinery.
+REVIEW = "review"
+
+# The prompt says where the document is and that the answer is an edit, not a
 # reply: a session driven from a button has nobody reading its stdout, so prose
-# it prints instead of writing is prose that is lost.
-_PREAMBLE = (
+# it prints instead of writing is prose that is lost. It also has to be
+# self-contained, because every press gets a session that has never seen this
+# document before.
+#
+# `{document}` is a *location*, not an id -- the caller fills it with the path
+# the model should actually open, which for a linked document is the original
+# rather than the symlink standing in for it under `markdown_inputs/`.
+_REVIEW_PROMPT = (
     "You are co-writing a knowledge base with me. The document is "
-    "`markdown_inputs/{document}.md`, relative to the knowledge base checkout "
-    "you are running in.\n\n"
+    "`{document}`.\n\n"
+    "This is a document-iteration request. I have read the document and left "
+    "comments on it, and I want each one addressed in the document itself. "
+    "Work through every comment listed below: some ask for a change, some ask "
+    "a question that the prose should answer, and each one carries a note "
+    "saying what kind of remark it is and how that kind should be handled.\n\n"
+    "Edit the file directly. Keep my voice and formatting conventions, change "
+    "nothing the comments did not ask about, and do not write a summary of "
+    "your changes into the document. When you are done, reply with one "
+    "sentence per comment saying what you did about it.\n\n"
+    "{instruction}"
 )
 
 DEFAULTS = [
     Action(
-        name="revise",
-        label="Ask Claude",
-        placeholder="What should change?",
-        prompt=_PREAMBLE
-        + "Do this to it:\n\n{instruction}\n\n"
-        "Edit the file directly. Keep my voice and formatting conventions. "
-        "Do not add a summary of your changes to the document itself. When you "
-        "are done, reply with one sentence saying what you changed.",
-    ),
-    Action(
-        name="probe",
-        label="Probe the session",
-        placeholder="What do you want to know?",
-        prompt=_PREAMBLE
-        + "Answer this about the document, from what you already know of it "
-        "and this conversation:\n\n{instruction}\n\n"
-        "Do not edit the file. Reply in a few sentences.",
-    ),
-    Action(
-        name="tighten",
-        label="Tighten the prose",
+        name=REVIEW,
+        label="Address my comments",
         needs_instruction=False,
-        prompt=_PREAMBLE
-        + "Tighten the prose. Cut hedging and repetition, keep every claim and "
-        "all the structure, and change nothing about what the document says. "
-        "Edit the file directly, then reply with one sentence on what you cut.",
+        placeholder="Anything to add?",
+        prompt=_REVIEW_PROMPT,
     ),
 ]
+
+
+def describe_comments(comments: list[dict]) -> str:
+    """The selected comments, as the block of prompt that carries them.
+
+    Each one is given its quote, its body, its semantic type and *that type's
+    instruction*, which is the whole point of the feature: "I don't follow
+    this" is a complaint, and "questions are answered in a footnote rather
+    than by rewriting the sentence" is a method, and only the pair of them is
+    something a model can act on.
+
+    Numbered and spelled out field by field rather than run together as prose,
+    so that with six comments in flight there is no ambiguity about which
+    instruction belongs to which remark -- which is exactly the mistake a wall
+    of text invites, and the one that would quietly ruin a review.
+    """
+    if not comments:
+        return ""
+
+    blocks = [f"Here are the {len(comments)} comments to address."]
+    for at, comment in enumerate(comments, start=1):
+        quote = str(comment.get("quote") or "").strip()
+        where = (
+            f"It is attached to this text: “{quote}”"
+            if quote
+            else "It is about the document as a whole, not about any one passage."
+        )
+        kind = str(comment.get("semantic_type") or "").strip()
+        instruction = str(comment.get("instruction") or "").strip()
+
+        lines = [
+            f"--- Comment {at} of {len(comments)} ---",
+            where,
+            f"What I wrote: {str(comment.get('body') or '').strip()}",
+        ]
+        if kind:
+            lines.append(f"Kind of remark: {kind}")
+            # A type with no instruction still earns its line. It groups this
+            # remark with the others of its kind, which is information even
+            # when nobody has written down what to do about them.
+            lines.append(
+                f"How I want a {kind!r} handled: {instruction}"
+                if instruction
+                else f"I have not written down how a {kind!r} should be handled; use your judgement."
+            )
+        else:
+            lines.append("No kind was set on this one; use your judgement.")
+        blocks.append("\n".join(lines))
+
+    return "\n\n".join(blocks)
+
+
+def review_prompt(
+    action: Action, location: str, instruction: str, comments: list[dict]
+) -> str:
+    """The whole prompt for one review turn: the framing, then the comments."""
+    framing = action.render(location, instruction.strip()).strip()
+    listing = describe_comments(comments)
+    return f"{framing}\n\n{listing}".strip() if listing else framing
 
 
 def load(inputs: Path) -> list[Action]:
@@ -123,7 +185,6 @@ def load(inputs: Path) -> list[Action]:
                 prompt=prompt,
                 needs_instruction=bool(entry.get("needs_instruction", True)),
                 placeholder=str(entry.get("placeholder") or ""),
-                mode=str(entry.get("mode") or "oneshot"),
             )
         )
     return actions or list(DEFAULTS)
@@ -147,7 +208,6 @@ def write_default(inputs: Path) -> Path:
                 "label": a.label,
                 "needs_instruction": a.needs_instruction,
                 "placeholder": a.placeholder,
-                "mode": a.mode,
                 "prompt": a.prompt,
             }
             for a in DEFAULTS

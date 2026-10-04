@@ -25,10 +25,15 @@
                 </button>
                 <button class="tree__action" type="button" data-action="import"
                         title="Import a .md file" aria-label="Import a markdown file {{ where }} {{ label }}">
-                  {# Arrow up out of a tray: the file goes in, so it is an
-                     upload. Down into a tray reads as a download, which is
-                     the opposite of what this button does. #}
-                  <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M7 8.5V2.1M4.4 4.7 7 2.1l2.6 2.6M2.4 9.4v1.6h9.2V9.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  {# Arrow down into a tray: a file from somewhere else drops
+                     into this folder. It used to point up, on the reasoning
+                     that the browser uploads the file -- but nobody reading
+                     the panel is thinking about the request, they are
+                     thinking about the document arriving here, and an up
+                     arrow beside a folder reads as taking something out of
+                     it. The tray, the stroke weight and the 14x14 box are
+                     unchanged, so it still matches its four neighbours. #}
+                  <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M7 2.1V8.5M4.4 5.9 7 8.5l2.6-2.6M2.4 9.4v1.6h9.2V9.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
                 </button>
 {% endif %}
 {% if what != "root" %}

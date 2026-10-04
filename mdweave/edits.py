@@ -418,6 +418,22 @@ def _unemphasise(block_md: str, first: int, last: int) -> str:
     return _restore_code(masked, saved)
 
 
+def _split_trailing_blanks(block: list[str]) -> tuple[str, list[str]]:
+    """A block's source, and the blank lines its range hands back with it.
+
+    markdown-it gives a list the blank line that terminates it, so a block's
+    data-src range is sometimes a line longer than the block. Editing wants
+    the source without it -- a trailing blank is not part of the text and
+    would only confuse the offset alignment -- but a splice back over the
+    *whole* range has to put it back, or the next block loses the separation
+    that made it a block at all and gets absorbed into the one just edited.
+    """
+    kept = len(block)
+    while kept and not block[kept - 1]:
+        kept -= 1
+    return "\n".join(block[:kept]), block[kept:]
+
+
 def apply_formats(markdown: str, spans: list[Span], style: str) -> str:
     """Restyle every span, bottom block first so line numbers stay valid."""
     lines = markdown.splitlines()
@@ -426,12 +442,12 @@ def apply_formats(markdown: str, spans: list[Span], style: str) -> str:
     for span in sorted(spans, key=lambda s: s.line, reverse=True):
         if not 0 <= span.line < len(lines) or span.end <= span.line:
             continue
-        block = "\n".join(lines[span.line : span.end]).rstrip("\n")
+        block, blanks = _split_trailing_blanks(lines[span.line : span.end])
         styled = format_block(
             block, span.start, span.stop, style,
             rendered=visible.get((span.line, span.end)),
         )
-        lines[span.line : span.end] = styled.splitlines()
+        lines[span.line : span.end] = styled.splitlines() + blanks
 
     return normalise("\n".join(lines))
 
@@ -447,11 +463,15 @@ def apply_cuts(markdown: str, cuts: list[Cut]) -> str:
     for cut in sorted(cuts, key=lambda c: c.line, reverse=True):
         if not 0 <= cut.line < len(lines) or cut.end <= cut.line:
             continue
-        block = "\n".join(lines[cut.line : cut.end]).rstrip("\n")
+        block, blanks = _split_trailing_blanks(lines[cut.line : cut.end])
         kept = cut_block(
             block, cut.start, cut.stop, rendered=visible.get((cut.line, cut.end))
         )
-        lines[cut.line : cut.end] = kept.splitlines() if kept.strip() else []
+        # Nothing left means the block itself is gone, and so is any need to
+        # keep it apart from the next one -- the separator goes with it.
+        lines[cut.line : cut.end] = (
+            kept.splitlines() + blanks if kept.strip() else []
+        )
 
     return normalise("\n".join(lines))
 

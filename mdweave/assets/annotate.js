@@ -25,13 +25,14 @@
   var doc = mdw.doc;
   var layer = mdw.layer;
   var PENDING = "__pending__";
-  // Slots, not hues: "the third colour", whatever the active scheme paints
+  // Slots, not hues: "the third color", whatever the active scheme paints
   // it. Keep in step with scheme.SLOT_CLASSES; a drift offers a swatch the
   // server will refuse.
   var COLORS = ["c1", "c2", "c3", "c4", "c5", "c6"];
   var DEFAULT_COLOR = "c5";
   var DOC_ID = document.body.dataset.document || "";
   var API = "/api/annotations";
+  var SEMANTICS_API = "/api/semantics";
   var CONTEXT = 48; // keep in step with anchors.CONTEXT_CHARS
   var SKIP_TAGS = { SCRIPT: 1, STYLE: 1 };
 
@@ -186,9 +187,9 @@
 
   /* --- small UI pieces --------------------------------------------------- */
 
-  /* Two rows, the palette on each. Picking a colour *is* the action, so a
-   * highlight is one click rather than "highlight, then recolour" -- and the
-   * colour you are choosing is shown in the colour it will be. */
+  /* Two rows, the palette on each. Picking a color *is* the action, so a
+   * highlight is one click rather than "highlight, then recolor" -- and the
+   * color you are choosing is shown in the color it will be. */
   var COMMENT_ICON =
     '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">' +
     '<path fill="currentColor" d="M8 1.5c-3.6 0-6.5 2.4-6.5 5.4 0 1.7.9 3.2 2.4 4.2l-.6 2.6a.4.4 0 0 0 .6.4l2.9-1.6c.4.05.8.08 1.2.08 3.6 0 6.5-2.4 6.5-5.4S11.6 1.5 8 1.5Z"/></svg>';
@@ -196,8 +197,8 @@
     '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">' +
     '<path fill="currentColor" d="M10.6 1.9 14.1 5.4 7.4 12.1H3.9V8.6zM2.4 13.4h11.2v1.4H2.4z"/></svg>';
 
-  /* The eraser. Highlights used to be removed by pressing the colour they
-   * already were, which meant a colour press had to first work out what was
+  /* The eraser. Highlights used to be removed by pressing the color they
+   * already were, which meant a color press had to first work out what was
    * underneath -- and a press that looked like "make this blue" sometimes
    * meant "make this nothing". A press now always paints, whatever is there,
    * and taking a highlight off has its own button. */
@@ -218,7 +219,7 @@
         ' aria-label="' + label + " in " + paletteName(color) + '"></button>'
       );
     }).join("");
-    // Only on the highlight row: a comment's colour is chosen when it is
+    // Only on the highlight row: a comment's color is chosen when it is
     // written, and there is nothing to erase before it exists.
     var eraser =
       kind === "highlight"
@@ -294,17 +295,17 @@
     toolbar.style.left = Math.max(4, left) + "px";
   }
 
-  /* --- colour ------------------------------------------------------------ */
+  /* --- color ------------------------------------------------------------ */
 
-  /* "custom" is the class a raw CSS colour renders as. It has to come off with
+  /* "custom" is the class a raw CSS color renders as. It has to come off with
    * the rest when a token is picked: its rule sits further down the stylesheet
    * at the same specificity, so leaving it on would quietly beat the choice. */
   var PALETTE = COLORS.concat(["custom"]);
 
   /* A slot has no name to speak, so the label is its position. Screen reader
-   * users get "Colour 3" rather than a hue that the next scheme contradicts. */
+   * users get "Color 3" rather than a hue that the next scheme contradicts. */
   function paletteName(color) {
-    return "Colour " + color.slice(1);
+    return "Color " + color.slice(1);
   }
 
   function wearColor(element, prefix, color) {
@@ -322,9 +323,9 @@
     return null;
   }
 
-  /* Recolour a highlight and its card in place. All four values -- fill,
+  /* Recolor a highlight and its card in place. All four values -- fill,
    * underline, pin and card -- hang off the one class, so this is the whole
-   * visual change; the inline property a custom colour reads goes with it. */
+   * visual change; the inline property a custom color reads goes with it. */
   function recolor(annId, card, color) {
     mdw.marksFor(annId).forEach(function (mark) {
       wearColor(mark, "hl--", color);
@@ -338,7 +339,7 @@
 
   var ARROWS = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 };
 
-  /* Swatches as a radio group, not a row of toggles: the colours are mutually
+  /* Swatches as a radio group, not a row of toggles: the colors are mutually
    * exclusive. That buys the arrow keys and one tab stop for the whole group
    * instead of one each, which matters in a note card that already has two
    * buttons after it. */
@@ -346,7 +347,7 @@
     var row = document.createElement("div");
     row.className = "swatches";
     row.setAttribute("role", "radiogroup");
-    row.setAttribute("aria-label", "Highlight colour");
+    row.setAttribute("aria-label", "Highlight color");
 
     var swatches = COLORS.map(function (color) {
       var swatch = document.createElement("button");
@@ -364,14 +365,14 @@
       swatches.forEach(function (swatch) {
         var on = swatch.dataset.color === color;
         swatch.setAttribute("aria-checked", on ? "true" : "false");
-        // Roving tabindex: only the current colour is a tab stop.
+        // Roving tabindex: only the current color is a tab stop.
         swatch.tabIndex = on ? 0 : -1;
         if (on && focus) swatch.focus();
       });
     }
 
     select(current, false);
-    // An annotation carrying a raw CSS colour matches no swatch, which would
+    // An annotation carrying a raw CSS color matches no swatch, which would
     // leave the group with no tab stop at all and no way to reach it.
     if (COLORS.indexOf(current) === -1) swatches[0].tabIndex = 0;
 
@@ -397,7 +398,269 @@
     return row;
   }
 
+  /* --- semantic types ------------------------------------------------------
+   *
+   * A comment says what is wrong with a passage. Its *semantic type* says what
+   * kind of remark it is -- "question", "needs a citation", "too long" -- and
+   * every type carries the instruction Claude is given for putting that kind of
+   * thing right. The pair is what makes a comment worth handing to a model: "I
+   * don't follow this" plus "answer in a footnote rather than by rewriting the
+   * sentence" is an instruction, where either half on its own is not.
+   *
+   * The vocabulary is the reader's own and lives beside the prose, so it is
+   * fetched rather than written down here; mdweave/semantics.py is the file it
+   * comes from and the settings window is where most of it is edited. Nothing
+   * about a comment requires a type, which is why every failure in here is
+   * silent: no types, an unreadable dotfile and a server too old to know the
+   * route all have to leave a perfectly usable composer behind them.
+   */
+
+  var semantics = { types: [], defaults: {} };
+  var vocabulary = null;
+
+  /* Asked for once and shared, the way ui.api() shares the health probe. Every
+   * card wants the vocabulary -- to put the right instruction behind its tag --
+   * and so does every composer, and a refresh brings the whole lot back at
+   * once; one lookup per page, not one per card. Pass `true` to ask again,
+   * which is what the settings window does after it saves. */
+  function loadSemantics(again) {
+    if (vocabulary && !again) return vocabulary;
+    vocabulary = fetch(SEMANTICS_API, { headers: { Accept: "application/json" } })
+      .then(function (response) {
+        return response.ok ? response.json() : null;
+      })
+      .then(function (data) {
+        if (data) semantics = { types: data.types || [], defaults: data.defaults || {} };
+      })
+      .catch(function () {
+        // Left as it was: an empty vocabulary, which the composer can show.
+      });
+    return vocabulary;
+  }
+
+  /** The type recorded under `name`, or null if there is no such type.
+   *
+   * A name is the identity of a type here -- it keys the per-color defaults and
+   * it is what a comment stores -- and the Python matches names without regard
+   * to case, so this has to as well, or a sidecar saying "Question" would show
+   * no tag against a vocabulary that spells it "question". */
+  function semanticNamed(name) {
+    if (!name) return null;
+    var wanted = String(name).toLowerCase();
+    for (var i = 0; i < semantics.types.length; i++) {
+      if (String(semantics.types[i].name).toLowerCase() === wanted) {
+        return semantics.types[i];
+      }
+    }
+    return null;
+  }
+
+  /* The type a color reaches for, if the reader gave it one.
+   *
+   * `defaults` is keyed by the slot *number* as a string, because a JSON object
+   * key can be nothing else, so the class name "c3" has to lose its letter
+   * before the lookup. An entry naming a type that has since been deleted is
+   * treated as no entry at all. */
+  function defaultSemanticFor(color) {
+    var kind = semanticNamed(semantics.defaults[String(color).slice(1)]);
+    return kind ? kind.name : null;
+  }
+
+  /* The one shape a type is ever shown in, in the composer and on a card
+   * alike: a rounded box holding the type's name, with the Claude instruction
+   * as its tooltip. Putting the instruction within reach of the pointer is
+   * what keeps the tag from being a bare word -- the rule a remark is being
+   * filed under can be read without opening the settings window. */
+  function dressTag(tag, name) {
+    var kind = semanticNamed(name);
+    tag.className = "semantic-tag";
+    tag.textContent = (kind && kind.name) || name;
+    if (kind && kind.instruction) tag.title = kind.instruction;
+    return tag;
+  }
+
+  function semanticLabel(name) {
+    var tag = dressTag(document.createElement("span"), name);
+    tag.className += " semantic-tag--static";
+    return tag;
+  }
+
+  /* The vocabulary is a document, not a table of rows: /api/semantics is given
+   * the complete set every time and writes it over the dotfile, exactly as
+   * /api/schemes is. A type added from the composer is therefore the list as it
+   * stands plus one, posted entire -- and the answer, not the request, is what
+   * becomes the new vocabulary, since the server trims whitespace and clamps
+   * a long name, so what was sent is not quite what was stored. */
+  function saveSemantics(types, defaults) {
+    return fetch(SEMANTICS_API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        types: types,
+        defaults: defaults || semantics.defaults,
+      }),
+    }).then(function (response) {
+      if (!response.ok) return reject(response);
+      return response.json().then(function (data) {
+        semantics = { types: data.types || [], defaults: data.defaults || {} };
+        return semantics;
+      });
+    });
+  }
+
+  /* The row of types in the composer.
+   *
+   * Every type the reader has, as a tag, at most one of them lit. Pressing a
+   * lit tag puts it out, because a comment need not be of any kind and the only
+   * way back from a mistaken tap would otherwise be to cancel and start the
+   * comment again. `+` reveals the two fields that make a new one: a name, and
+   * the instruction -- optional, since an unexplained type still groups remarks
+   * usefully and still tells Claude that these three are the same sort of
+   * thing. */
+  function semanticPicker(initial, onPick) {
+    var chosen = initial || null;
+
+    var row = document.createElement("div");
+    row.className = "composer__semantics";
+
+    var tags = document.createElement("div");
+    tags.className = "semantic-tags";
+    tags.setAttribute("role", "group");
+    tags.setAttribute("aria-label", "Kind of remark");
+    // Named in the open rather than left to the tooltip on `+`: with no types
+    // yet defined this row is a single plus sign, and a lone plus sign beside a
+    // comment box says nothing at all about what it would add.
+    tags.appendChild(el("span", "composer__semantics-label", "Kind"));
+    row.appendChild(tags);
+
+    var form = document.createElement("div");
+    form.className = "semantic-new";
+    form.hidden = true;
+    row.appendChild(form);
+
+    var name = field("Name, e.g. question", "Name of the new kind");
+    var instruction = field(
+      "What Claude should do (optional)",
+      "Claude instruction for the new kind"
+    );
+    form.appendChild(name);
+    form.appendChild(instruction);
+
+    var plus = document.createElement("button");
+    plus.type = "button";
+    plus.className = "semantic-tag semantic-tag--add";
+    plus.textContent = "+";
+    plus.title = "Add a kind of remark";
+    plus.setAttribute("aria-label", "Add a kind of remark");
+    plus.setAttribute("aria-expanded", "false");
+
+    /* One text input. A textarea would be the obvious home for an instruction
+     * of a couple of sentences, but `.composer textarea` is how the comment box
+     * itself is reached, and a composer with two of them is a composer whose
+     * text box is ambiguous. The instruction is editable at full height in the
+     * settings window, which is where a long one belongs anyway. */
+    function field(placeholder, label) {
+      var input = document.createElement("input");
+      input.type = "text";
+      input.className = "semantic-new__field";
+      input.placeholder = placeholder;
+      input.setAttribute("aria-label", label);
+      input.addEventListener("keydown", function (event) {
+        // Swallowed, both of them: Enter here means "add this type", not
+        // "save the comment", and Escape means "never mind the type", not
+        // "throw away everything I have written".
+        if (event.key === "Enter") {
+          event.preventDefault();
+          event.stopPropagation();
+          create();
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          reveal(false);
+        }
+      });
+      return input;
+    }
+
+    function reveal(open) {
+      form.hidden = !open;
+      plus.setAttribute("aria-expanded", open ? "true" : "false");
+      if (open) name.focus();
+      // The panel just grew or shrank, and it is positioned against the
+      // highlight rather than by the flow, so nothing would move it otherwise.
+      mdw.layout();
+    }
+
+    function create() {
+      var wanted = name.value.trim();
+      if (!wanted) {
+        name.focus();
+        return;
+      }
+      var next = semantics.types.slice();
+      next.push({ name: wanted, instruction: instruction.value.trim() });
+
+      plus.disabled = true;
+      saveSemantics(next)
+        .then(function () {
+          name.value = "";
+          instruction.value = "";
+          // Adding a kind in the middle of writing a comment is how you say
+          // this comment is one of those, so it is attached straight away.
+          chosen = wanted;
+          onPick(chosen);
+          reveal(false);
+          paint();
+        })
+        .catch(function (error) {
+          // A duplicate or empty name comes back as a 400 with a sentence in
+          // it. The fields keep what was typed, so the fix is one edit away.
+          toast(error.message, "error");
+        })
+        .then(function () {
+          plus.disabled = false;
+        });
+    }
+
+    plus.addEventListener("click", function (event) {
+      event.stopPropagation(); // inside a card, a stray click closes the note
+      reveal(form.hidden);
+    });
+
+    function paint() {
+      while (tags.childNodes.length > 1) tags.removeChild(tags.lastChild);
+
+      semantics.types.forEach(function (kind) {
+        var tag = dressTag(document.createElement("button"), kind.name);
+        tag.type = "button";
+        var on =
+          chosen !== null && String(kind.name).toLowerCase() === String(chosen).toLowerCase();
+        tag.setAttribute("aria-pressed", on ? "true" : "false");
+        tag.addEventListener("click", function (event) {
+          event.stopPropagation();
+          chosen = on ? null : kind.name;
+          onPick(chosen);
+          paint();
+        });
+        tags.appendChild(tag);
+      });
+
+      tags.appendChild(plus);
+      mdw.layout();
+    }
+
+    paint();
+    return row;
+  }
+
   /* --- composer ---------------------------------------------------------- */
+
+  function el(tag, className, text) {
+    var node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  }
 
   /* Drop the panel but leave the document alone. */
   function removeComposer() {
@@ -423,8 +686,8 @@
 
     composer = document.createElement("div");
     // The composer stands in for the card the annotation is about to get, so
-    // it wears the same colour class and reads the same four variables.
-    // The colour was already chosen by the swatch that opened this.
+    // it wears the same color class and reads the same four variables.
+    // The color was already chosen by the swatch that opened this.
     composer.className = "composer note--" + (chosen || DEFAULT_COLOR);
     composer.dataset.ann = PENDING;
     composer.innerHTML =
@@ -434,10 +697,31 @@
       '<button type="button" class="composer__button composer__button--ghost" data-act="cancel">Cancel</button>' +
       '<button type="button" class="composer__button" data-act="save">Comment</button>' +
       "</div>";
-    composer.querySelector(".composer__quote").textContent = selector.quote;
+
+    // A comment about the document as a whole has no quote to show. The empty
+    // blockquote that left behind is a bordered gap, which reads as a passage
+    // that failed to load rather than as one that was never there.
+    var quoted = composer.querySelector(".composer__quote");
+    if (selector.quote) quoted.textContent = selector.quote;
+    else quoted.parentNode.removeChild(quoted);
 
     var actions = composer.querySelector(".composer__actions");
     var color = chosen || DEFAULT_COLOR;
+
+    /* The kind of remark, taken once from the color this composer opened in.
+     *
+     * A later color press deliberately leaves it alone. The per-color default
+     * is a *starting* suggestion -- "the color I use for questions" -- and not
+     * a property the color keeps imposing: once a type is on the card, whether
+     * it arrived by default or by a press, it is the reader's. Re-deriving it
+     * on every swatch would quietly overwrite a deliberate choice, and quietly
+     * is the whole problem, since the eye is on the swatches at that moment and
+     * the tag that changed is two rows above them. Worse, the overwrite has no
+     * inverse: a color with no default would have to mean either "clear the
+     * type" or "leave it", and both are wrong half the time.
+     */
+    var semanticType = defaultSemanticFor(color);
+
     actions.insertBefore(
       colorPicker(color, function (picked) {
         color = picked;
@@ -448,6 +732,32 @@
       actions.firstChild
     );
 
+    // Between what the comment says and the buttons that commit it, because it
+    // is part of writing the comment rather than part of filing it.
+    composer.insertBefore(
+      semanticPicker(semanticType, function (picked) {
+        semanticType = picked;
+      }),
+      actions
+    );
+
+    /* Below the buttons, and ticked.
+     *
+     * A comment written in a knowledge base with a Claude button on it is
+     * usually written *so that* something will be done about it, and the review
+     * screen makes you look at the whole list before anything runs -- so the
+     * cost of a wrong default here is one unticked box rather than a surprise
+     * edit. It sits under the actions because it is about what happens to the
+     * comment afterwards, which is a different question from what it says. */
+    var send = el("label", "composer__send");
+    var sendBox = document.createElement("input");
+    sendBox.type = "checkbox";
+    sendBox.className = "composer__send-box";
+    sendBox.checked = true;
+    send.appendChild(sendBox);
+    send.appendChild(el("span", null, "Send to Claude"));
+    composer.appendChild(send);
+
     layer.appendChild(composer);
     mdw.layout();
 
@@ -457,12 +767,12 @@
 
     composer.querySelector('[data-act="cancel"]').addEventListener("click", closeComposer);
     save.addEventListener("click", function () {
-      submit(selector, input, save, color);
+      submit(selector, input, save, color, semanticType, sendBox.checked);
     });
     input.addEventListener("keydown", function (event) {
       if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
         event.preventDefault();
-        submit(selector, input, save, color);
+        submit(selector, input, save, color, semanticType, sendBox.checked);
       } else if (event.key === "Escape") {
         event.preventDefault();
         closeComposer();
@@ -470,7 +780,7 @@
     });
   }
 
-  function submit(selector, input, saveButton, color) {
+  function submit(selector, input, saveButton, color, semanticType, sendToClaude) {
     var body = input.value.trim();
     if (!body) {
       input.focus();
@@ -491,6 +801,10 @@
         occurrence: selector.occurrence,
         color: color,
         body: body,
+        // Null rather than omitted: "this comment is of no particular kind" is
+        // an answer the composer can give, and the field has to carry it.
+        semantic_type: semanticType || null,
+        send_to_claude: sendToClaude !== false,
         author: localStorage.getItem("mdweave.author") || "me",
         at: new Date().toISOString(),
       }),
@@ -586,10 +900,6 @@
     pin.title = annotation.target.quote;
     pin.textContent = (entry.author || "?").charAt(0).toUpperCase();
 
-    var quote = document.createElement("blockquote");
-    quote.className = "note__quote";
-    quote.textContent = annotation.target.quote;
-
     var meta = document.createElement("div");
     meta.className = "note__meta";
     var author = document.createElement("span");
@@ -615,8 +925,12 @@
     var body = document.createElement("div");
     body.className = "note__body";
     body.id = "note-body-" + annotation.id;
-    body.appendChild(quote);
     body.appendChild(item);
+    // Under the remark, not over it: the prose is what was written, the tag is
+    // how it is to be read. The same order a server-rendered card gets below.
+    if (annotation.semantic_type) {
+      body.appendChild(semanticLabel(annotation.semantic_type));
+    }
     if (writable) body.appendChild(noteActions(note));
 
     note.appendChild(pin);
@@ -647,7 +961,7 @@
       });
   }
 
-  /* Persist a recolour. The note is already wearing the new colour by the time
+  /* Persist a recolor. The note is already wearing the new color by the time
    * this runs, so a failure is reported rather than silently reverted -- same
    * bargain as a dragged position. */
   function persistColor(annId, color) {
@@ -660,7 +974,7 @@
         if (!response.ok) return reject(response);
       })
       .catch(function (error) {
-        toast("Colour not saved: " + error.message, "error");
+        toast("Color not saved: " + error.message, "error");
       });
   }
 
@@ -715,14 +1029,75 @@
     return row;
   }
 
-  /* Give every note rendered into the page the same actions. */
-  function addNoteActions() {
+  /* Give every note rendered into the page its footer of actions. */
+  function addNoteFooters() {
     layer.querySelectorAll(".note").forEach(function (note) {
       var body = note.querySelector(".note__body");
       if (body && !body.querySelector(".note__footer")) {
         body.appendChild(noteActions(note));
       }
     });
+  }
+
+  /* Put each server-rendered card's semantic type on it.
+   *
+   * The sidecar knows which kind every comment is, but the card arrives from
+   * the template without it, so the kinds are asked for here and hung on the
+   * cards already in the page. It is one request, not one per card:
+   * /api/annotations hands over the whole document's list, which is the same
+   * list the page was built from.
+   *
+   * The tag goes above the footer rather than at the end, so the reading order
+   * of a card is always the same three things in the same three places -- what
+   * was said, what kind of remark it is, and what can be done about it --
+   * whether the card was rendered by the server or built by addNote.
+   *
+   * Any tag already there is redrawn rather than left alone. Renaming a kind
+   * or rewriting its instruction changes what the tag should say without
+   * changing a single annotation, so a tag that is merely present is not
+   * necessarily a tag that is still right. */
+  function addSemanticTags() {
+    if (!DOC_ID) return Promise.resolve();
+    return loadSemantics()
+      .then(function () {
+        return fetch(API + "?document=" + encodeURIComponent(DOC_ID), {
+          headers: { Accept: "application/json" },
+        });
+      })
+      .then(function (response) {
+        return response.ok ? response.json() : null;
+      })
+      .then(function (data) {
+        if (!data) return;
+        (data.annotations || []).forEach(function (annotation) {
+          var note = mdw.noteFor(annotation.id);
+          var body = note && note.querySelector(".note__body");
+          if (!body) return;
+
+          var worn = body.querySelector(".semantic-tag--static");
+          if (worn) worn.parentNode.removeChild(worn);
+          if (!annotation.semantic_type) return;
+
+          body.insertBefore(
+            semanticLabel(annotation.semantic_type),
+            body.querySelector(".note__footer")
+          );
+        });
+        mdw.layout();
+      })
+      .catch(function () {
+        // A card without its tag is still a card. Nothing here is worth a
+        // toast: the reader did not ask for this, the page did.
+      });
+  }
+
+  /* Everything this file hangs on a card it did not itself build. The two are
+   * one function because they are re-applied as one: saving an edit or
+   * refreshing swaps the whole notes layer, and a card that comes back with
+   * its footer but without its tag is half repaired. */
+  function addNoteActions() {
+    addNoteFooters();
+    addSemanticTags();
   }
 
   /* --- selection wiring -------------------------------------------------- */
@@ -816,7 +1191,7 @@
     }
 
     // Provisional highlight, so the target stays visible while typing -- and so
-    // the composer has something to position itself against. In the colour that
+    // the composer has something to position itself against. In the color that
     // was picked, since the pick already chose it.
     wrapSpan(index, span[0], span[1], "hl hl--" + color + " hl--pending", PENDING);
     selection.removeAllRanges();
@@ -856,7 +1231,7 @@
   }
 
   /* A highlight has nothing to type, so there is no composer step: the click
-   * that chose the colour is the whole interaction. */
+   * that chose the color is the whole interaction. */
   function saveHighlight(selector, color) {
     fetch(API, {
       method: "POST",
@@ -879,9 +1254,9 @@
         return response.json();
       })
       .then(function (result) {
-        // Three outcomes, because a colour pressed over a highlight means
+        // Three outcomes, because a color pressed over a highlight means
         // something different depending on what was already there: the same
-        // colour over exactly that span clears it, a different one repaints
+        // color over exactly that span clears it, a different one repaints
         // it, and anything else is simply new.
         (result.cleared || []).forEach(unwrapAnnotation);
         (result.replaced || []).forEach(unwrapAnnotation);
@@ -932,8 +1307,18 @@
       addNoteActions();
       mdw.setMoveHandler(persistMove);
       // Saving an edit or refreshing replaces the notes layer, which throws
-      // away every footer along with the cards that carried them.
+      // away every footer and every tag along with the cards that carried them.
       mdw.setRefreshHandler(addNoteActions);
     });
   }
+
+  /* The settings window is the other place the vocabulary is edited, and it
+   * does not reload the page the way a scheme change has to -- nothing on disk
+   * is re-rendered by renaming a kind of remark. So it says so here instead,
+   * and the composer stops offering a list that went stale two gestures ago. */
+  window.mdweaveSemantics = {
+    reload: function () {
+      return loadSemantics(true).then(addSemanticTags);
+    },
+  };
 })();

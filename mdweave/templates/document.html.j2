@@ -8,6 +8,94 @@
 {% for href in css_hrefs %}
 <link rel="stylesheet" href="{{ href }}">
 {% endfor %}
+{# The remembered sidebar state, put back before the body is parsed.
+
+   Every document is a separate static page, so clicking a row in the tree is
+   a full navigation. sidebar.js carries the panel's width, which folders are
+   shut and whether it is hidden at all across that navigation -- but it is
+   deferred, so it runs only once the parser is done, and the browser has
+   already painted what the server rendered: a 16rem panel with every folder
+   open. The panel then snapped to the remembered state, which read as a flash
+   on every single click.
+
+   Inline and synchronous on purpose. A `src` here would be a second request
+   to wait on, and `defer` is precisely what this exists to get in front of. #}
+<script>
+(function () {
+  "use strict";
+
+  /* Nothing in here may throw. It runs before the page's own scripts and
+     outside any handler, so an exception takes the rest of <head> with it --
+     and `localStorage` is not merely empty but absent in some privacy modes,
+     while its contents are whatever somebody last typed into devtools. */
+  function read(key) {
+    try {
+      return JSON.parse(localStorage.getItem(key));
+    } catch (err) {
+      return null;
+    }
+  }
+
+  /* The same three keys sidebar.js writes. Duplicated rather than imported:
+     this has to have run before anything is fetched. */
+  var width = read("mdweave.sidebar.width");
+  var hidden = read("mdweave.sidebar") === "hidden";
+  var closed = read("mdweave.folders.closed");
+  if (!closed || typeof closed.length !== "number") closed = [];
+
+  /* Clamped to the same bounds as sidebar.js's MIN_WIDTH and MAX_WIDTH. If
+     the two ever disagree, a width outside them is applied here and corrected
+     by the deferred pass -- which is the flash again, just a smaller one. */
+  if (typeof width === "number") {
+    document.documentElement.style.setProperty(
+      "--sidebar-w",
+      Math.max(150, Math.min(600, Math.round(width))) + "px"
+    );
+  }
+
+  /* The width is a property of the root element, which exists. The other two
+     are properties of <body> and of the folder rows, which do not yet. */
+  if (!hidden && !closed.length) return;
+  if (!window.MutationObserver) return;
+
+  function adopt(node) {
+    if (node.nodeType !== 1) return;
+    if (node === document.body) {
+      /* Only "hidden". Writing "shown" would be a no-op on a wide screen but
+         not on a narrow one, where the stylesheet treats a body with no
+         `data-sidebar` at all as "keep the overlay out of the way until the
+         scripts have run" -- which is the right answer on a phone and not
+         this script's call to overrule. */
+      if (hidden) node.dataset.sidebar = "hidden";
+    } else if (node.classList && node.classList.contains("tree__folder")) {
+      /* `data-path` is the key sidebar.js stores the folder under, and the
+         parser has already set it: an element arrives with its attributes. */
+      if (closed.indexOf(node.dataset.path || "") !== -1) node.open = false;
+    }
+  }
+
+  /* A MutationObserver's callback is a microtask, so it runs on each element
+     the moment the parser hands it over and still before the frame that
+     element would first have appeared in. `DOMContentLoaded` cannot promise
+     that, and neither can a script at the foot of the body. */
+  var watch = new MutationObserver(function (records) {
+    for (var i = 0; i < records.length; i++) {
+      var added = records[i].addedNodes;
+      for (var j = 0; j < added.length; j++) adopt(added[j]);
+    }
+  });
+  watch.observe(document.documentElement, { childList: true, subtree: true });
+
+  /* Hand over to sidebar.js, which by now has read the same keys and owns
+     every change from here. Left running, this would re-apply a list that
+     went stale the first time a folder was opened -- over the top of a tree
+     filetree.js had just replaced, which is a flash of its own. Deferred
+     scripts all run before this event. */
+  document.addEventListener("DOMContentLoaded", function () {
+    watch.disconnect();
+  });
+})();
+</script>
 </head>
 <body data-document="{{ doc_id }}" data-prefix="{{ prefix }}">
 <div class="shell">
@@ -27,12 +115,22 @@
   {# Page-level actions. Hidden until the server answers, like every other
      control that reaches back to it. #}
   <div class="page-actions">
+    {# Leftmost, because it is the only one of these that *writes* something
+       the reader just thought of; the other three act on what is already
+       here. It opens the same composer a selection does, with nothing
+       selected -- the comment is about the piece, not about a sentence in
+       it -- so notes.js owns it rather than annotate.js. #}
+    <button class="page-action" type="button" id="add-comment"
+            title="Comment on this document as a whole" hidden>
+      <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M3.4 2h7.2a1.4 1.4 0 0 1 1.4 1.4v4.4a1.4 1.4 0 0 1-1.4 1.4H7.2l-3 2.6V9.2H3.4a1.4 1.4 0 0 1-1.4-1.4V3.4a1.4 1.4 0 0 1 1.4-1.4Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
+      <span>Comment</span>
+    </button>
     <button class="page-action page-action--icon" type="button" id="refresh"
             title="Reload this document from disk" aria-label="Refresh" hidden>
       <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M11.95 8.75a5.25 5.25 0 1 1-1.24-5.46l2.71 2.54M13.42 2.33v3.5h-3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </button>
     <button class="page-action" type="button" id="agent"
-            title="Ask the Claude session that owns this document" hidden>
+            title="Ask Claude to do something to this document" hidden>
       <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M7 1.6l1.5 3.4 3.4 1.5-3.4 1.5L7 11.4 5.5 8 2.1 6.5 5.5 5z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
       <span>Claude</span>
     </button>
@@ -91,24 +189,46 @@
       <aside class="notes-layer" id="notes-layer" aria-label="Comments">
 {% for note in notes %}
         {# `status` is a data attribute, not a class: `note--open` is reserved
-           for the expanded/collapsed UI state that notes.js toggles. #}
+           for the expanded/collapsed UI state that notes.js toggles.
+
+           `data-level` is how notes.js tells the two kinds apart, and it has
+           to be said out loud rather than inferred from the absence of a
+           `<mark>`: a comment about the document as a whole has no highlight,
+           but neither does an anchored comment whose text has since been
+           edited away, and the two want opposite treatment -- the first is
+           placed in the corner grid, the second is hidden until its quote
+           comes back. #}
         <div class="note note--{{ note.color_token }}"
              id="note-{{ note.dom_id }}"
              data-ann="{{ note.id }}"
+             data-level="{{ 'text' if note.anchored else 'document' }}"
              data-status="{{ note.status }}"
 {% if note.offset %}
              data-dx="{{ note.offset.dx }}" data-dy="{{ note.offset.dy }}"
 {% endif %}
              {% if note.custom_color %}style="--note-custom: {{ note.custom_color }};"{% endif %}>
+          {# The quote lives on the pin and nowhere else. The card used to
+             repeat it as a blockquote above the thread, which said nothing a
+             sighted reader could not already see: the card points at the
+             highlight it belongs to, and the highlighted run is a few
+             centimetres to its left. Someone who cannot see that -- a screen
+             reader, or a mouse hovering a collapsed pin -- still needs to be
+             told, which is what these two do.
+
+             A document-level comment has no quote, so both of them would
+             otherwise read "Comment on ““" -- a tooltip saying nothing and a
+             screen reader announcing a pair of quotation marks. It is about
+             the whole piece, and that is what they say instead. #}
+{% set pin_title = note.quote if note.anchored else "Comment on this document" %}
+{% set pin_label = "Comment on “" ~ note.quote ~ "”" if note.anchored else "Comment on this document" %}
           <button class="note__pin" type="button"
                   aria-expanded="false"
                   aria-controls="note-body-{{ note.dom_id }}"
-                  title="{{ note.quote }}">
+                  title="{{ pin_title }}">
             <span class="note__initial" aria-hidden="true">{{ note.initial }}</span>
-            <span class="sr-only">Comment on “{{ note.quote }}”</span>
+            <span class="sr-only">{{ pin_label }}</span>
           </button>
           <div class="note__body" id="note-body-{{ note.dom_id }}" role="region">
-            <blockquote class="note__quote">{{ note.quote }}</blockquote>
 {% for entry in note.thread %}
             <div class="note__entry">
               <div class="note__meta">

@@ -16,7 +16,7 @@
 .selection-toolbar[hidden] { display: none; }
 
 /* Two rows -- comment and highlight -- each offering the whole palette. The
-   colour is the button: picking one is the whole action, so neither is two
+   color is the button: picking one is the whole action, so neither is two
    clicks. */
 .selection-toolbar {
   padding: 0.3rem;
@@ -81,9 +81,9 @@
   border-color: var(--surface);
 }
 
-/* The eraser sits with the colours but is not one of them: no fill, and a
-   little air before it so the row reads as "six colours, then remove".
-   Its ink is the toolbar's own text colour, not the page's -- the toolbar is
+/* The eraser sits with the colors but is not one of them: no fill, and a
+   little air before it so the row reads as "six colors, then remove".
+   Its ink is the toolbar's own text color, not the page's -- the toolbar is
    a dark chip, and --ink-muted on it is very nearly invisible. */
 .selection-toolbar__eraser {
   display: flex;
@@ -104,7 +104,7 @@
   transform: scale(1.1);
 }
 
-/* Filled with the colour it makes, so the row reads as a palette rather than
+/* Filled with the color it makes, so the row reads as a palette rather than
    as a row of identical buttons. */
 .selection-toolbar__swatch {
   width: 15px;
@@ -129,7 +129,7 @@
 }
 
 /* The provisional highlight shown while a comment is being typed. It carries
-   a colour token like any other highlight, so the swatch the writer picks
+   a color token like any other highlight, so the swatch the writer picks
    shows up in the text straight away. */
 mark.hl--pending {
   animation: mdweave-pulse 1.6s ease-in-out infinite;
@@ -214,9 +214,122 @@ mark.hl--pending {
 
 .composer__button--ghost:hover { opacity: 1; filter: none; }
 
-/* --- colour picker -------------------------------------------------------- */
+/* --- semantic types ------------------------------------------------------
+ *
+ * What kind of remark a comment is -- "question", "needs a citation" -- shown
+ * as a tag: a rounded box with the name in it. One look for all three places a
+ * type appears, so that a tag on a card and a tag in the composer are visibly
+ * the same thing and the second is obviously the control for the first.
+ *
+ * Painted from `--hl-edge`, like everything else inside a card, so a tag takes
+ * the color of the comment it belongs to and no scheme has to know about it.
+ */
 
-/* One swatch per colour, in the composer and in every note's card. Each one carries
+.composer__semantics {
+  margin-top: 0.5rem;
+}
+
+.semantic-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.28rem;
+}
+
+.composer__semantics-label {
+  margin-right: 0.1rem;
+  font-size: 0.7rem;
+  opacity: 0.65;
+}
+
+.semantic-tag {
+  max-width: 100%;
+  padding: 0.12rem 0.45rem;
+  border: 1px solid color-mix(in srgb, var(--hl-edge) 40%, transparent);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: 560 0.68rem/1.5 var(--font-body);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.semantic-tag:hover { background: color-mix(in srgb, var(--hl-edge) 12%, transparent); }
+
+/* Filled, not merely ringed. Among a row of identical outlines the chosen one
+   has to be the one that reads differently at a glance -- the same bargain the
+   swatches make, for the same reason. */
+.semantic-tag[aria-pressed="true"] {
+  background: var(--hl-edge);
+  border-color: var(--hl-edge);
+  color: white;
+}
+
+.semantic-tag:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.semantic-tag--add {
+  padding-inline: 0.42rem;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.semantic-tag--add:disabled { opacity: 0.5; cursor: default; }
+
+/* On a card the tag is a statement rather than a control, so it loses the
+   pointer and the hover but keeps the shape: the reader should recognise it as
+   the same tag they pressed while writing. */
+.semantic-tag--static {
+  display: inline-block;
+  margin-top: 0.5rem;
+  background: color-mix(in srgb, var(--hl-edge) 16%, transparent);
+  cursor: default;
+}
+
+.semantic-new {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-top: 0.35rem;
+}
+
+.semantic-new__field {
+  width: 100%;
+  padding: 0.3rem 0.45rem;
+  border: 1px solid color-mix(in srgb, var(--hl-edge) 40%, transparent);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  font: 400 0.76rem/1.4 var(--font-body);
+}
+
+.semantic-new__field:focus {
+  outline: 2px solid var(--hl-edge);
+  outline-offset: -1px;
+}
+
+/* Under the buttons, because it is about what happens to the comment after it
+   is written rather than about writing it. Quiet, since it is almost always
+   left as it is. */
+.composer__send {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.45rem;
+  font-size: 0.72rem;
+  opacity: 0.8;
+  cursor: pointer;
+}
+
+.composer__send:hover { opacity: 1; }
+
+/* --- color picker -------------------------------------------------------- */
+
+/* One swatch per color, in the composer and in every note's card. Each one carries
    its own token class, so a swatch is painted with exactly the fill and edge
    the highlight will get -- there is no second copy of the palette here. */
 .swatches {
@@ -235,7 +348,7 @@ mark.hl--pending {
   cursor: pointer;
 }
 
-/* The current colour is filled in, not merely ringed: among identical dots of
+/* The current color is filled in, not merely ringed: among identical dots of
    one size an outline alone is too quiet to find. */
 .swatch[aria-checked="true"] {
   background: var(--hl-edge);
@@ -597,18 +710,40 @@ mark.hl--pending {
 /* --- the settings window -------------------------------------------------- */
 
 /* A window, not a modal. Nothing behind it is blocked or dimmed, because the
-   whole point of Preview is to watch the prose change colour while you pick;
+   whole point of Preview is to watch the prose change color while you pick;
    a scrim over the thing you are judging would defeat it. */
 .settings {
   position: fixed;
   z-index: 80;
   width: 20rem;
+  /* Two sections now, and the second grows with the reader's vocabulary. A
+     window taller than the screen has its save buttons below the bottom edge
+     and no way to reach them, since it is moved by its bar rather than
+     scrolled by the page. */
+  max-height: calc(100vh - 5rem);
+  overflow-y: auto;
   border-radius: var(--radius);
   background: var(--surface);
   border: 1px solid var(--rule-strong);
   box-shadow: var(--shadow-md);
   font-size: 0.82rem;
   color: var(--ink);
+}
+
+/* The heading of one of the window's two halves. Quiet and small: it is a
+   signpost between two groups of controls, not a title competing with the
+   window's own. */
+.settings__title {
+  margin: 0;
+  padding: 0.55rem 0.8rem 0;
+  font: 640 0.7rem/1.4 var(--font-body);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.settings__section + .settings__section {
+  border-top: 1px solid var(--rule-strong);
 }
 
 .settings--moving { user-select: none; -webkit-user-select: none; }
@@ -706,13 +841,6 @@ mark.hl--pending {
   font-variant-numeric: tabular-nums;
 }
 
-.settings__hint {
-  margin: 0;
-  font-size: 0.72rem;
-  line-height: 1.45;
-  color: var(--ink-muted);
-}
-
 .settings__footer {
   display: flex;
   align-items: center;
@@ -749,6 +877,180 @@ mark.hl--pending {
 }
 
 .settings__button--go:hover { filter: brightness(1.08); }
+
+/* Destructive, and sitting right beside New, so it is quiet until the pointer
+   is on it and then unmistakably the other kind of button. The hue is written
+   out here rather than taken from the tree's `--tree-danger`, whose comment
+   next to it promises that the tree's own Delete is its only user; a second
+   user two stylesheets away is exactly the sort of quiet lie that comment is
+   there to prevent. */
+.settings__button--drop {
+  --settings-danger: rgb(192, 57, 43);
+  padding-inline: 0.55rem;
+  color: var(--ink-muted);
+}
+
+@media (prefers-color-scheme: dark) {
+  .settings__button--drop { --settings-danger: rgb(248, 130, 118); }
+}
+
+.settings__button--drop:hover {
+  background: color-mix(in srgb, var(--settings-danger) 14%, var(--surface));
+  border-color: color-mix(in srgb, var(--settings-danger) 45%, var(--rule-strong));
+  color: var(--settings-danger);
+}
+
+
+/* --- the semantic types, in the settings window --------------------------- */
+
+.semantics {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 0.6rem 0.8rem 0;
+}
+
+/* Bounded, and scrolled on its own. A reader with a dozen kinds should not
+   have to scroll past all of them to reach the per-color defaults, which are
+   the part that refers back to the list. */
+.semantics__list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  max-height: 14rem;
+  overflow-y: auto;
+}
+
+.semantics__empty {
+  margin: 0;
+  color: var(--ink-faint);
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.semantics__type {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.4rem 0.45rem;
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+}
+
+.semantics__head {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.semantics__field {
+  flex: 1;
+  min-width: 0;
+  padding: 0.22rem 0.35rem;
+  border: 1px solid var(--rule-strong);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+}
+
+.semantics__name { font-weight: 600; }
+
+.semantics__drop {
+  flex: none;
+  width: 1.4rem;
+  height: 1.4rem;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink-faint);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.semantics__drop:hover {
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+  color: var(--ink);
+}
+
+.semantics__add {
+  align-self: flex-start;
+  padding: 0.22rem 0.6rem;
+  border: 1px dashed var(--rule-strong);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.semantics__add:hover { background: color-mix(in srgb, var(--ink) 6%, var(--surface)); }
+
+.semantics__defaults {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.semantics__default {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+/* The slot as the page paints it. `swatch--cN` is generated from the active
+   scheme, so this reads the real fill and edge rather than keeping a second
+   copy of the palette alive in this stylesheet. */
+.semantics__dot {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  border: 1px solid var(--hl-edge);
+  border-radius: 50%;
+  background: var(--hl-bg);
+}
+
+.semantics__ordinal {
+  flex: none;
+  width: 0.8rem;
+  font-size: 0.65rem;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.semantics__pick {
+  flex: 1;
+  min-width: 0;
+  padding: 0.18rem 0.3rem;
+  border: 1px solid var(--rule-strong);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+}
+
+.semantics__footer {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0 -0.8rem;
+  padding: 0.6rem 0.8rem;
+  border-top: 1px solid var(--rule);
+}
+
+.semantics__save {
+  padding: 0.28rem 0.7rem;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent);
+  color: white;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.semantics__save:hover { filter: brightness(1.08); }
 
 
 /* --- the empty document's way in ------------------------------------------ */

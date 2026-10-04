@@ -343,7 +343,7 @@ def cmd_build(args) -> int:
     outdir.mkdir(parents=True, exist_ok=True)
     # From beside the documents, not the shipped default: this runs on every
     # `mdweave start` and every container boot, and writing the default here
-    # silently reverted the reader's colours.
+    # silently reverted the reader's colors.
     write_assets(outdir, schemes.load(root).current())
 
     for missing in broken_links(root):

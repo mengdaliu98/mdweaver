@@ -1,7 +1,7 @@
 /* ==========================================================================
    mdweave -- highlights and sticky-note comment cards
 
-   ┌─ COLOUR SLOTS ───────────────────────────────────────────────────────────┐
+   ┌─ COLOR SLOTS ────────────────────────────────────────────────────────────┐
    │ Six slots -- c1..c6 -- and no hues anywhere in this file. What a slot    │
    │ looks like comes from the reader's active scheme, generated onto the     │
    │ end of mdweave.css by `scheme.css()`, which also works out three of      │
@@ -10,16 +10,16 @@
    │   --hl-cN-bg     fill painted behind the highlighted text                │
    │   --hl-cN-edge   the note's pin, and the two highlight states below      │
    │   --note-cN-bg   card background                                         │
-   │   --note-cN-ink  card text colour                                        │
+   │   --note-cN-ink  card text color                                         │
    │                                                                          │
    │ The rules below read the generic `--hl-bg` / `--hl-edge` pair, which     │
    │ the generated mapping points at whichever slot is being worn. So an      │
-   │ annotation says "the third colour" and this file never learns what       │
+   │ annotation says "the third color" and this file never learns what        │
    │ that is -- which is the whole reason a scheme can be swapped without     │
    │ touching a single sidecar.                                               │
    │                                                                          │
    │ A single annotation can still opt out: set "color": "rgb(255 0 128)"     │
-   │ in its .ann.json and the colour is emitted inline, below.                │
+   │ in its .ann.json and the color is emitted inline, below.                 │
    └──────────────────────────────────────────────────────────────────────────┘
    ========================================================================== */
 
@@ -28,7 +28,7 @@
    `scheme.css()` in the Python. Nothing about a *hue* belongs in this file
    any more; what is left is structure, which no scheme changes. */
 
-/* Per-annotation colour, derived from one raw CSS colour. */
+/* Per-annotation color, derived from one raw CSS color. */
 .hl--custom {
   --hl-bg:   color-mix(in srgb, var(--hl-custom) 40%, transparent);
   --hl-edge: var(--hl-custom);
@@ -41,9 +41,9 @@
 
 /* --- the highlight ------------------------------------------------------ */
 
-/* No underline: the fill is an opaque pastel and carries the colour on its
+/* No underline: the fill is an opaque pastel and carries the color on its
    own, so the rule beneath it was a second signal for the same thing. The
-   edge colour still earns its keep on the pin, and on the two states below
+   edge color still earns its keep on the pin, and on the two states below
    where the fill alone cannot say what it needs to. */
 mark.hl {
   background: var(--hl-bg);
@@ -81,6 +81,15 @@ mark.hl--resolved {
   width: var(--pin);
   height: var(--pin);
 }
+
+/* A comment about the document as a whole -- `data-level="document"`, written
+   by the template from `anchored` -- is the same element, and deliberately has
+   no rule of its own. The only thing that differs is where notes.js puts it:
+   a grid in the top-left corner of the page rather than the corner of a
+   highlight. Giving it a second look as well would say "this card is a
+   different sort of thing", and it is not; it is the same card about a larger
+   subject. The one visible difference is the one that follows from the facts:
+   there is no highlight under the prose to light up when you hover it. */
 
 .note--open { z-index: 30; }
 
@@ -177,16 +186,6 @@ mark.hl--resolved {
 }
 
 .note--flip.note--up .note__body { transform-origin: bottom right; }
-
-.note__quote {
-  margin: 0 0 0.6rem;
-  padding: 0 0 0 0.55rem;
-  border-left: 2px solid var(--hl-edge);
-  font-size: 0.78rem;
-  font-style: italic;
-  line-height: 1.45;
-  opacity: 0.78;
-}
 
 .note__entry + .note__entry {
   margin-top: 0.7rem;
