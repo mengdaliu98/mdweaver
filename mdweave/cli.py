@@ -4,9 +4,10 @@ The two commands for everyday use:
 
     mdweave start                        render everything, serve it, open it
     mdweave stop                         shut the server down
-    mdweave serve <file.md> [--monolithic]
-                                         add one file to the managed list, serve
-                                         the list, and print the file's link
+    mdweave serve <file.md|folder> [--monolithic]
+                                         add a file, or every .md under a folder,
+                                         to the managed list, serve the list, and
+                                         print their links
 
 The rest are the pieces those are built from, useful on their own:
 
@@ -14,7 +15,8 @@ The rest are the pieces those are built from, useful on their own:
     mdweave build    <doc.md> -o <dir>   render annotated HTML + CSS
     mdweave build    <dir>    -o <dir>   render every .md in a directory
     mdweave serve    [--port N]          serve in the foreground, no browser
-    mdweave managed  [--remove <file>]   list the managed files, or take one off
+    mdweave managed  [--remove <path>]   list the managed files, or take a file
+                                         or a folder's worth off
     mdweave fingerprint                  hash of the installed source, for staleness checks
 """
 
@@ -131,8 +133,9 @@ def main(argv: list[str] | None = None) -> int:
         nargs="?",
         type=Path,
         default=None,
-        help="a .md file to add to the managed list; serves that list instead "
-        "of the knowledge base, and prints the file's link",
+        help="a .md file, or a folder whose .md files are all added, for the "
+        "managed list; serves that list instead of the knowledge base, and "
+        "prints the links",
     )
     p_serve.add_argument(
         "-i", "--indir", type=Path, default=default_indir(), help="markdown directory"
@@ -169,7 +172,8 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         default=None,
         metavar="PATH",
-        help="take a file off the list; the file itself is untouched",
+        help="take a file off the list, or every listed file under a folder; "
+        "the files themselves are untouched",
     )
     p_managed.add_argument("--port", type=int, default=8765)
     p_managed.add_argument("--host", default="127.0.0.1")
@@ -529,7 +533,7 @@ def _managed_server(host: str, port: int) -> tuple[dict | None, str]:
 
 
 def cmd_serve_managed(args) -> int:
-    """Add one file to the managed list, and say where to read it.
+    """Add a file, or a folder's markdown, to the managed list; say where to read it.
 
     If a managed server is already up on this port it is handed the file and
     this returns at once: the list is one per machine, so a second server
@@ -546,11 +550,12 @@ def cmd_serve_managed(args) -> int:
         return 1
 
     try:
-        path = managed.check(args.path)
+        paths = managed.expand(args.path)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    doc = managed.doc_id(path)
+    target = managed.absolute(args.path)
+    docs = [managed.doc_id(p) for p in paths]
 
     running, refused = _managed_server(args.host, args.port)
     if refused:
@@ -558,22 +563,27 @@ def cmd_serve_managed(args) -> int:
         return 1
 
     if running:
+        listed = set(running.get("documents") or [])
         try:
-            daemon.post(args.host, args.port, "/api/documents/link", {"path": str(path)})
+            # The whole folder in one request, so the server rebuilds once.
+            daemon.post(args.host, args.port, "/api/documents/link", {"path": str(target)})
         except RuntimeError as exc:
-            print(f"error: the server on port {args.port} refused {path}: {exc}",
+            print(f"error: the server on port {args.port} refused {target}: {exc}",
                   file=sys.stderr)
             return 1
         if daemon.is_stale(running):
             print("mdweave: note -- the running server is older than the code on "
                   "disk; restart it to pick the change up", file=sys.stderr)
-        print(f"mdweave: managing {path} (already serving on port {args.port})")
-        print(document_url(args.host, args.port, doc))
+        fresh = sum(1 for d in docs if d not in listed)
+        print(f"mdweave: {_managing(target, paths, fresh)} "
+              f"(already serving on port {args.port})")
+        for doc in docs:
+            print(document_url(args.host, args.port, doc))
         return 0
 
     home = managed.home()
-    _, added = managed.add(home, path)
-    print(f"mdweave: {'now managing' if added else 'already managing'} {path}")
+    fresh = managed.add_many(home, paths)
+    print(f"mdweave: {_managing(target, paths, len(fresh))}")
 
     workspace = ManagedWorkspace(
         inputs=Path("/"), outputs=managed.outputs(home), home=home
@@ -593,8 +603,16 @@ def cmd_serve_managed(args) -> int:
         model=args.model,
         permission_mode=args.permission_mode,
         workspace=workspace,
-        focus=doc,
+        focus=tuple(docs),
     )
+
+
+def _managing(target: Path, paths: list[Path], fresh: int) -> str:
+    """What adding `target` did, in a line."""
+    if not target.is_dir():
+        return f"{'now managing' if fresh else 'already managing'} {target}"
+    found = f"{len(paths)} .md file{'s' if len(paths) != 1 else ''} under {target}"
+    return f"managing {found} ({fresh} new)"
 
 
 def cmd_managed(args) -> int:
@@ -611,25 +629,29 @@ def cmd_managed(args) -> int:
             print(path if path.is_file() else f"{path}  (missing)")
         return 0
 
-    path = managed.absolute(args.remove)
-    if path not in managed.load(home):
-        print(f"error: {path} is not on the list", file=sys.stderr)
+    target = managed.absolute(args.remove)
+    gone = managed.under(home, target)
+    if not gone:
+        print(f"error: nothing under {target} is on the list", file=sys.stderr)
         return 1
 
     # Through the server when one is up, so every page's sidebar loses the
-    # row now rather than at the next restart.
+    # row now rather than at the next restart. A file that has gone from disk
+    # is not a document the server knows, so it comes off the list directly.
     running, _ = _managed_server(args.host, args.port)
-    if running and path.is_file():
-        try:
-            daemon.post(args.host, args.port, "/api/documents/delete",
-                        {"document": managed.doc_id(path)})
-        except RuntimeError as exc:
-            print(f"error: the server on port {args.port} refused: {exc}",
-                  file=sys.stderr)
-            return 1
-    else:
-        managed.remove(home, path)
-    print(f"mdweave: no longer managing {path} (the file is untouched)")
+    for path in gone:
+        if running and path.is_file():
+            try:
+                daemon.post(args.host, args.port, "/api/documents/delete",
+                            {"document": managed.doc_id(path)})
+            except RuntimeError as exc:
+                print(f"error: the server on port {args.port} refused {path}: {exc}",
+                      file=sys.stderr)
+                return 1
+        else:
+            managed.remove(home, path)
+        print(f"mdweave: no longer managing {path}")
+    print("  (the files themselves are untouched)")
     return 0
 
 

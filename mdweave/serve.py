@@ -1120,20 +1120,29 @@ class ManagedWorkspace(Workspace):
 
     # --- the list, in place of the tree operations -------------------------
 
-    def link_document(
-        self, source: str, folder: str = "", name: str = ""
-    ) -> tuple[str, Path]:
-        """Put a file on the list. Where it was dropped does not matter."""
+    def adopt(self, source: str) -> list[str]:
+        """Put a file on the list, or every `.md` under a folder. Returns their ids.
+
+        All of them, including any already listed: the caller is about to
+        show what the path named, and "nothing new" is not "nothing there".
+        """
         if not Path(source).is_absolute():
             raise ApiError(
                 HTTPStatus.BAD_REQUEST,
                 f"{source!r} must be an absolute path on this machine",
             )
         try:
-            path, _ = managed_files.add(self.home, source)
+            paths = managed_files.expand(source)
         except ValueError as exc:
             raise ApiError(HTTPStatus.BAD_REQUEST, str(exc))
-        return managed_files.doc_id(path), path
+        managed_files.add_many(self.home, paths)
+        return [managed_files.doc_id(p) for p in paths]
+
+    def link_document(
+        self, source: str, folder: str = "", name: str = ""
+    ) -> tuple[str, Path]:
+        """Put a file on the list. Where it was dropped does not matter."""
+        return self.adopt(source)[0], managed_files.absolute(source)
 
     def delete_document(self, doc_id: str) -> None:
         """Stop managing a document. The file and its comments stay on disk."""
@@ -1744,6 +1753,8 @@ class Handler(SimpleHTTPRequestHandler):
         the container has a sidebar row this machine can see and it cannot.
         """
         payload = self._json_body()
+        if self.workspace.managed:
+            return self._api_adopt(payload)
         doc_id, original = self.workspace.link_document(
             _require(payload, "path"),
             folder=_optional(payload, "folder"),
@@ -1753,12 +1764,27 @@ class Handler(SimpleHTTPRequestHandler):
 
         body = _described(doc_id)
         body["linked"] = str(original)
-        # A managed file is on the list, not in a repository of ours: there
-        # is no link to commit, and nothing on another machine waiting for it.
-        if self.workspace.managed:
-            body["managed"] = True
-        else:
-            body.update(self._publish_link(doc_id, original))
+        body.update(self._publish_link(doc_id, original))
+        return HTTPStatus.CREATED, _with_panel(self, payload, body)
+
+    def _api_adopt(self, payload: dict):
+        """Put a file, or every `.md` under a folder, on the managed list.
+
+        One rebuild for the lot. Adding a folder file by file would splice
+        every page's sidebar once per file, which for a folder of a hundred
+        notes is ten thousand renders to arrive where one pass does.
+
+        Nothing is committed: a managed file is on the list, not in a
+        repository of ours, and no other machine is waiting for it.
+        """
+        source = _require(payload, "path")
+        ids = self.workspace.adopt(source)
+        self.workspace.rebuild_tree(set(ids))
+
+        body = _described(ids[0])
+        body["linked"] = str(managed_files.absolute(source))
+        body["managed"] = True
+        body["added"] = ids
         return HTTPStatus.CREATED, _with_panel(self, payload, body)
 
     def _publish_link(self, doc_id: str, original: Path) -> dict:
@@ -2992,13 +3018,13 @@ def serve(
     model: str | None = None,
     permission_mode: str = "bypassPermissions",
     workspace: Workspace | None = None,
-    focus: str = "",
+    focus: tuple[str, ...] = (),
 ) -> int:
     """Serve until interrupted.
 
     `workspace` replaces the knowledge base at `inputs` -- a managed list is
-    one. `focus` is a document to name on its own line, for a command that was
-    asked to show one document rather than the whole set.
+    one. `focus` names documents to print on their own, after the full list,
+    for a command that was asked about those rather than the whole set.
     """
     refusal = refuse_insecure_bind(host)
     if refusal:
@@ -3035,7 +3061,8 @@ def serve(
     for name in workspace.documents():
         print(f"  http://{host}:{httpd.server_port}/{quote(name)}.html")
     if focus:
-        print(f"\n{document_url(host, httpd.server_port, focus)}\n", flush=True)
+        links = "\n".join(document_url(host, httpd.server_port, d) for d in focus)
+        print(f"\n{links}\n", flush=True)
 
     # After the socket is bound -- `make_server` binds, `serve_forever` only
     # begins accepting -- so the runner's first claim cannot race the listen.

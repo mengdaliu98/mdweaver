@@ -112,6 +112,59 @@ def add(root: Path, raw: str | Path) -> tuple[Path, bool]:
     return path, True
 
 
+def markdown_under(folder: Path) -> list[Path]:
+    """Every readable `.md` beneath `folder`, in the order a reader would list them.
+
+    Dotted directories are skipped, the rule `document_ids` already applies to
+    a knowledge base: `.git`, `.obsidian` and friends are not documents, and a
+    repository's `.git` can hold markdown nobody wrote. Links to directories
+    are not followed, so a link back up the tree cannot make this endless.
+    """
+    found: list[Path] = []
+    for here, dirs, names in os.walk(folder):
+        dirs[:] = sorted(d for d in dirs if not d.startswith("."))
+        for name in sorted(names):
+            if name.startswith(".") or not name.lower().endswith(".md"):
+                continue
+            path = Path(here) / name
+            # Same test as `check`, made quietly: a dangling link or an
+            # unreadable file in a big folder costs that file, not the folder.
+            if path.is_file() and os.access(path, os.R_OK):
+                found.append(absolute(path))
+    return found
+
+
+def expand(raw: str | Path) -> list[Path]:
+    """The files a path names: itself for a `.md`, everything under a folder.
+
+    A folder is read once, when it is added. What goes on the list is the
+    files, not the folder, so a file created there later is not picked up
+    until the folder is added again -- which adds just the new ones.
+    """
+    path = absolute(raw)
+    if path.is_dir():
+        found = markdown_under(path)
+        if not found:
+            raise ValueError(f"there are no .md files under {str(path)!r}")
+        return found
+    return [check(path)]
+
+
+def add_many(root: Path, paths: list[Path]) -> list[Path]:
+    """Put several files on the list in one write. Returns the ones that were new."""
+    listed = load(root)
+    fresh = [p for p in dict.fromkeys(paths) if p not in listed]
+    if fresh:
+        save(root, [*listed, *fresh])
+    return fresh
+
+
+def under(root: Path, raw: str | Path) -> list[Path]:
+    """Listed paths that are `raw`, or inside it if it is a folder."""
+    target = absolute(raw)
+    return [p for p in load(root) if p == target or target in p.parents]
+
+
 def remove(root: Path, raw: str | Path) -> bool:
     """Take a file off the list. The file itself is never touched."""
     path = absolute(raw)

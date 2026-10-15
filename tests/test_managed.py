@@ -382,3 +382,91 @@ def test_managed_lists_and_removes(home, files, capsys):
     assert cli.main(["managed", "--remove", str(files["one"]), "--port", "1"]) == 0
     assert managed.load(home) == [files["two"]]
     assert files["one"].exists()
+
+
+# --- adding a folder ---------------------------------------------------------
+
+@pytest.fixture()
+def folder(tmp_path):
+    """Markdown at two depths, plus the things a folder walk must leave out."""
+    root = tmp_path / "proj"
+    write(root / "README.md")
+    write(root / "docs" / "design.md")
+    write(root / "docs" / "deep" / "notes.md")
+    (root / "docs" / "todo.txt").write_text("not markdown")
+    write(root / ".git" / "hidden.md")
+    write(root / "docs" / ".draft.md")
+    (root / "docs" / "dangling.md").symlink_to(root / "nowhere.md")
+    return root
+
+
+def test_a_folder_names_every_markdown_file_under_it(folder):
+    assert managed.expand(folder) == [
+        folder / "README.md",
+        folder / "docs" / "design.md",
+        folder / "docs" / "deep" / "notes.md",
+    ]
+
+
+def test_a_folder_with_no_markdown_is_refused(tmp_path):
+    (tmp_path / "empty").mkdir()
+    with pytest.raises(ValueError, match="no .md files"):
+        managed.expand(tmp_path / "empty")
+
+
+def test_adding_many_reports_only_the_new_ones(home, folder):
+    paths = managed.expand(folder)
+    managed.add(home, paths[0])
+    assert managed.add_many(home, paths) == paths[1:]
+    assert managed.load(home) == paths
+
+
+def test_dropping_a_folder_adds_its_files_in_one_request(server, home, folder, files):
+    base, workspace = server
+    status, body = call(base, "/api/documents/link",
+                        {"path": str(folder), "page": doc(files["one"])})
+
+    assert status == 201
+    assert body["added"] == [doc(p) for p in managed.expand(folder)]
+    for path in managed.expand(folder):
+        assert path in managed.load(home)
+        assert (workspace.outputs / f"{doc(path)}.html").exists()
+
+
+def test_serve_hands_a_folder_to_the_managed_server_already_up(
+    server, home, folder, capsys
+):
+    base, _ = server
+    port = int(base.rsplit(":", 1)[1])
+
+    assert cli.main(["serve", str(folder), "--port", str(port)]) == 0
+
+    out = capsys.readouterr().out.strip().splitlines()
+    assert "managing 3 .md files" in out[0] and "(3 new)" in out[0]
+    assert out[1:] == [
+        f"http://127.0.0.1:{port}/{doc(p)}.html" for p in managed.expand(folder)
+    ]
+
+
+def test_serve_starts_on_a_folder_and_names_each_file(home, folder, monkeypatch):
+    seen = {}
+
+    def fake_serve(*args, **kwargs):
+        seen.update(kwargs)
+        return 0
+
+    monkeypatch.setattr("mdweave.serve.serve", fake_serve)
+    assert cli.main(["serve", str(folder), "--port", "1"]) == 0
+
+    assert managed.load(home) == managed.expand(folder)
+    assert seen["focus"] == tuple(doc(p) for p in managed.expand(folder))
+    assert seen["workspace"].managed
+
+
+def test_removing_a_folder_takes_off_everything_under_it(home, folder, files, capsys):
+    managed.add(home, files["one"])
+    managed.add_many(home, managed.expand(folder))
+
+    assert cli.main(["managed", "--remove", str(folder / "docs"), "--port", "1"]) == 0
+    assert managed.load(home) == [files["one"], folder / "README.md"]
+    assert (folder / "docs" / "design.md").exists()

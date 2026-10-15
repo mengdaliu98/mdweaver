@@ -100,6 +100,22 @@ the foreground, as `serve` always has. A knowledge base server already on the
 port is refused rather than added to, since adding to that would put a symlink
 in it; pass `--port` to run both.
 
+**A folder adds every `.md` under it**, at any depth, and prints a link for
+each:
+
+```bash
+mdweave serve /abs/path/to/project
+# mdweave: managing 3 .md files under /abs/path/to/project (3 new)
+```
+
+Dotted directories are skipped -- `.git`, `.obsidian` -- the same rule a
+knowledge base follows, and links to directories are not followed. The folder
+is read once: what goes on the list is the files, so one created there later
+appears when the folder is added again, which adds only the new ones. A running
+server takes the whole folder in one request and rebuilds once, rather than
+once per file. A folder dropped on the sidebar from the desktop is not taken;
+the drop only ever offers files.
+
 **The sidebar is the least of the filesystem that holds the files.** Folders
 every file shares are left out:
 
@@ -154,8 +170,9 @@ and pushes. A Claude job (`--monolithic`) edits the file in place, with its
 folder opened to the session, and does not commit.
 
 `mdweave managed` lists the files, marking any that have gone missing, and
-`mdweave managed --remove <path>` takes one off. A missing file stays listed
-and is skipped, so a branch switch does not lose it.
+`mdweave managed --remove <path>` takes one off -- or, given a folder, every
+listed file under it. A missing file stays listed and is skipped, so a branch
+switch does not lose it.
 
 ## The sidebar
 
@@ -956,9 +973,12 @@ mdweave build <file.md|dir> -o <outdir>   # render; --strict fails on a lost anc
                                           # a dir builds recursively; one file
                                           # still gets the full sidebar
 mdweave serve [--port N] [--no-build]     # serve in the foreground, no browser
-mdweave serve <file.md> [--monolithic]    # add a file to the managed list, serve
-                                          # the list, print the file's link
-mdweave managed [--remove <file.md>]      # list the managed files, or drop one
+mdweave serve <file.md|folder> [--monolithic]
+                                          # add a file, or every .md under a
+                                          # folder, to the managed list, serve
+                                          # the list, print their links
+mdweave managed [--remove <path>]         # list the managed files, or drop a
+                                          # file or everything under a folder
 mdweave extract <file.md> [--in-place]    # Obsidian inline comments -> sidecar JSON
 mdweave fingerprint                       # hash of the installed source
 ```
