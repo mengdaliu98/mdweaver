@@ -17,6 +17,8 @@ The rest are the pieces those are built from, useful on their own:
     mdweave serve    [--port N]          serve in the foreground, no browser
     mdweave managed  [--remove <path>]   list the managed files, or take a file
                                          or a folder's worth off
+    mdweave mv <from> <to>               move a managed file or folder on disk,
+                                         and everything recorded about it
     mdweave fingerprint                  hash of the installed source, for staleness checks
 """
 
@@ -175,6 +177,17 @@ def main(argv: list[str] | None = None) -> int:
     p_managed.add_argument("--port", type=int, default=8765)
     p_managed.add_argument("--host", default="127.0.0.1")
 
+    p_mv = sub.add_parser(
+        "mv",
+        help="move a managed file, or a folder holding some, and update the list",
+    )
+    p_mv.add_argument("source", type=Path, help="a managed .md file, or a folder")
+    p_mv.add_argument(
+        "target", type=Path, help="the new path, or an existing folder to move it into"
+    )
+    p_mv.add_argument("--port", type=int, default=8765)
+    p_mv.add_argument("--host", default="127.0.0.1")
+
     p_rec = sub.add_parser(
         "reconcile",
         help="merge what the remote has, when a push says the branch has moved on",
@@ -251,6 +264,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_serve(args)
     if args.command == "managed":
         return cmd_managed(args)
+    if args.command == "mv":
+        return cmd_mv(args)
     if args.command == "reconcile":
         return cmd_reconcile(args)
     if args.command == "agent":
@@ -647,6 +662,53 @@ def cmd_managed(args) -> int:
             managed.remove(home, path)
         print(f"mdweave: no longer managing {path}")
     print("  (the files themselves are untouched)")
+    return 0
+
+
+
+def cmd_mv(args) -> int:
+    """Move managed documents, and bring everything mdweave recorded along.
+
+    Done here rather than through the server, even when one is up: this is
+    the reader's own shell doing what `mv` would, and an HTTP endpoint able
+    to move any directory on the machine is not one worth having. The server
+    is only asked to re-render afterwards -- it reads the list fresh.
+    """
+    from . import daemon, managed
+    from .serve import ManagedWorkspace, document_url
+
+    home = managed.home()
+    workspace = ManagedWorkspace(
+        inputs=Path("/"), outputs=managed.outputs(home), home=home
+    )
+    try:
+        moved, on_disk = workspace.relocate(args.source, args.target)
+    except (ValueError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    if not moved:
+        print("mdweave: nothing to move -- that is where it already is")
+        return 0
+
+    if not on_disk:
+        print("mdweave: already moved on disk; updated the record")
+    for old, new in moved:
+        print(f"{old} -> {new}")
+
+    running, _ = _managed_server(args.host, args.port)
+    present = [new for _, new in moved if new.is_file()]
+    if running and present:
+        try:
+            # Any document will do: a refresh rebuilds every page, which is
+            # what a move needs -- the sidebar changed on all of them.
+            daemon.post(args.host, args.port, "/api/refresh",
+                        {"document": managed.doc_id(present[0])})
+        except RuntimeError as exc:
+            print(f"warning: moved, but the server on port {args.port} could not "
+                  f"re-render: {exc}", file=sys.stderr)
+            return 0
+        for new in present:
+            print(document_url(args.host, args.port, managed.doc_id(new)))
     return 0
 
 

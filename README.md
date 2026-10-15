@@ -174,6 +174,24 @@ folder opened to the session, and does not commit.
 listed file under it. A missing file stays listed and is skipped, so a branch
 switch does not lose it.
 
+**Moving them.** `mdweave mv <from> <to>` is `mv` for managed documents: it
+moves the file, or a folder holding some, and then brings along everything
+recorded about the old paths -- the list, captions, order, and the pages,
+which are named after ids that no longer exist. A target that is an existing
+folder receives the source inside it under its own name; anything else is the
+new path, and missing parent folders are made. A file takes its `.ann.json`,
+since a markdown file moved without its sidecar loses every comment. Nothing
+is overwritten, and a file has to keep a `.md` name to stay a document. If a
+managed server is up it re-renders, and the new links are printed.
+
+Moved it by hand already? Run the same `mdweave mv` afterwards: when the
+source has gone and the target is there, only the records are updated.
+
+The move is made by the command, not by the server, even when one is running:
+a sidebar gesture or an HTTP endpoint that could move any directory on the
+machine is not worth having, which is also why dragging a managed row into
+another folder is still refused.
+
 ## The sidebar
 
 Every page carries a VS Code style explorer over `knowledge_base/markdown_inputs`,
@@ -979,6 +997,8 @@ mdweave serve <file.md|folder>
                                           # the list, print their links
 mdweave managed [--remove <path>]         # list the managed files, or drop a
                                           # file or everything under a folder
+mdweave mv <from> <to>                    # move a managed file or folder on
+                                          # disk, and every record of it
 mdweave extract <file.md> [--in-place]    # Obsidian inline comments -> sidecar JSON
 mdweave fingerprint                       # hash of the installed source
 ```

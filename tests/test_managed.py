@@ -470,3 +470,98 @@ def test_removing_a_folder_takes_off_everything_under_it(home, folder, files, ca
     assert cli.main(["managed", "--remove", str(folder / "docs"), "--port", "1"]) == 0
     assert managed.load(home) == [files["one"], folder / "README.md"]
     assert (folder / "docs" / "design.md").exists()
+
+
+# --- moving ------------------------------------------------------------------
+
+def test_mv_moves_a_file_and_its_comments_and_the_record(home, files, capsys):
+    managed.add(home, files["one"])
+    files["one"].with_name("file1.ann.json").write_text('{"version": 1}')
+    target = files["one"].parents[2] / "elsewhere" / "renamed.md"
+
+    assert cli.main(["mv", str(files["one"]), str(target), "--port", "1"]) == 0
+
+    assert target.exists() and not files["one"].exists()
+    assert target.with_name("renamed.ann.json").exists()
+    assert managed.load(home) == [target]
+    assert f"{files['one']} -> {target}" in capsys.readouterr().out
+
+
+def test_mv_into_an_existing_folder_keeps_the_name(home, files):
+    managed.add(home, files["one"])
+    folder = files["two"].parent
+
+    assert cli.main(["mv", str(files["one"]), str(folder), "--port", "1"]) == 0
+    assert managed.load(home) == [folder / "file1.md"]
+
+
+def test_mv_a_folder_carries_every_listed_file_and_label(home, files):
+    for key in ("one", "two", "three"):
+        managed.add(home, files[key])
+    workspace = workspace_for(home)
+    a_folder = files["one"].parents[1]  # root/A
+    workspace.set_label(f"{doc(files['one']).rsplit('/', 2)[0]}/a", "Alpha")
+    renamed = a_folder.with_name("Z")
+
+    assert cli.main(["mv", str(a_folder), str(renamed), "--port", "1"]) == 0
+
+    assert managed.load(home) == [
+        renamed / "a" / "file1.md", renamed / "b" / "file2.md", files["three"]
+    ]
+    assert (renamed / "a" / "file1.md").exists() and not a_folder.exists()
+    labels = json.loads((home / ".mdweave-labels.json").read_text())
+    assert labels == {f"{renamed.as_posix().lstrip('/')}/a": "Alpha"}
+
+
+def test_mv_removes_the_pages_named_after_the_old_paths(home, files):
+    managed.add(home, files["one"])
+    workspace = workspace_for(home)
+    workspace.rebuild_all()
+    old_page = workspace.outputs / f"{doc(files['one'])}.html"
+    assert old_page.exists()
+
+    target = files["one"].with_name("moved.md")
+    assert cli.main(["mv", str(files["one"]), str(target), "--port", "1"]) == 0
+    assert not old_page.exists()
+
+
+def test_mv_catches_up_with_a_move_made_by_hand(home, files, capsys):
+    managed.add(home, files["one"])
+    target = files["one"].with_name("by_hand.md")
+    files["one"].rename(target)
+
+    assert cli.main(["mv", str(files["one"]), str(target), "--port", "1"]) == 0
+    assert managed.load(home) == [target]
+    assert "already moved on disk" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("case", ["unmanaged", "exists", "not-markdown", "into-itself"])
+def test_mv_refuses_and_changes_nothing(home, files, tmp_path, capsys, case):
+    managed.add(home, files["one"])
+    managed.add(home, files["two"])
+    source, target = {
+        "unmanaged": (files["three"], tmp_path / "x.md"),
+        "exists": (files["one"], files["two"]),
+        "not-markdown": (files["one"], files["one"].with_name("notes.txt")),
+        "into-itself": (files["one"].parents[1], files["one"].parent / "deeper"),
+    }[case]
+
+    assert cli.main(["mv", str(source), str(target), "--port", "1"]) == 1
+    assert capsys.readouterr().err.startswith("error:")
+    assert managed.load(home) == [files["one"], files["two"]]
+    assert files["one"].exists() and files["two"].exists() and files["three"].exists()
+
+
+def test_mv_tells_a_running_server_to_re_render(server, home, files, capsys):
+    base, workspace = server
+    port = int(base.rsplit(":", 1)[1])
+    target = files["one"].parents[2] / "C" / "file1.md"
+
+    assert cli.main(["mv", str(files["one"]), str(target), "--port", str(port)]) == 0
+
+    assert (workspace.outputs / f"{doc(target)}.html").exists()
+    out = capsys.readouterr().out.strip().splitlines()
+    assert out[-1] == f"http://127.0.0.1:{port}/{doc(target)}.html"
+    # Every page's sidebar was rebuilt: file2's now shows the new folder.
+    other = (workspace.outputs / f"{doc(files['two'])}.html").read_text()
+    assert 'data-folder="C"' in other

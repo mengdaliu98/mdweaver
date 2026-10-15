@@ -1152,6 +1152,84 @@ class ManagedWorkspace(Workspace):
         self._reindex(doc_id, None)
         self.forget_label(doc_id)
 
+    def relocate(self, source, target) -> tuple[list[tuple[Path, Path]], bool]:
+        """Move a managed file, or a folder holding some, on disk and on the list.
+
+        `mv` semantics: a target that is an existing directory receives the
+        source inside it, under its own name; anything else is the new path.
+        Nothing is overwritten. A file takes its `.ann.json` along, since the
+        sidecar's name is derived from the markdown's and a file moved
+        without it loses every comment. A folder takes everything in it.
+
+        Everything recorded about the old paths follows: the list, the
+        captions, the order, and the pages, which are named after ids that
+        no longer exist.
+
+        If the source is already gone and the target is there, the move has
+        been made by hand -- a plain `mv`, an editor's rename -- and only the
+        records are brought up to date. That is the usual reason a document
+        has gone missing from the sidebar.
+
+        Returns the (old, new) path of every listed document that moved, and
+        whether this did the move on disk. Raises ValueError, for a command
+        line to report: this is not reachable over HTTP, where a request
+        that could move any directory on the machine has no business being.
+        """
+        src = managed_files.absolute(source)
+        dst = managed_files.absolute(target)
+        listed = managed_files.load(self.home)
+        moving = [p for p in listed if p == src or src in p.parents]
+        if not moving:
+            raise ValueError(f"nothing managed is at or under {src}")
+
+        on_disk = src.exists() or src.is_symlink()
+        if on_disk:
+            if dst.is_dir():
+                dst = dst / src.name
+        elif (dst / src.name).exists() and dst.is_dir():
+            dst = dst / src.name
+        elif not dst.exists():
+            raise ValueError(f"there is nothing at {src}, or at {dst}")
+        if dst == src:
+            return [], False
+
+        is_folder = src.is_dir() if on_disk else dst.is_dir()
+        if is_folder and src in dst.parents:
+            raise ValueError("a folder cannot move inside itself")
+        if not is_folder and not dst.name.lower().endswith(".md"):
+            raise ValueError(f"{dst.name!r} would not be a .md file, so not a document")
+
+        if on_disk:
+            if dst.exists() or dst.is_symlink():
+                raise ValueError(f"{dst} already exists")
+            beside = None if is_folder else sidecar.sidecar_path(src)
+            if beside is not None and beside.exists():
+                if sidecar.sidecar_path(dst).exists():
+                    raise ValueError(f"{sidecar.sidecar_path(dst)} already exists")
+            else:
+                beside = None
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            # `shutil.move`, not `rename`: the two ends may be on different
+            # filesystems, and a home directory and a scratch disk often are.
+            shutil.move(str(src), str(dst))
+            if beside is not None:
+                shutil.move(str(beside), str(sidecar.sidecar_path(dst)))
+
+        moved = [(p, dst if p == src else dst / p.relative_to(src)) for p in moving]
+        onto = dict(moved)
+        managed_files.save(self.home, [onto.get(p, p) for p in listed])
+
+        for old, _ in moved:
+            (self.outputs / f"{managed_files.doc_id(old)}.html").unlink(missing_ok=True)
+        if is_folder:
+            old_key, new_key = src.as_posix().lstrip("/"), dst.as_posix().lstrip("/")
+            self._reindex_folder(old_key, new_key)
+        else:
+            old_key, new_key = managed_files.doc_id(src), managed_files.doc_id(dst)
+            self._reindex(old_key, new_key)
+        self.move_labels(old_key, new_key)
+        return moved, on_disk
+
     def set_order(self, folder: str, names: list[str]) -> list[str]:
         # The strip under the tree says `""`, meaning the top of what is
         # drawn -- which here is the shared folder, not the filesystem root.
