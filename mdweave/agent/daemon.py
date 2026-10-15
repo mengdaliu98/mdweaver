@@ -328,7 +328,7 @@ class Runner:
             # Exit rather than reload: a Python process cannot honestly swap
             # its own imported modules. Under the systemd unit `Restart=always`
             # turns "the code changed" into a ten second gap; run from a
-            # terminal, or in-process behind `serve --monolithic`, it is a stop
+            # terminal, or in-process behind `serve`, it is a stop
             # and the next start picks the new code up. The wording stays true
             # of both rather than promising a supervisor that may not be there.
             if self.stale():

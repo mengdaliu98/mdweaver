@@ -237,3 +237,46 @@ def test_contents_root_finds_the_sibling_checkout(monkeypatch):
         pytest.skip("no sibling knowledge_base checkout on this machine")
     monkeypatch.chdir("/")
     assert cli.contents_root() == expected
+
+
+# --- the in-process runner ---------------------------------------------------
+
+class _OneShotServer:
+    """Stands in for the HTTP server: bound, then interrupted at once."""
+
+    server_port = 8765
+
+    def serve_forever(self):
+        raise KeyboardInterrupt
+
+    def server_close(self):
+        pass
+
+
+@pytest.mark.parametrize("claude, expected", [("/usr/bin/claude", True), (None, False)])
+def test_serve_runs_the_runner_in_process_wherever_claude_is(
+    contents, monkeypatch, capsys, claude, expected
+):
+    """No flag: a machine that can run a session runs one. One that cannot --
+    the container -- must leave the jobs for the devserver runner."""
+    from mdweave import serve as serve_module
+
+    inputs, outputs = contents
+    started = []
+    monkeypatch.setattr(serve_module.shutil, "which",
+                        lambda name: claude if name == "claude" else None)
+    monkeypatch.setattr(serve_module, "make_server",
+                        lambda *args, **kwargs: _OneShotServer())
+    monkeypatch.setattr(serve_module, "start_bridge",
+                        lambda *args, **kwargs: started.append(kwargs))
+
+    assert serve_module.serve(inputs, outputs, port=0) == 0
+    assert bool(started) is expected
+    banner = capsys.readouterr().out
+    assert ("runner in-process" in banner) is expected
+
+
+def test_the_monolithic_flag_is_gone(contents):
+    inputs, outputs = contents
+    with pytest.raises(SystemExit):
+        cli.main(["serve", "-i", str(inputs), "-o", str(outputs), "--monolithic"])

@@ -3014,7 +3014,6 @@ def serve(
     outputs: Path,
     host: str = "127.0.0.1",
     port: int = 8765,
-    monolithic: bool = False,
     model: str | None = None,
     permission_mode: str = "bypassPermissions",
     workspace: Workspace | None = None,
@@ -3025,6 +3024,15 @@ def serve(
     `workspace` replaces the knowledge base at `inputs` -- a managed list is
     one. `focus` names documents to print on their own, after the full list,
     for a command that was asked about those rather than the whole set.
+
+    The agent runner always comes up in this process, against this server,
+    wherever a session can actually be run -- which is to say wherever the
+    `claude` CLI is on PATH. It used to wait for `--monolithic`, and the
+    flag was on every local invocation anyway. Where there is no CLI the
+    bridge stays open for a runner elsewhere, which is the container's case:
+    an in-process runner there would claim every job, fail each one for want
+    of `claude`, and take them from the devserver runner that could have done
+    the work.
     """
     refusal = refuse_insecure_bind(host)
     if refusal:
@@ -3051,9 +3059,11 @@ def serve(
     guarded = " [password required]" if credentials() else ""
     saving = f"  [auto-commit after {autosave.delay:g}s]" if autosave.enabled else ""
     pulling = f"  [pulling every {puller.interval:g}s]" if puller.enabled else ""
-    bridge = "  [agent bridge open]" if jobs is not None else ""
-    if monolithic:
+    in_process = shutil.which("claude") is not None
+    if in_process:
         bridge = f"  [runner in-process, {permission_mode}]"
+    else:
+        bridge = "  [agent bridge open; no claude CLI here to run one]"
     print(
         f"mdweave serving http://{host}:{httpd.server_port}/  "
         f"[{RUNNING_FINGERPRINT}]{guarded}{saving}{pulling}{bridge}  (Ctrl-C to stop)"
@@ -3066,7 +3076,7 @@ def serve(
 
     # After the socket is bound -- `make_server` binds, `serve_forever` only
     # begins accepting -- so the runner's first claim cannot race the listen.
-    if monolithic:
+    if in_process:
         start_bridge(
             httpd,
             workspace,

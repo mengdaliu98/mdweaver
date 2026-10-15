@@ -47,7 +47,12 @@ if [ -n "$transcript" ] && [ -f "$transcript" ]; then
     | last // ""' "$transcript" 2>/dev/null)
 fi
 
-subject=$(printf '%s' "$request" | sed -n '/[^[:space:]]/{p;q;}' | cut -c1-72)
+# First non-blank line, cut at a word boundary rather than mid-word.
+subject=$(printf '%s' "$request" | sed -n '/[^[:space:]]/{p;q;}')
+if [ "${#subject}" -gt 72 ]; then
+  subject="${subject:0:71}"
+  subject="${subject% *}..."
+fi
 [ -n "$subject" ] || subject="Changes from a Claude Code request"
 body="Committed automatically at the end of a Claude Code request."
 [ -n "$request" ] && body="$body

@@ -4,7 +4,7 @@ The two commands for everyday use:
 
     mdweave start                        render everything, serve it, open it
     mdweave stop                         shut the server down
-    mdweave serve <file.md|folder> [--monolithic]
+    mdweave serve <file.md|folder>
                                          add a file, or every .md under a folder,
                                          to the managed list, serve the list, and
                                          print their links
@@ -150,18 +150,15 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="serve what is already on disk instead of rebuilding first",
     )
+    # The agent runner comes up in this process whenever `claude` is on PATH;
+    # these say how it runs its sessions.
     p_serve.add_argument(
-        "--monolithic",
-        action="store_true",
-        help="also run the agent runner in this process, against this server",
-    )
-    p_serve.add_argument(
-        "--model", default=None, help="model for the sessions (with --monolithic)"
+        "--model", default=None, help="model for the in-process runner's sessions"
     )
     p_serve.add_argument(
         "--permission-mode",
         default="bypassPermissions",
-        help="what the sessions may do (with --monolithic)",
+        help="what the in-process runner's sessions may do",
     )
 
     p_managed = sub.add_parser(
@@ -508,7 +505,6 @@ def cmd_serve(args) -> int:
         args.outdir,
         host=args.host,
         port=args.port,
-        monolithic=args.monolithic,
         model=args.model,
         permission_mode=args.permission_mode,
     )
@@ -599,7 +595,6 @@ def cmd_serve_managed(args) -> int:
         workspace.outputs,
         host=args.host,
         port=args.port,
-        monolithic=args.monolithic,
         model=args.model,
         permission_mode=args.permission_mode,
         workspace=workspace,

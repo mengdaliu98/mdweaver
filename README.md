@@ -83,7 +83,7 @@ The other way in. Instead of a knowledge base directory, hand `serve` one
 markdown file from anywhere on the machine:
 
 ```bash
-mdweave serve /abs/path/to/design.md --monolithic
+mdweave serve /abs/path/to/design.md
 ```
 
 It goes on a list mdweave keeps, everything on the list is served, and the
@@ -166,7 +166,7 @@ Dropping a `.md` from the desktop onto the panel adds it to the list.
 none, so auto-commit and the background pull stay off whatever the
 environment says, and there is no pull button. **Checkpoint** still works: it
 commits the file and its `.ann.json` in whichever repository holds the file,
-and pushes. A Claude job (`--monolithic`) edits the file in place, with its
+and pushes. A Claude job edits the file in place, with its
 folder opened to the session, and does not commit.
 
 `mdweave managed` lists the files, marking any that have gone missing, and
@@ -973,7 +973,7 @@ mdweave build <file.md|dir> -o <outdir>   # render; --strict fails on a lost anc
                                           # a dir builds recursively; one file
                                           # still gets the full sidebar
 mdweave serve [--port N] [--no-build]     # serve in the foreground, no browser
-mdweave serve <file.md|folder> [--monolithic]
+mdweave serve <file.md|folder>
                                           # add a file, or every .md under a
                                           # folder, to the managed list, serve
                                           # the list, print their links
@@ -998,19 +998,26 @@ which is the way to try it without leaving anything running.
 `serve` is what `start` puts in the background; run it directly when you want
 the request log in front of you and Ctrl-C to stop it.
 
-`mdweave serve --monolithic` adds the agent runner to that same process,
-pointed at the server it is sharing a process with. The two halves normally
-sit on two machines and talk over the internet, which is why the runner polls
-rather than being called -- and none of that changes here. It is the same loop
-making the same requests to `127.0.0.1` instead of to Railway, so there is one
-transport rather than a second code path that could rot unobserved.
+`serve` -- and so `start` -- also runs the agent runner in its own process,
+pointed at the server it shares that process with, whenever the `claude` CLI
+is on PATH. The two halves normally sit on two machines and talk over the
+internet, which is why the runner polls rather than being called -- and none
+of that changes here. It is the same loop making the same requests to
+`127.0.0.1` instead of to Railway, so there is one transport rather than a
+second code path that could rot unobserved.
 
-It is for working on the knowledge base locally without also remembering to
-start a runner. `--permission-mode` and `--model` carry through to the
-sessions it runs. One consequence worth knowing: when the source on disk moves
-past what the process imported, the runner stops -- and in this mode it takes
-the server with it, because the server imported the same code and is exactly
-as stale. It says so and exits; start it again.
+This used to wait for a `--monolithic` flag, which every local invocation
+passed anyway. The condition that replaced it is the one that matters: a
+machine without `claude` cannot run a session, so there the bridge stays open
+for a runner elsewhere instead. That is the container's case, and it is not a
+nicety -- an in-process runner there would claim every job, fail each for want
+of the CLI, and take them from the devserver runner that could have done them.
+
+`--permission-mode` and `--model` carry through to the sessions it runs. One
+consequence worth knowing: when the source on disk moves past what the process
+imported, the runner stops -- and it takes the server with it, because the
+server imported the same code and is exactly as stale. It says so and exits;
+start it again.
 
 `extract` is a one-time migration for documents annotated with the Obsidian
 `document-comments` plugin. `build` also reads that markup inline, so a
