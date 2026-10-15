@@ -41,6 +41,39 @@ def outputs(root: Path) -> Path:
     return root / "html_outputs"
 
 
+def sidecar_for(root: Path, doc: str) -> Path:
+    """Where a managed document's comments live: under the home, not beside it.
+
+    Laid out like the pages, by id, so `/home/me/proj/design.md` keeps its
+    comments at `annotations/home/me/proj/design.ann.json`. A knowledge base
+    keeps its sidecars beside the prose because they travel with it in git;
+    a file adopted from a codebase has no such reason, and a `.ann.json`
+    appearing in somebody's repository is litter they then have to ignore.
+    """
+    return root / "annotations" / f"{doc}.ann.json"
+
+
+def take_sidecars(root: Path, paths) -> list[Path]:
+    """Move any `.ann.json` still beside a managed file into the home.
+
+    Where comments used to be written, so a document managed before they
+    moved keeps its comments rather than coming up blank. One already in the
+    home wins, and the stray is left where it is rather than overwritten
+    either way. Returns where each moved one ended up.
+    """
+    import shutil
+
+    moved = []
+    for path in dict.fromkeys(paths):
+        beside = path.with_suffix(".ann.json")
+        target = sidecar_for(root, doc_id(path))
+        if beside.is_file() and not target.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(beside), str(target))
+            moved.append(target)
+    return moved
+
+
 def absolute(raw: str | Path) -> Path:
     """An absolute, normalised path -- without following links.
 

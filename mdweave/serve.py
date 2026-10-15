@@ -324,8 +324,8 @@ class Workspace:
         """
         onto = {old: new for new, old in enumerate(moved, start=1)}
         touched = 0
-        for doc_id, markdown in self.documents().items():
-            path = sidecar.sidecar_path(markdown)
+        for doc_id in self.documents():
+            path = self.sidecar_for(doc_id)
             annotations = sidecar.load(path)
             changed = False
             for ann in annotations:
@@ -334,7 +334,7 @@ class Workspace:
                     ann.color = onto[slot]
                     changed = True
             if changed:
-                sidecar.save(path, annotations)
+                self._save_sidecar(path, annotations)
                 touched += 1
         return touched
 
@@ -393,9 +393,18 @@ class Workspace:
         )
         return names
 
+    def sidecar_for(self, doc_id: str) -> Path:
+        """Where one document's annotations are kept: beside it, in a knowledge base."""
+        return sidecar.sidecar_path(self.markdown_for(doc_id))
+
+    @staticmethod
+    def _save_sidecar(path: Path, annotations: list[Annotation]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        sidecar.save(path, annotations)
+
     def annotations_for(self, doc_id: str) -> list[Annotation]:
         md = self.markdown_for(doc_id)
-        annotations = sidecar.load(sidecar.sidecar_path(md))
+        annotations = sidecar.load(self.sidecar_for(doc_id))
         known = {a.id for a in annotations}
         _, inline = obsidian_inline.extract(md.read_text(encoding="utf-8"))
         annotations.extend(a for a in inline if a.id not in known)
@@ -438,7 +447,7 @@ class Workspace:
 
     def save(self, doc_id: str, annotations: list[Annotation]) -> None:
         """Persist the sidecar and regenerate the HTML so a reload matches."""
-        sidecar.save(sidecar.sidecar_path(self.markdown_for(doc_id)), annotations)
+        self._save_sidecar(self.sidecar_for(doc_id), annotations)
         self.write_html(doc_id, annotations)
 
     def rebuild_all(self) -> None:
@@ -1112,11 +1121,14 @@ class ManagedWorkspace(Workspace):
     def repo_for(self, doc_id: str) -> Path:
         return git_checkpoint.repo_root(self.markdown_for(doc_id).parent)
 
+    def sidecar_for(self, doc_id: str) -> Path:
+        self.markdown_for(doc_id)  # 404s an unknown document, as the base does
+        return managed_files.sidecar_for(self.home, doc_id)
+
     def files_of(self, doc_id: str) -> list[Path]:
-        # Not the page: it lives under mdweave's home, outside whatever
-        # repository the document is in.
-        markdown = self.markdown_for(doc_id)
-        return [markdown, sidecar.sidecar_path(markdown)]
+        # The prose alone. The page and the comments both live under
+        # mdweave's home, outside whatever repository the document is in.
+        return [self.markdown_for(doc_id)]
 
     # --- the list, in place of the tree operations -------------------------
 
@@ -1136,6 +1148,7 @@ class ManagedWorkspace(Workspace):
         except ValueError as exc:
             raise ApiError(HTTPStatus.BAD_REQUEST, str(exc))
         managed_files.add_many(self.home, paths)
+        managed_files.take_sidecars(self.home, paths)
         return [managed_files.doc_id(p) for p in paths]
 
     def link_document(
@@ -1145,7 +1158,8 @@ class ManagedWorkspace(Workspace):
         return self.adopt(source)[0], managed_files.absolute(source)
 
     def delete_document(self, doc_id: str) -> None:
-        """Stop managing a document. The file and its comments stay on disk."""
+        """Stop managing a document. The file stays on disk, and its comments
+        stay in the home, so adding it again brings them back."""
         markdown = self.markdown_for(doc_id)
         managed_files.remove(self.home, markdown)
         (self.outputs / f"{doc_id}.html").unlink(missing_ok=True)
@@ -1157,13 +1171,12 @@ class ManagedWorkspace(Workspace):
 
         `mv` semantics: a target that is an existing directory receives the
         source inside it, under its own name; anything else is the new path.
-        Nothing is overwritten. A file takes its `.ann.json` along, since the
-        sidecar's name is derived from the markdown's and a file moved
-        without it loses every comment. A folder takes everything in it.
+        Nothing is overwritten. A folder takes everything in it.
 
         Everything recorded about the old paths follows: the list, the
-        captions, the order, and the pages, which are named after ids that
-        no longer exist.
+        comments, the captions, the order, and the pages. The comments and
+        pages live in the home under the document's id, which is its path, so
+        a move that left them behind would lose every comment on it.
 
         If the source is already gone and the target is there, the move has
         been made by hand -- a plain `mv`, an editor's rename -- and only the
@@ -1199,25 +1212,38 @@ class ManagedWorkspace(Workspace):
         if not is_folder and not dst.name.lower().endswith(".md"):
             raise ValueError(f"{dst.name!r} would not be a .md file, so not a document")
 
+        if on_disk and (dst.exists() or dst.is_symlink()):
+            raise ValueError(f"{dst} already exists")
+
+        moved = [(p, dst if p == src else dst / p.relative_to(src)) for p in moving]
+        # A stray `.ann.json` still beside a file would otherwise be carried
+        # off with a folder and lost track of; bring it home first.
         if on_disk:
-            if dst.exists() or dst.is_symlink():
-                raise ValueError(f"{dst} already exists")
-            beside = None if is_folder else sidecar.sidecar_path(src)
-            if beside is not None and beside.exists():
-                if sidecar.sidecar_path(dst).exists():
-                    raise ValueError(f"{sidecar.sidecar_path(dst)} already exists")
-            else:
-                beside = None
+            managed_files.take_sidecars(self.home, moving)
+        comments = [
+            (managed_files.sidecar_for(self.home, managed_files.doc_id(old)),
+             managed_files.sidecar_for(self.home, managed_files.doc_id(new)))
+            for old, new in moved
+        ]
+        comments = [(a, b) for a, b in comments if a.exists()]
+        # Checked before anything moves. Comments recorded for a path with no
+        # file at it belong to a document that was there once; they are not
+        # this one's to replace.
+        for _, taken in comments:
+            if taken.exists():
+                raise ValueError(f"comments are already recorded for that path, at {taken}")
+
+        if on_disk:
             dst.parent.mkdir(parents=True, exist_ok=True)
             # `shutil.move`, not `rename`: the two ends may be on different
             # filesystems, and a home directory and a scratch disk often are.
             shutil.move(str(src), str(dst))
-            if beside is not None:
-                shutil.move(str(beside), str(sidecar.sidecar_path(dst)))
 
-        moved = [(p, dst if p == src else dst / p.relative_to(src)) for p in moving]
         onto = dict(moved)
         managed_files.save(self.home, [onto.get(p, p) for p in listed])
+        for old, new in comments:
+            new.parent.mkdir(parents=True, exist_ok=True)
+            old.rename(new)
 
         for old, _ in moved:
             (self.outputs / f"{managed_files.doc_id(old)}.html").unlink(missing_ok=True)

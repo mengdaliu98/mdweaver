@@ -146,27 +146,35 @@ longer than an id relative to the shared folder, on purpose: the shared folder
 moves whenever a file from elsewhere is added, and an id that moved with it
 would rename every page, label and link hanging off the old one.
 
-**What lives where.** Comments are written beside the file as `.ann.json`, as
-in a knowledge base; edits go to the file itself. Everything else is kept in
-`~/.mdweave` (`MDWEAVE_HOME` overrides): `managed.json` is the list, the pages
-are rendered into `html_outputs/`, and the dotfiles a knowledge base keeps in
-`markdown_inputs/` -- order, labels, colors, comment types, Claude actions --
-sit beside them. Adopting a file from a codebase should not leave a
-`.mdweave-theme.json` next to it.
+**What lives where.** Edits go to the file itself, and nothing else is
+written beside it. Everything mdweave keeps is in `~/.mdweave`
+(`MDWEAVE_HOME` overrides): `managed.json` is the list, the pages are
+rendered into `html_outputs/`, comments are kept in `annotations/` -- laid out
+like the pages, so `/home/me/proj/design.md` has
+`annotations/home/me/proj/design.ann.json` -- and the dotfiles a knowledge base
+keeps in `markdown_inputs/` (order, labels, colors, comment types, Claude
+actions) sit beside them. A knowledge base keeps sidecars beside the prose
+because they travel with it in git; a file adopted from a codebase has no such
+reason, and a `.ann.json` turning up in somebody's repository is litter.
+
+Comments used to be written beside the file. Any `.ann.json` still there is
+moved into the home the next time `mdweave serve` adds a file, or when that
+file is dropped on the sidebar; one already in the home is never overwritten.
 
 **Nothing rearranges the filesystem.** In a knowledge base the tree *is* the
 directory, so a drag is a move and the folder buttons `mkdir`. Here the tree is
 a view of directories that belong to other things, so new document, new
 folder, import and folder delete are not offered, and a drag into another
 folder is refused. Reordering within a folder works. The bin becomes **Stop
-managing**: the file leaves the list and stays on disk, comments and all.
+managing**: the file leaves the list and stays on disk, and its comments stay
+in the home, so adding it again brings them back.
 Dropping a `.md` from the desktop onto the panel adds it to the list.
 
 **No git unless you ask.** Each file may be in a repository of its own or in
 none, so auto-commit and the background pull stay off whatever the
 environment says, and there is no pull button. **Checkpoint** still works: it
-commits the file and its `.ann.json` in whichever repository holds the file,
-and pushes. A Claude job edits the file in place, with its
+commits the file in whichever repository holds it, and pushes. The comments
+are in the home, outside that repository, and stay out of the commit. A Claude job edits the file in place, with its
 folder opened to the session, and does not commit.
 
 `mdweave managed` lists the files, marking any that have gone missing, and
@@ -176,12 +184,14 @@ switch does not lose it.
 
 **Moving them.** `mdweave mv <from> <to>` is `mv` for managed documents: it
 moves the file, or a folder holding some, and then brings along everything
-recorded about the old paths -- the list, captions, order, and the pages,
-which are named after ids that no longer exist. A target that is an existing
-folder receives the source inside it under its own name; anything else is the
-new path, and missing parent folders are made. A file takes its `.ann.json`,
-since a markdown file moved without its sidecar loses every comment. Nothing
-is overwritten, and a file has to keep a `.md` name to stay a document. If a
+recorded about the old paths -- the list, comments, captions, order, and the
+pages. Comments and pages are filed in the home under the document's path, so
+a move that left them behind would lose every comment on it. A target that is
+an existing folder receives the source inside it under its own name; anything
+else is the new path, and missing parent folders are made. Nothing is
+overwritten -- including comments recorded for the target path by a document
+that used to be there -- and a file has to keep a `.md` name to stay a
+document. If a
 managed server is up it re-renders, and the new links are printed.
 
 Moved it by hand already? Run the same `mdweave mv` afterwards: when the

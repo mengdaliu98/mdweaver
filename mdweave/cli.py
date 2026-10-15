@@ -573,6 +573,15 @@ def cmd_serve_managed(args) -> int:
         print(f"error: {refused}", file=sys.stderr)
         return 1
 
+    # Comments used to be written beside the files. Anything still there --
+    # for these files or ones listed earlier -- moves into the home now.
+    home = managed.home()
+    homed = managed.take_sidecars(home, [*managed.load(home), *paths])
+    if homed:
+        print(f"mdweave: moved {len(homed)} .ann.json file"
+              f"{'s' if len(homed) != 1 else ''} from beside the documents "
+              f"into {home / 'annotations'}")
+
     if running:
         listed = set(running.get("documents") or [])
         try:
@@ -592,7 +601,6 @@ def cmd_serve_managed(args) -> int:
             print(document_url(args.host, args.port, doc))
         return 0
 
-    home = managed.home()
     fresh = managed.add_many(home, paths)
     print(f"mdweave: {_managing(target, paths, len(fresh))}")
 

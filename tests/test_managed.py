@@ -292,8 +292,65 @@ def test_the_bin_stops_managing_and_leaves_the_file_and_comments(server, home, f
     assert status == 200
     assert files["two"] not in managed.load(home)
     assert files["two"].exists()
-    assert files["two"].with_name("file2.ann.json").exists()
+    assert managed.sidecar_for(home, doc(files["two"])).exists()
     assert not (workspace.outputs / f"{doc(files['two'])}.html").exists()
+
+    # Added again, the comment is still there.
+    status, _ = call(base, "/api/documents/link", {"path": str(files["two"])})
+    assert status == 201
+    assert [a.thread[0].body for a in workspace.annotations_for(doc(files["two"]))] == [
+        "keep me"
+    ]
+
+
+def test_comments_are_kept_in_the_home_not_beside_the_file(server, home, files):
+    base, workspace = server
+    status, _ = call(base, "/api/annotations",
+                     {"document": doc(files["one"]), "quote": "Some prose",
+                      "body": "where does this go"})
+    assert status == 201
+
+    assert managed.sidecar_for(home, doc(files["one"])).exists()
+    assert sorted(p.name for p in files["one"].parent.iterdir()) == ["file1.md"]
+    # And Checkpoint, which commits in the file's own repository, offers git
+    # only what is in that repository.
+    assert workspace.files_of(doc(files["one"])) == [files["one"]]
+
+
+def test_a_comment_file_left_beside_a_document_is_brought_home(server, home, files):
+    base, workspace = server
+    files["three"].with_name("file3.ann.json").write_text(
+        '{"version": 1, "annotations": []}'
+    )
+    status, _ = call(base, "/api/documents/link", {"path": str(files["three"])})
+
+    assert status == 201
+    assert not files["three"].with_name("file3.ann.json").exists()
+    assert managed.sidecar_for(home, doc(files["three"])).exists()
+
+
+def test_serve_brings_home_comment_files_for_documents_already_listed(
+    server, home, files, capsys
+):
+    base, _ = server
+    port = int(base.rsplit(":", 1)[1])
+    files["one"].with_name("file1.ann.json").write_text("{}")
+
+    assert cli.main(["serve", str(files["three"]), "--port", str(port)]) == 0
+    assert not files["one"].with_name("file1.ann.json").exists()
+    assert managed.sidecar_for(home, doc(files["one"])).exists()
+    assert "moved 1 .ann.json file" in capsys.readouterr().out
+
+
+def test_one_already_home_is_never_overwritten_by_a_stray(home, files):
+    target = managed.sidecar_for(home, doc(files["one"]))
+    target.parent.mkdir(parents=True)
+    target.write_text("home")
+    files["one"].with_name("file1.ann.json").write_text("stray")
+
+    assert managed.take_sidecars(home, [files["one"]]) == []
+    assert target.read_text() == "home"
+    assert files["one"].with_name("file1.ann.json").read_text() == "stray"
 
 
 def test_editing_writes_the_real_file(server, files):
@@ -476,15 +533,51 @@ def test_removing_a_folder_takes_off_everything_under_it(home, folder, files, ca
 
 def test_mv_moves_a_file_and_its_comments_and_the_record(home, files, capsys):
     managed.add(home, files["one"])
-    files["one"].with_name("file1.ann.json").write_text('{"version": 1}')
+    comments = managed.sidecar_for(home, doc(files["one"]))
+    comments.parent.mkdir(parents=True)
+    comments.write_text('{"version": 1}')
     target = files["one"].parents[2] / "elsewhere" / "renamed.md"
 
     assert cli.main(["mv", str(files["one"]), str(target), "--port", "1"]) == 0
 
     assert target.exists() and not files["one"].exists()
-    assert target.with_name("renamed.ann.json").exists()
+    assert managed.sidecar_for(home, doc(target)).read_text() == '{"version": 1}'
+    assert not comments.exists()
+    assert not target.with_name("renamed.ann.json").exists()
     assert managed.load(home) == [target]
     assert f"{files['one']} -> {target}" in capsys.readouterr().out
+
+
+def test_mv_a_folder_carries_the_comments_of_everything_in_it(home, files):
+    managed.add(home, files["one"])
+    managed.add(home, files["two"])
+    path = managed.sidecar_for(home, doc(files["one"]))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("one")
+    # One still beside its file, from before comments moved home.
+    files["two"].with_name("file2.ann.json").write_text("two")
+    a_folder = files["one"].parents[1]
+    renamed = a_folder.with_name("Z")
+
+    assert cli.main(["mv", str(a_folder), str(renamed), "--port", "1"]) == 0
+
+    assert managed.sidecar_for(home, doc(renamed / "a" / "file1.md")).read_text() == "one"
+    assert managed.sidecar_for(home, doc(renamed / "b" / "file2.md")).read_text() == "two"
+    assert not (renamed / "b" / "file2.ann.json").exists()
+
+
+def test_mv_will_not_replace_comments_recorded_for_the_target(home, files, capsys):
+    managed.add(home, files["one"])
+    target = files["one"].with_name("taken.md")
+    for path, text in ((files["one"], "mine"), (target, "someone else's")):
+        sidecar = managed.sidecar_for(home, doc(path))
+        sidecar.parent.mkdir(parents=True, exist_ok=True)
+        sidecar.write_text(text)
+
+    assert cli.main(["mv", str(files["one"]), str(target), "--port", "1"]) == 1
+    assert "comments are already recorded" in capsys.readouterr().err
+    assert files["one"].exists() and not target.exists()
+    assert managed.sidecar_for(home, doc(target)).read_text() == "someone else's"
 
 
 def test_mv_into_an_existing_folder_keeps_the_name(home, files):
