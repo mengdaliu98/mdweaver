@@ -200,11 +200,17 @@
     if (!link) return;
 
     /* Destructive and not undoable, so it asks -- and says what goes, since
-     * the comments and the rendered page are not visible in the row. */
+     * the comments and the rendered page are not visible in the row. A
+     * managed file only leaves the list, and the question says that instead:
+     * "delete" about a file in somebody's codebase would be read literally. */
     var sure = window.confirm(
-      'Delete "' +
-        labelOf(link) +
-        '"?\n\nThe document, its comments, and its page are removed. This cannot be undone.'
+      "managed" in button.dataset
+        ? 'Stop managing "' +
+            labelOf(link) +
+            '"?\n\nThe file and its comments stay where they are on disk; it only leaves this list.'
+        : 'Delete "' +
+            labelOf(link) +
+            '"?\n\nThe document, its comments, and its page are removed. This cannot be undone.'
     );
     if (!sure) return;
 
@@ -493,6 +499,14 @@
   function apply(moved, place) {
     if (swallowsItself(moved, place)) {
       ui.toast("A folder cannot be moved inside itself", "error");
+      return;
+    }
+
+    /* Managed files are where they are on disk, and the tree is a view of
+     * that. Reordering a folder is a preference and fine; putting a row in
+     * another folder would be a move the server refuses, so say so here. */
+    if (sidebar.classList.contains("sidebar--managed") && place.parent !== moved.parent) {
+      ui.toast("Managed documents stay where they are on disk", "error");
       return;
     }
 

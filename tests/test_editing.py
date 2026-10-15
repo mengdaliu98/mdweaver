@@ -658,11 +658,22 @@ def test_the_card_offsets_in_css_are_expressed_with_the_shared_variables():
 
 # --- the selection menu ----------------------------------------------------
 
-def test_the_menu_offers_both_kinds_in_every_colour():
+def test_the_menu_offers_every_kind_in_every_colour():
     """One click, not two: the colour and the kind are chosen together."""
     source = (ASSETS / "annotate.js").read_text(encoding="utf-8")
 
     assert 'toolbarRow("comment"' in source and 'toolbarRow("highlight"' in source
+    assert 'toolbarRow("underline"' in source
+
+
+def test_each_bare_row_has_its_own_eraser():
+    """The eraser beside the inks takes off underlines, and only those."""
+    source = (ASSETS / "annotate.js").read_text(encoding="utf-8")
+    assert 'highlight: "Remove highlighting", underline: "Remove underlines"' in source
+    assert 'data-erase="' in source
+    assert "eraseHighlight(selector, swatch.dataset.erase)" in source
+    body = source.split("function eraseHighlight(")[1].split("\n  }")[0]
+    assert "kind: kind," in body
     assert 'data-kind="' in source and 'data-color="' in source
     # The swatch carries the colour class, so it is painted as what it makes.
     assert '"swatch swatch--" + color' in source or "swatch--' + color" in source
@@ -673,9 +684,20 @@ def test_a_highlight_skips_the_composer_entirely():
     its own sake."""
     source = (ASSETS / "annotate.js").read_text(encoding="utf-8")
     body = source.split("function saveHighlight(")[1].split("\n  }")[0]
-    assert '"kind": "highlight"' in body or 'kind: "highlight"' in body
+    # The kind is the swatch's row -- highlight or underline -- passed through.
+    assert "function saveHighlight(selector, color, kind)" in source
+    assert "kind: kind," in body
+    assert "saveHighlight(selector, color, swatch.dataset.kind)" in source
     assert "openComposer" not in body
     assert "hl--has-note" not in body, "a highlight has no card to point at"
+
+
+def test_a_fresh_underline_wears_the_class_the_renderer_gives_it():
+    """inject.py adds `hl--underline`; a mark drawn from the API answer
+    without it would be a highlight until the next reload."""
+    source = (ASSETS / "annotate.js").read_text(encoding="utf-8")
+    body = source.split("function saveHighlight(")[1].split("\n  }")[0]
+    assert '"underline" ? " hl--underline"' in body
 
 
 def test_the_chosen_colour_reaches_the_composer():

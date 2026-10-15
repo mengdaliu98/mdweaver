@@ -77,6 +77,86 @@ neither can do anything, so `start` says so and prints the URL — forward port
 `--port` moves both commands off 8765, and `--no-open` prints the URL without
 reaching for a browser.
 
+## Managed documents: one file at a time
+
+The other way in. Instead of a knowledge base directory, hand `serve` one
+markdown file from anywhere on the machine:
+
+```bash
+mdweave serve /abs/path/to/design.md --monolithic
+```
+
+It goes on a list mdweave keeps, everything on the list is served, and the
+file's link is printed:
+
+```
+http://127.0.0.1:8765/abs/path/to/design.html
+```
+
+Run it again with another file and, if that server is still up, the file is
+handed to it and the command returns straight away with the new link -- one
+list, one server. If nothing is listening, the command becomes the server, in
+the foreground, as `serve` always has. A knowledge base server already on the
+port is refused rather than added to, since adding to that would put a symlink
+in it; pass `--port` to run both.
+
+**The sidebar is the least of the filesystem that holds the files.** Folders
+every file shares are left out:
+
+```
+root/A/a/file1.md          a/
+root/A/b/file2.md   ->       file1
+                           b/
+                             file2
+
+add root/B/b/file3.md      A/
+                    ->       a/
+                               file1
+                             b/
+                               file2
+                           B/
+                             b/
+                               file3
+```
+
+With two files under `root/A`, only `a` and `b` tell them apart, so the tree
+starts there. Add one under `root/B` and `A` and `B` are needed as well. The
+folder that was left out is the title's tooltip. Rows are called what the
+filesystem calls them -- `README`, not `Readme` -- though the pencil still sets
+a caption.
+
+**A document's id is its absolute path**, less the slash and the `.md`. That is
+longer than an id relative to the shared folder, on purpose: the shared folder
+moves whenever a file from elsewhere is added, and an id that moved with it
+would rename every page, label and link hanging off the old one.
+
+**What lives where.** Comments are written beside the file as `.ann.json`, as
+in a knowledge base; edits go to the file itself. Everything else is kept in
+`~/.mdweave` (`MDWEAVE_HOME` overrides): `managed.json` is the list, the pages
+are rendered into `html_outputs/`, and the dotfiles a knowledge base keeps in
+`markdown_inputs/` -- order, labels, colors, comment types, Claude actions --
+sit beside them. Adopting a file from a codebase should not leave a
+`.mdweave-theme.json` next to it.
+
+**Nothing rearranges the filesystem.** In a knowledge base the tree *is* the
+directory, so a drag is a move and the folder buttons `mkdir`. Here the tree is
+a view of directories that belong to other things, so new document, new
+folder, import and folder delete are not offered, and a drag into another
+folder is refused. Reordering within a folder works. The bin becomes **Stop
+managing**: the file leaves the list and stays on disk, comments and all.
+Dropping a `.md` from the desktop onto the panel adds it to the list.
+
+**No git unless you ask.** Each file may be in a repository of its own or in
+none, so auto-commit and the background pull stay off whatever the
+environment says, and there is no pull button. **Checkpoint** still works: it
+commits the file and its `.ann.json` in whichever repository holds the file,
+and pushes. A Claude job (`--monolithic`) edits the file in place, with its
+folder opened to the session, and does not commit.
+
+`mdweave managed` lists the files, marking any that have gone missing, and
+`mdweave managed --remove <path>` takes one off. A missing file stays listed
+and is skipped, so a branch switch does not lose it.
+
 ## The sidebar
 
 Every page carries a VS Code style explorer over `knowledge_base/markdown_inputs`,
@@ -625,17 +705,36 @@ Three details the seam between visible text and source forces:
   stray asterisk, and splitting a run in two is a bigger promise than "make
   this plain" makes.
 
-**Annotations** — **Comment** and **Highlight** — each showing the six slots of
-the active scheme. The color *is* the button, so
-either is one click rather than "make it, then recolor it". A highlight has
+**Annotations** — **Comment**, **Highlight** and **Underline**. Comment and
+Highlight show the six slots of the active scheme; Underline shows three inks,
+black, blue and red. The color *is* the button, so
+each is one click rather than "make it, then recolor it". A highlight has
 nothing to type and so skips the composer entirely; a comment opens one,
 already in the color you picked.
+
+An underline is a highlight drawn as a rule under the text instead of a fill
+behind it — `"kind": "underline"` in the sidecar, `hl--underline` on the
+mark. Its inks are the one exception to [a color is a slot](#a-color-is-a-slot):
+fixed hues, stored by name (`"color": "red"`) and drawn as `hl--ink-red`, so a
+scheme switch or a reorder never touches one. Red is what a pen underlines
+in; letting a pastel scheme turn it into peach would lose what it meant.
+`"blue"` is also a legacy name for slot 3, so the model reads an underline's
+color as an ink *before* trying it as a slot (`Annotation.ink`). The API
+takes only the three names for an underline and only a slot for anything else.
+
+Everything below about painting applies to both, and they absorb each other:
+underlining highlighted text swaps the fill for a rule rather than stacking
+the two, because two marks on one span are two annotations claiming the same
+text, which the renderer refuses as an overlap.
 
 Pressing a color means *make this selection that color*, whatever is already
 underneath, with no exceptions — so re-coloring a highlight, or painting over
 a patch of mixed ones, both leave a single clean highlight.
 
-Removing one is the **eraser** at the end of the Highlight row. It used to be
+Removing one is the **eraser** at the end of its row: the one on the
+Highlight row takes off highlights, the one on the Underline row takes off
+underlines, and neither touches the other kind. (`/api/annotations/erase` with
+no `kind` clears both.) It used to be
 a second press of the color the text already was, which made one gesture mean
 two things depending on state the reader could not reliably see: press a
 color on text that happened to be it and the highlight vanished. A press
@@ -706,8 +805,8 @@ block.
 | field    | meaning                                                            |
 | -------- | ------------------------------------------------------------------ |
 | `id`     | stable identifier; also the DOM id (`hl-<id>`, `note-<id>`)         |
-| `kind`   | `comment` renders a card; `highlight` is a bare highlight           |
-| `color`  | a token name, or any raw CSS color                                  |
+| `kind`   | `comment` renders a card; `highlight` and `underline` are bare marks |
+| `color`  | a slot, any raw CSS color, or for an underline an ink name          |
 | `status` | `open` or `resolved` (resolved fades the highlight and the note)    |
 | `thread` | list of `{author, at, body}` — renders as a stacked conversation    |
 | `tags`   | optional pills at the foot of the card                              |
@@ -857,6 +956,9 @@ mdweave build <file.md|dir> -o <outdir>   # render; --strict fails on a lost anc
                                           # a dir builds recursively; one file
                                           # still gets the full sidebar
 mdweave serve [--port N] [--no-build]     # serve in the foreground, no browser
+mdweave serve <file.md> [--monolithic]    # add a file to the managed list, serve
+                                          # the list, print the file's link
+mdweave managed [--remove <file.md>]      # list the managed files, or drop one
 mdweave extract <file.md> [--in-place]    # Obsidian inline comments -> sidecar JSON
 mdweave fingerprint                       # hash of the installed source
 ```

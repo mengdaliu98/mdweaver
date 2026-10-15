@@ -4,6 +4,9 @@ The two commands for everyday use:
 
     mdweave start                        render everything, serve it, open it
     mdweave stop                         shut the server down
+    mdweave serve <file.md> [--monolithic]
+                                         add one file to the managed list, serve
+                                         the list, and print the file's link
 
 The rest are the pieces those are built from, useful on their own:
 
@@ -11,6 +14,7 @@ The rest are the pieces those are built from, useful on their own:
     mdweave build    <doc.md> -o <dir>   render annotated HTML + CSS
     mdweave build    <dir>    -o <dir>   render every .md in a directory
     mdweave serve    [--port N]          serve in the foreground, no browser
+    mdweave managed  [--remove <file>]   list the managed files, or take one off
     mdweave fingerprint                  hash of the installed source, for staleness checks
 """
 
@@ -123,6 +127,14 @@ def main(argv: list[str] | None = None) -> int:
         "serve", help="serve the rendered HTML and accept comments from the browser"
     )
     p_serve.add_argument(
+        "path",
+        nargs="?",
+        type=Path,
+        default=None,
+        help="a .md file to add to the managed list; serves that list instead "
+        "of the knowledge base, and prints the file's link",
+    )
+    p_serve.add_argument(
         "-i", "--indir", type=Path, default=default_indir(), help="markdown directory"
     )
     p_serve.add_argument(
@@ -148,6 +160,19 @@ def main(argv: list[str] | None = None) -> int:
         default="bypassPermissions",
         help="what the sessions may do (with --monolithic)",
     )
+
+    p_managed = sub.add_parser(
+        "managed", help="list the files `mdweave serve <path>` has added"
+    )
+    p_managed.add_argument(
+        "--remove",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="take a file off the list; the file itself is untouched",
+    )
+    p_managed.add_argument("--port", type=int, default=8765)
+    p_managed.add_argument("--host", default="127.0.0.1")
 
     p_rec = sub.add_parser(
         "reconcile",
@@ -223,6 +248,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_extract(args)
     if args.command == "serve":
         return cmd_serve(args)
+    if args.command == "managed":
+        return cmd_managed(args)
     if args.command == "reconcile":
         return cmd_reconcile(args)
     if args.command == "agent":
@@ -453,6 +480,9 @@ def cmd_stop(args) -> int:
 def cmd_serve(args) -> int:
     from .serve import refuse_insecure_bind, serve
 
+    if args.path is not None:
+        return cmd_serve_managed(args)
+
     # Before anything else, including the build: if this bind is not going to
     # be allowed, say so now rather than after rendering the whole set.
     refusal = refuse_insecure_bind(args.host)
@@ -478,6 +508,129 @@ def cmd_serve(args) -> int:
         model=args.model,
         permission_mode=args.permission_mode,
     )
+
+
+
+def _managed_server(host: str, port: int) -> tuple[dict | None, str]:
+    """The managed server already on this port, or why that port is no good."""
+    from . import daemon
+
+    running = daemon.health(host, port)
+    if running is None:
+        return None, ""
+    if not running.get("managed"):
+        # Adding to it would make a symlink in the knowledge base, which is
+        # a different thing entirely from what was asked.
+        return None, (
+            f"port {port} is serving the knowledge base, not managed documents\n"
+            "  pass --port to serve them somewhere else"
+        )
+    return running, ""
+
+
+def cmd_serve_managed(args) -> int:
+    """Add one file to the managed list, and say where to read it.
+
+    If a managed server is already up on this port it is handed the file and
+    this returns at once: the list is one per machine, so a second server
+    would only be a second view of it on a port nobody is looking at. If
+    nothing is listening, this becomes the server, in the foreground, the way
+    `serve` always has.
+    """
+    from . import daemon, managed
+    from .serve import ManagedWorkspace, document_url, refuse_insecure_bind, serve
+
+    refusal = refuse_insecure_bind(args.host)
+    if refusal:
+        print(f"error: {refusal}", file=sys.stderr)
+        return 1
+
+    try:
+        path = managed.check(args.path)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    doc = managed.doc_id(path)
+
+    running, refused = _managed_server(args.host, args.port)
+    if refused:
+        print(f"error: {refused}", file=sys.stderr)
+        return 1
+
+    if running:
+        try:
+            daemon.post(args.host, args.port, "/api/documents/link", {"path": str(path)})
+        except RuntimeError as exc:
+            print(f"error: the server on port {args.port} refused {path}: {exc}",
+                  file=sys.stderr)
+            return 1
+        if daemon.is_stale(running):
+            print("mdweave: note -- the running server is older than the code on "
+                  "disk; restart it to pick the change up", file=sys.stderr)
+        print(f"mdweave: managing {path} (already serving on port {args.port})")
+        print(document_url(args.host, args.port, doc))
+        return 0
+
+    home = managed.home()
+    _, added = managed.add(home, path)
+    print(f"mdweave: {'now managing' if added else 'already managing'} {path}")
+
+    workspace = ManagedWorkspace(
+        inputs=Path("/"), outputs=managed.outputs(home), home=home
+    )
+    for gone in workspace.missing():
+        print(f"warning: {gone} is on the list but not on disk -- skipped",
+              file=sys.stderr)
+    if not args.no_build:
+        workspace.rebuild_all()
+
+    return serve(
+        workspace.inputs,
+        workspace.outputs,
+        host=args.host,
+        port=args.port,
+        monolithic=args.monolithic,
+        model=args.model,
+        permission_mode=args.permission_mode,
+        workspace=workspace,
+        focus=doc,
+    )
+
+
+def cmd_managed(args) -> int:
+    """List the managed files, or take one off the list."""
+    from . import daemon, managed
+
+    home = managed.home()
+    if args.remove is None:
+        paths = managed.load(home)
+        if not paths:
+            print("mdweave: nothing managed yet -- add a file with "
+                  "`mdweave serve <path>`")
+        for path in paths:
+            print(path if path.is_file() else f"{path}  (missing)")
+        return 0
+
+    path = managed.absolute(args.remove)
+    if path not in managed.load(home):
+        print(f"error: {path} is not on the list", file=sys.stderr)
+        return 1
+
+    # Through the server when one is up, so every page's sidebar loses the
+    # row now rather than at the next restart.
+    running, _ = _managed_server(args.host, args.port)
+    if running and path.is_file():
+        try:
+            daemon.post(args.host, args.port, "/api/documents/delete",
+                        {"document": managed.doc_id(path)})
+        except RuntimeError as exc:
+            print(f"error: the server on port {args.port} refused: {exc}",
+                  file=sys.stderr)
+            return 1
+    else:
+        managed.remove(home, path)
+    print(f"mdweave: no longer managing {path} (the file is untouched)")
+    return 0
 
 
 if __name__ == "__main__":

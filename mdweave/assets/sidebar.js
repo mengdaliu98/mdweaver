@@ -530,6 +530,12 @@
    * mentioned is a push someone discovers later. */
   function describe(linked) {
     var first = linked[0];
+    // A managed list adopts the file itself; there is no link and no push.
+    if (first.managed) {
+      return linked.length > 1
+        ? "Added " + linked.length + " documents to the list."
+        : "Added " + first.linked + " to the list.";
+    }
     var what =
       linked.length > 1
         ? linked.length + " documents"

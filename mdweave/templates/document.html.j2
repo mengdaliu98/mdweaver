@@ -100,7 +100,7 @@
 <body data-document="{{ doc_id }}" data-prefix="{{ prefix }}">
 <div class="shell">
 
-{{ panel.sidebar(tree, prefix, doc_id) }}
+{{ panel.sidebar(tree, prefix, doc_id, tree_base, managed) }}
 
   {# Drag to set the panel width. A separator rather than a button: it has a
      value along one axis, which is also why the arrow keys work on it. #}

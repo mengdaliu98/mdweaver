@@ -187,7 +187,7 @@
 
   /* --- small UI pieces --------------------------------------------------- */
 
-  /* Two rows, the palette on each. Picking a color *is* the action, so a
+  /* Three rows, the palette on each. Picking a color *is* the action, so a
    * highlight is one click rather than "highlight, then recolor" -- and the
    * color you are choosing is shown in the color it will be. */
   var COMMENT_ICON =
@@ -196,6 +196,9 @@
   var HIGHLIGHT_ICON =
     '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">' +
     '<path fill="currentColor" d="M10.6 1.9 14.1 5.4 7.4 12.1H3.9V8.6zM2.4 13.4h11.2v1.4H2.4z"/></svg>';
+  var UNDERLINE_ICON =
+    '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">' +
+    '<path fill="currentColor" d="M4.2 1.8h1.6v5.4a2.2 2.2 0 0 0 4.4 0V1.8h1.6v5.4a3.8 3.8 0 0 1-7.6 0zM2.8 13h10.4v1.5H2.8z"/></svg>';
 
   /* The eraser. Highlights used to be removed by pressing the color they
    * already were, which meant a color press had to first work out what was
@@ -210,23 +213,34 @@
     '<svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true">' +
     '<path fill="currentColor" d="M9.1 2.2 14 7.1a1.1 1.1 0 0 1 0 1.6l-4.3 4.3H13v1.3H6.6l-4.3-4.3a1.1 1.1 0 0 1 0-1.6l5.2-5.2a1.1 1.1 0 0 1 1.6 0ZM4.6 8.7l3.1 3.1 1.2-1.2-3.1-3.1z"/></svg>';
 
+  /* An underline is not painted from the scheme: three fixed inks, by name.
+   * model.py's UNDERLINE_INKS is the other copy, and the server refuses
+   * anything not on it. */
+  var INKS = ["black", "blue", "red"];
+
+  var ERASES = { highlight: "Remove highlighting", underline: "Remove underlines" };
+
   function toolbarRow(kind, icon, label) {
-    var dots = COLORS.map(function (color) {
+    var inked = kind === "underline";
+    var dots = (inked ? INKS : COLORS).map(function (color) {
+      var name = inked ? color : paletteName(color);
       return (
-        '<button type="button" class="selection-toolbar__swatch swatch swatch--' + color +
+        '<button type="button" class="selection-toolbar__swatch swatch swatch--' +
+        (inked ? "ink-" : "") + color +
         '" data-kind="' + kind + '" data-color="' + color + '"' +
-        ' title="' + label + " in " + paletteName(color).toLowerCase() + '"' +
-        ' aria-label="' + label + " in " + paletteName(color) + '"></button>'
+        ' title="' + label + " in " + name.toLowerCase() + '"' +
+        ' aria-label="' + label + " in " + name + '"></button>'
       );
     }).join("");
-    // Only on the highlight row: a comment's color is chosen when it is
-    // written, and there is nothing to erase before it exists.
-    var eraser =
-      kind === "highlight"
-        ? '<button type="button" class="selection-toolbar__swatch selection-toolbar__eraser"' +
-          ' data-kind="erase" title="Remove highlighting"' +
-          ' aria-label="Remove highlighting">' + ERASER_ICON + "</button>"
-        : "";
+    // Not on the comment row: a comment's color is chosen when it is
+    // written, and there is nothing to erase before it exists. Each bare row
+    // has its own, and it takes off only its own kind -- the eraser beside
+    // the inks leaves the fills alone.
+    var eraser = ERASES[kind]
+      ? '<button type="button" class="selection-toolbar__swatch selection-toolbar__eraser"' +
+        ' data-kind="erase" data-erase="' + kind + '" title="' + ERASES[kind] + '"' +
+        ' aria-label="' + ERASES[kind] + '">' + ERASER_ICON + "</button>"
+      : "";
     return (
       '<div class="selection-toolbar__row" role="group" aria-label="' + label + '">' +
       '<span class="selection-toolbar__what">' + icon + " " + label + "</span>" +
@@ -280,7 +294,8 @@
     formatRow() +
     '<div class="selection-toolbar__split" aria-hidden="true"></div>' +
     toolbarRow("comment", COMMENT_ICON, "Comment") +
-    toolbarRow("highlight", HIGHLIGHT_ICON, "Highlight");
+    toolbarRow("highlight", HIGHLIGHT_ICON, "Highlight") +
+    toolbarRow("underline", UNDERLINE_ICON, "Underline");
   document.body.appendChild(toolbar);
 
   function hideToolbar() {
@@ -1180,13 +1195,13 @@
 
     if (swatch.dataset.kind === "erase") {
       selection.removeAllRanges();
-      eraseHighlight(selector);
+      eraseHighlight(selector, swatch.dataset.erase);
       return;
     }
 
-    if (swatch.dataset.kind === "highlight") {
+    if (swatch.dataset.kind === "highlight" || swatch.dataset.kind === "underline") {
       selection.removeAllRanges();
-      saveHighlight(selector, color);
+      saveHighlight(selector, color, swatch.dataset.kind);
       return;
     }
 
@@ -1198,15 +1213,16 @@
     openComposer(selector, color);
   });
 
-  /* Take the highlighting off a selection. A comment's highlight is left
-   * alone: it is the handle for a thread, and no gesture in this toolbar
-   * should delete a conversation. */
-  function eraseHighlight(selector) {
+  /* Take the highlighting, or the underlines -- `kind` says which -- off a
+   * selection. A comment's highlight is left alone: it is the handle for a
+   * thread, and no gesture in this toolbar should delete a conversation. */
+  function eraseHighlight(selector, kind) {
     fetch(API + "/erase", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         document: DOC_ID,
+        kind: kind,
         quote: selector.quote,
         prefix: selector.prefix,
         suffix: selector.suffix,
@@ -1231,14 +1247,15 @@
   }
 
   /* A highlight has nothing to type, so there is no composer step: the click
-   * that chose the color is the whole interaction. */
-  function saveHighlight(selector, color) {
+   * that chose the color is the whole interaction. An underline is the same
+   * thing drawn as a rule, so it comes through here too, with its kind. */
+  function saveHighlight(selector, color, kind) {
     fetch(API, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         document: DOC_ID,
-        kind: "highlight",
+        kind: kind,
         quote: selector.quote,
         prefix: selector.prefix,
         suffix: selector.suffix,
@@ -1267,9 +1284,13 @@
         var index = buildIndex(doc);
         var span = locate(index, annotation.target);
         if (span) {
+          // The same classes inject.py gives it, so a fresh mark and a
+          // rendered one are indistinguishable.
           wrapSpan(
             index, span[0], span[1],
-            "hl hl--" + (annotation.color_token || DEFAULT_COLOR), annotation.id
+            "hl hl--" + (annotation.color_token || DEFAULT_COLOR) +
+              (annotation.kind === "underline" ? " hl--underline" : ""),
+            annotation.id
           );
         } else {
           // Saved, but this side could not work out where it goes. The

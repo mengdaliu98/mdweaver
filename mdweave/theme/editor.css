@@ -116,6 +116,12 @@
   cursor: pointer;
 }
 
+/* An ink is solid, so a ring in its own color would vanish into it -- and
+   black against the dark chip would vanish altogether. The eraser's ring. */
+.selection-toolbar__swatch[data-kind="underline"] {
+  border-color: color-mix(in srgb, var(--surface) 45%, transparent);
+}
+
 .selection-toolbar__swatch:hover { transform: scale(1.22); }
 
 .selection-toolbar__swatch:focus-visible {

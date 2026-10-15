@@ -371,8 +371,13 @@ def test_the_browser_and_python_agree_on_the_default_colour():
 
 
 def test_the_browser_never_offers_a_legacy_name():
+    """Except as an underline ink: "blue" there is the ink, and the server
+    only ever reads an underline's colour as one -- see `Annotation.ink`."""
+    inks = 'var INKS = ["black", "blue", "red"];'
+    assert inks in ANNOTATE_JS
+    source = ANNOTATE_JS.replace(inks, "")
     for legacy in LEGACY_SLOTS:
-        assert f'"{legacy}"' not in ANNOTATE_JS
+        assert f'"{legacy}"' not in source
 
 
 def test_changing_the_colour_of_an_existing_note_is_persisted():
@@ -693,6 +698,12 @@ def paint(base, quote, color):
     })
 
 
+def underline(base, quote, color):
+    return _post(base, "/api/annotations", {
+        "document": "doc", "kind": "underline", "quote": quote, "color": color
+    })
+
+
 def comment_on(base, quote, color="c4"):
     return _post(base, "/api/annotations", {
         "document": "doc", "quote": quote, "body": "a real thread", "color": color
@@ -811,8 +822,11 @@ def test_pressing_a_colour_inside_a_larger_highlight_shrinks_it_to_the_press(pai
 
 # --- the eraser -------------------------------------------------------------
 
-def erase(base, quote):
-    return _post(base, "/api/annotations/erase", {"document": "doc", "quote": quote})
+def erase(base, quote, kind=None):
+    payload = {"document": "doc", "quote": quote}
+    if kind:
+        payload["kind"] = kind
+    return _post(base, "/api/annotations/erase", payload)
 
 
 def test_the_eraser_takes_highlighting_off(painting):
@@ -881,6 +895,169 @@ def test_a_highlight_carries_no_card(painting):
     paint(base, "bravo", "c5")
     (annotation,) = workspace.annotations_for("doc")
     assert annotation.thread == [] and not annotation.has_card
+
+
+# --- underlines -------------------------------------------------------------
+
+def test_a_selection_can_be_underlined(painting):
+    base, workspace = painting
+    status, payload = underline(base, "bravo charlie", "red")
+
+    assert status == 200 and payload["annotation"]["kind"] == "underline"
+    assert payload["annotation"]["color"] == "red"
+    assert payload["annotation"]["color_token"] == "ink-red"
+    assert state(workspace) == [("bravo charlie", "ink-red", "underline")]
+    (annotation,) = workspace.annotations_for("doc")
+    assert not annotation.has_card
+
+
+@pytest.mark.parametrize("ink", ["black", "blue", "red"])
+def test_every_ink_is_accepted(painting, ink):
+    base, workspace = painting
+    status, _ = underline(base, "bravo", ink)
+    assert status == 200 and state(workspace) == [("bravo", f"ink-{ink}", "underline")]
+
+
+@pytest.mark.parametrize("raw", ["c2", 3, "green", "rgb(255 0 0)", "", None])
+def test_an_underline_takes_an_ink_not_a_slot(painting, raw):
+    """Three fixed inks. A slot would make it wear the scheme; a raw colour
+    would reach the page inside a style attribute."""
+    base, workspace = painting
+    status, payload = underline(base, "bravo", raw)
+    assert status == 400 and "ink" in payload["error"]
+    assert state(workspace) == []
+
+
+def test_blue_is_an_ink_on_an_underline_and_a_slot_everywhere_else():
+    """"blue" is also a legacy hue name for slot 3. On an underline it must
+    stay the ink, or a reorder would renumber it and a scheme would repaint it."""
+    inked = Annotation(id="u", target=TextTarget(quote="x"), kind="underline", color="blue")
+    legacy = Annotation(id="h", target=TextTarget(quote="x"), kind="highlight", color="blue")
+
+    assert inked.color_token == "ink-blue" and inked.slot is None
+    assert inked.custom_color is None
+    assert legacy.color_token == "c3" and legacy.slot == 3
+
+
+def test_reordering_the_scheme_never_touches_an_underline(painting):
+    base, workspace = painting
+    underline(base, "bravo", "blue")
+    paint(base, "delta", "c3")
+
+    workspace.remap_slots([3, 2, 1, 4, 5, 6])
+
+    assert state(workspace) == [("bravo", "ink-blue", "underline"), ("delta", "c1", "highlight")]
+
+
+def test_underlining_a_highlight_replaces_it_rather_than_stacking(painting):
+    """Two marks on one span would be two annotations claiming the same text,
+    which the renderer refuses -- so the press repaints, as a colour does."""
+    base, workspace = painting
+    paint(base, "bravo charlie", "c5")
+
+    status, payload = underline(base, "bravo charlie", "blue")
+
+    assert status == 200 and len(payload["replaced"]) == 1
+    assert state(workspace) == [("bravo charlie", "ink-blue", "underline")]
+
+
+def test_highlighting_an_underline_replaces_it(painting):
+    base, workspace = painting
+    underline(base, "bravo", "black")
+
+    status, payload = paint(base, "bravo charlie", "c4")
+
+    assert status == 200 and len(payload["replaced"]) == 1
+    assert state(workspace) == [("bravo charlie", "c4", "highlight")]
+
+
+def test_the_underline_eraser_takes_off_only_underlines(painting):
+    base, workspace = painting
+    underline(base, "bravo", "red")
+    paint(base, "charlie", "c4")
+
+    status, payload = erase(base, "bravo charlie", "underline")
+
+    assert status == 200 and len(payload["cleared"]) == 1
+    assert state(workspace) == [("charlie", "c4", "highlight")]
+
+
+def test_the_highlight_eraser_leaves_underlines_alone(painting):
+    base, workspace = painting
+    underline(base, "bravo", "red")
+    paint(base, "charlie", "c4")
+
+    status, payload = erase(base, "bravo charlie", "highlight")
+
+    assert status == 200 and len(payload["cleared"]) == 1
+    assert state(workspace) == [("bravo", "ink-red", "underline")]
+
+
+def test_an_eraser_with_no_kind_clears_every_bare_mark(painting):
+    base, workspace = painting
+    underline(base, "bravo", "red")
+    paint(base, "charlie", "c4")
+
+    status, payload = erase(base, "bravo charlie")
+
+    assert status == 200 and len(payload["cleared"]) == 2
+    assert state(workspace) == []
+
+
+def test_erasing_a_kind_that_is_not_a_mark_is_refused(painting):
+    base, workspace = painting
+    comment_on(base, "bravo")
+    status, _ = erase(base, "bravo", "comment")
+    assert status == 400 and len(state(workspace)) == 1
+
+
+def test_an_underline_never_absorbs_a_comment(painting):
+    base, workspace = painting
+    comment_on(base, "echo foxtrot")
+
+    status, payload = underline(base, "echo foxtrot", "red")
+
+    assert status == 409 and "comment" in payload["error"]
+    assert state(workspace) == [("echo foxtrot", "c4", "comment")]
+
+
+def test_there_is_no_document_level_underline(painting):
+    base, workspace = painting
+    status, payload = _post(base, "/api/annotations", {
+        "document": "doc", "kind": "underline", "level": "document", "color": "red",
+    })
+
+    assert status == 400 and "underline" in payload["error"]
+    assert state(workspace) == []
+
+
+def test_an_unknown_kind_is_still_refused(painting):
+    base, workspace = painting
+    status, _ = _post(base, "/api/annotations", {
+        "document": "doc", "kind": "strikethrough", "quote": "bravo", "color": "c1",
+    })
+    assert status == 400 and state(workspace) == []
+
+
+def test_an_underline_is_a_rule_in_the_edge_colour_with_no_fill():
+    """The fill is a pastel meant to sit behind text; as a 2px line it would
+    vanish. The edge is the one darkened until it clears contrast."""
+    block = STRUCTURE_CSS.split("mark.hl--underline {")[1].split("}")[0]
+    assert "background: none" in block
+    assert "text-decoration-line: underline" in block
+    assert "text-decoration-color: var(--hl-edge)" in block
+
+
+@pytest.mark.parametrize("ink", ["black", "blue", "red"])
+def test_every_ink_has_a_rule_for_the_mark_and_the_swatch(ink):
+    assert re.search(rf"\.hl--ink-{ink},\s*\.swatch--ink-{ink}\s*{{[^}}]*--hl-edge:", STRUCTURE_CSS)
+
+
+def test_the_menu_offers_exactly_the_three_inks():
+    """The browser's copy of the list has to match the server's."""
+    from mdweave.model import UNDERLINE_INKS
+    assert 'var INKS = ["black", "blue", "red"];' in ANNOTATE_JS
+    assert UNDERLINE_INKS == ("black", "blue", "red")
 
 
 # --- no underline ----------------------------------------------------------

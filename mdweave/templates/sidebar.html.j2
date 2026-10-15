@@ -9,10 +9,13 @@
     A folder's buttons act inside it, a file's beside it, and the root strip
     below the tree carries the same set for the top level -- which is the only
     way to make the first folder in a knowledge base that has none. -#}
-{% macro row_actions(what, label) %}
+{% macro row_actions(what, label, managed=False) %}
 {% set where = "in" if what != "file" else "beside" %}
               <span class="tree__actions">
-{% if what != "file" %}
+{#- A managed list keeps the pencil and the bin and nothing else: making,
+    importing and deleting folders are all writes into directories that belong
+    to something other than mdweave. -#}
+{% if what != "file" and not managed %}
                 <button class="tree__action" type="button" data-action="create"
                         title="New document" aria-label="New document {{ where }} {{ label }}">
                   <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M7 2.5v9M2.5 7h9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
@@ -42,18 +45,28 @@
                         title="Rename" aria-label="Rename {{ label }}">
                   <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M9.4 2.3 11.7 4.6 5.3 11H3v-2.3z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
                 </button>
+{% if managed and what == "file" %}
+                {# A managed file belongs to somewhere else on the disk, so the
+                   bin takes it off the list and leaves the file alone. #}
+                <button class="tree__action tree__action--danger" type="button"
+                        data-action="delete" data-managed
+                        title="Stop managing" aria-label="Stop managing {{ label }}">
+{% elif not managed %}
                 <button class="tree__action tree__action--danger" type="button"
                         data-action="{{ "delete" if what == "file" else "delete-folder" }}"
                         title="Delete" aria-label="Delete {{ label }}">
+{% endif %}
+{% if what == "file" or not managed %}
                   <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M2.8 4h8.4M5.6 4V2.6h2.8V4M4 4l.5 7.4h5L10 4" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
                 </button>
+{% endif %}
 {% endif %}
               </span>
 {% endmacro %}
 {#- Recursive: a folder renders its children through the same macro. `path` is
     the folder this list sits in, `""` at the root -- the key the arrangement is
     stored under, and what a drop needs to know to say where it landed. -#}
-{% macro tree_list(nodes, prefix, active, depth, path) %}
+{% macro tree_list(nodes, prefix, active, depth, path, managed=False) %}
       <ul class="tree" role="group" data-path="{{ path }}">
 {% for node in nodes %}
 {% if node.is_dir %}
@@ -64,9 +77,9 @@
                      draggable="true" data-name="{{ node.name }}" data-parent="{{ path }}">
               <svg class="tree__chevron" viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2.5 8 6l-4 3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
               <span class="tree__label">{{ node.label }}</span>
-{{ row_actions("folder", node.label) }}
+{{ row_actions("folder", node.label, managed) }}
             </summary>
-            {{ tree_list(node.children, prefix, active, depth + 1, path ~ ("/" if path else "") ~ node.name) }}
+            {{ tree_list(node.children, prefix, active, depth + 1, path ~ ("/" if path else "") ~ node.name, managed) }}
           </details>
         </li>
 {% else %}
@@ -76,14 +89,14 @@
           <div class="tree__file">
             <a class="tree__row tree__row--file{% if node.doc_id == active %} tree__row--active{% endif %}"
                style="--depth: {{ depth }}"
-               href="{{ prefix }}{{ node.doc_id }}.html"
+               href="{{ prefix }}{{ node.doc_id | urlencode }}.html"
                draggable="true"
                data-doc="{{ node.doc_id }}" data-name="{{ node.name }}" data-parent="{{ path }}"
                {% if node.doc_id == active %}aria-current="page"{% endif %}>
               <svg class="tree__icon" viewBox="0 0 14 14" aria-hidden="true"><path d="M3.5 1.5h4.2L11 4.8v7.7H3.5z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M7.6 1.7v3.2h3.2" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
               <span class="tree__label">{{ node.label }}</span>
             </a>
-{{ row_actions("file", node.label) }}
+{{ row_actions("file", node.label, managed) }}
           </div>
         </li>
 {% endif %}
@@ -102,16 +115,22 @@
 
     The macro emits the markers itself, so the fragment written into a page is
     byte-for-byte the region a later splice will look for. -#}
-{% macro sidebar(tree, prefix, active) %}
+{#- `base` is the folder the tree starts at, `""` for the root. A managed list
+    leaves out the folders every file shares, but the paths the panel hands
+    back are still the real ones, so its lists are keyed from `base` -- and
+    `managed` swaps the controls that would rearrange the filesystem for the
+    one that edits the list. The title names the shared folder, which is the
+    one thing the shortened tree no longer says. -#}
+{% macro sidebar(tree, prefix, active, base="", managed=False) %}
 <!--mdweave:sidebar-->
-  <nav class="sidebar" id="sidebar" aria-label="Documents">
+  <nav class="sidebar{% if managed %} sidebar--managed{% endif %}" id="sidebar" aria-label="Documents">
     <div class="sidebar__head">
-      <span class="sidebar__title">Documents</span>
-      <span class="sidebar__actions" data-path="">
+      <span class="sidebar__title"{% if managed %} title="/{{ base }}"{% endif %}>Documents</span>
+      <span class="sidebar__actions" data-path="{{ base }}">
         {# Shared by every row's import button: which folder it lands in is
            whichever row was clicked, not a property of the picker. #}
         <input type="file" id="sidebar-file" accept=".md,text/markdown" multiple hidden>
-{{ row_actions("root", "the top level") }}
+{{ row_actions("root", "the top level", managed) }}
         {# Take what another machine has written. Hidden until the server says
            these documents came from a remote at all -- pulling from nowhere
            is not an idea. Distinct from the refresh beside Checkpoint, which
@@ -144,16 +163,16 @@
         </button>
       </span>
     </div>
-    <div class="sidebar__dropzone" aria-hidden="true"><span>Drop .md files to import</span></div>
+    <div class="sidebar__dropzone" aria-hidden="true"><span>Drop .md files to {{ "add" if managed else "import" }}</span></div>
 {% if tree %}
-    {{ tree_list(tree, prefix, active, 0, "") }}
+    {{ tree_list(tree, prefix, active, 0, base, managed) }}
 {% else %}
     <p class="sidebar__empty">No documents found.</p>
 {% endif %}
     {# The rest of the panel. A drop that lands here means "the top level",
        which is the only way to get a document back out of a folder -- and its
        controls are the only way to make a folder when there are none yet. #}
-    <div class="sidebar__root" id="sidebar-root" data-path=""></div>
+    <div class="sidebar__root" id="sidebar-root" data-path="{{ base }}"></div>
   </nav>
 <!--/mdweave:sidebar-->
 {% endmacro %}

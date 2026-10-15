@@ -23,6 +23,18 @@ from .scheme import SLOT_CLASSES, slot_of
 COLOR_TOKENS = SLOT_CLASSES
 DEFAULT_COLOR = 5  # where yellow sat when the six were hues
 
+# The kinds that are only a mark on the text: no thread, no card. They differ
+# in how the mark is drawn -- a fill behind the text, or a rule under it -- and
+# in nothing else, so they share one anchor space and one painting rule.
+BARE_KINDS = ("highlight", "underline")
+
+# An underline is not painted from the scheme. It takes one of three fixed
+# inks, stored by name -- `"color": "blue"` -- and resolved before the slot
+# lookup, because "blue" is also a legacy hue name for slot 3. A scheme switch
+# or a reorder therefore never touches an underline: it has no slot to move.
+UNDERLINE_INKS = ("black", "blue", "red")
+DEFAULT_INK = "black"
+
 
 def resolve_color_token(color) -> str | None:
     """The class `color` names -- `c1`..`c6` -- or None for a raw CSS color."""
@@ -118,7 +130,8 @@ class Annotation:
 
     id: str
     target: TextTarget | None = None
-    kind: str = "comment"  # "comment" (highlight + card) | "highlight" (no card)
+    # "comment" (highlight + card) | "highlight" (no card) | "underline" (no card)
+    kind: str = "comment"
     color: str | int = DEFAULT_COLOR
     status: str = "open"  # "open" | "resolved"
     thread: list[Comment] = field(default_factory=list)
@@ -207,24 +220,35 @@ class Annotation:
         return self.kind == "comment" and bool(self.thread)
 
     @property
+    def ink(self) -> str | None:
+        """The underline's ink -- black, blue or red -- or None if not one."""
+        if self.kind == "underline" and self.color in UNDERLINE_INKS:
+            return self.color
+        return None
+
+    @property
     def color_token(self) -> str:
         """Token name for the CSS class, or "custom" for a raw CSS color.
 
         A legacy token resolves to its replacement here rather than in the
         stored `color`, so `to_dict` still writes back what was read.
         """
+        if self.ink:
+            return f"ink-{self.ink}"
         return resolve_color_token(self.color) or "custom"
 
     @property
     def custom_color(self) -> str | None:
-        """The raw CSS color, when `color` is not a slot."""
-        if resolve_color_token(self.color):
+        """The raw CSS color, when `color` is neither a slot nor an ink."""
+        if self.ink or resolve_color_token(self.color):
             return None
         return self.color if isinstance(self.color, str) else None
 
     @property
     def slot(self) -> int | None:
-        """Which of the six, 1-based, or None for a raw CSS color."""
+        """Which of the six, 1-based, or None for a raw CSS color or an ink."""
+        if self.ink:
+            return None
         return slot_of(self.color)
 
 

@@ -93,15 +93,21 @@ def _environment() -> Environment:
     )
 
 
-def render_sidebar(tree: list[Node], doc_id: str) -> str:
+def render_sidebar(
+    tree: list[Node], doc_id: str, base: str = "", managed: bool = False
+) -> str:
     """Just the navigation panel, for splicing into a page already written.
 
     Rebuilding the tree used to mean re-rendering every document: 26 markdown
     parses and 26 runs of Pygments to move one row. Nothing about the prose
     changes when the tree does, so this renders the one part that did.
+
+    `base` is the folder `tree` starts at, when that is not the root: a
+    managed list draws only the part of the filesystem below where its files
+    part ways, and every path the panel hands back has to be the real one.
     """
     module = _environment().get_template("sidebar.html.j2").module
-    return str(module.sidebar(tree, relative_prefix(doc_id), doc_id))
+    return str(module.sidebar(tree, relative_prefix(doc_id), doc_id, base, managed))
 
 
 def splice_sidebar(html: str, sidebar: str) -> str:
@@ -180,6 +186,8 @@ def render_document(
     title: str | None = None,
     doc_id: str | None = None,
     tree: list[Node] | None = None,
+    tree_base: str = "",
+    managed: bool = False,
     css_hrefs: tuple[str, ...] = ("assets/mdweave.css", "assets/pygments.css"),
     js_srcs: tuple[str, ...] = (
         "assets/ui.js",
@@ -224,6 +232,8 @@ def render_document(
         start_at=len(markdown.splitlines()) if len(blocks) <= 1 else None,
         notes=notes,
         tree=tree or [],
+        tree_base=tree_base,
+        managed=managed,
         prefix=prefix,
         css_hrefs=[prefix + href for href in css_hrefs],
         js_srcs=[prefix + src for src in js_srcs],

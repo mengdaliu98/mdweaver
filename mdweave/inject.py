@@ -119,6 +119,8 @@ def _apply(
 def _mark(soup: BeautifulSoup, ann: Annotation, text: str, is_first: bool):
     mark = soup.new_tag("mark")
     classes = ["hl", f"hl--{ann.color_token}"]
+    if ann.kind == "underline":
+        classes.append("hl--underline")
     if ann.status == "resolved":
         classes.append("hl--resolved")
     if ann.has_card:

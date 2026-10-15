@@ -20,7 +20,7 @@ import shutil
 import string
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -30,12 +30,16 @@ from urllib.parse import parse_qs, quote, urlparse
 from . import checkpoint as git_checkpoint
 from . import gdoc
 from . import scheme as schemes
+from . import managed as managed_files
 from . import semantics
 from .sync import DEFAULT_INTERVAL, Pull
 from . import edits
 from .agent import protocol
 from .autosave import DEFAULT_DELAY, AutoCommit
-from .model import COLOR_TOKENS, DEFAULT_COLOR, Annotation, Comment, Offset, TextTarget
+from .model import (
+    BARE_KINDS, COLOR_TOKENS, DEFAULT_COLOR, DEFAULT_INK, UNDERLINE_INKS,
+    Annotation, Comment, Offset, TextTarget,
+)
 from .render import (
     SIDEBAR_OPEN,
     render_document,
@@ -156,22 +160,48 @@ class Workspace:
     inputs: Path
     outputs: Path
 
+    # A knowledge base is a directory; `ManagedWorkspace` is a list of files.
+    managed = False
+
+    @property
+    def settings(self) -> Path:
+        """Where the dotfiles live: order, labels, theme, comment types, actions.
+
+        Beside the documents, so they travel with the knowledge base in git.
+        A list of files from all over the machine has no such place, which is
+        the only reason this is not simply `inputs`.
+        """
+        return self.inputs
+
     def documents(self) -> dict[str, Path]:
         """Every document under the markdown root, keyed by id."""
         return document_ids(self.inputs)
+
+    def tree_base(self) -> str:
+        """The folder the sidebar starts at -- the root, for a knowledge base."""
+        return ""
+
+    def repo_for(self, doc_id: str) -> Path:
+        """The repository a checkpoint of this document commits to."""
+        self.markdown_for(doc_id)  # 404s an unknown document
+        return git_checkpoint.repo_root(self.inputs)
 
     # --- color schemes ----------------------------------------------------
 
     def theme(self) -> schemes.Theme:
         """The reader's schemes, read fresh: another machine may have pushed."""
-        return schemes.load(self.inputs)
+        return schemes.load(self.settings)
 
     def write_theme(self, theme: schemes.Theme) -> None:
-        schemes.save(self.inputs, theme)
+        schemes.save(self.settings, theme)
 
     def label_of(self, key: str, fallback_name: str) -> str:
         """What a row is called: the reader's word for it, or the heuristic."""
-        return load_labels(self.inputs).get(key) or humanize(fallback_name)
+        return load_labels(self.settings).get(key) or self.default_label(fallback_name)
+
+    def default_label(self, name: str) -> str:
+        """What a row is called when nobody has named it."""
+        return humanize(name)
 
     def set_label(self, key: str, label: str) -> str:
         """Record what a row should be called, or forget a previous answer.
@@ -190,17 +220,17 @@ class Workspace:
             raise ApiError(HTTPStatus.BAD_REQUEST, "a name cannot be empty")
 
         leaf = key.rpartition("/")[2]
-        labels = load_labels(self.inputs)
-        if label == humanize(leaf):
+        labels = load_labels(self.settings)
+        if label == self.default_label(leaf):
             labels.pop(key, None)
         else:
             labels[key] = label
-        save_labels(self.inputs, labels)
+        save_labels(self.settings, labels)
         return label
 
     def move_labels(self, old: str, new: str) -> None:
         """Carry labels across a move, for the row and everything under it."""
-        labels = load_labels(self.inputs)
+        labels = load_labels(self.settings)
         moved = {}
         for key, value in labels.items():
             if key == old:
@@ -210,14 +240,14 @@ class Workspace:
             else:
                 moved[key] = value
         if moved != labels:
-            save_labels(self.inputs, moved)
+            save_labels(self.settings, moved)
 
     def forget_label(self, key: str) -> None:
-        labels = load_labels(self.inputs)
+        labels = load_labels(self.settings)
         gone = {k: v for k, v in labels.items()
                 if k != key and not k.startswith(f"{key}/")}
         if gone != labels:
-            save_labels(self.inputs, gone)
+            save_labels(self.settings, gone)
 
     # --- imported documents -------------------------------------------------
 
@@ -240,7 +270,7 @@ class Workspace:
         snapshot = gdoc.fetch(url)
 
         existing = next(
-            (doc_id for doc_id, where in load_sources(self.inputs).items()
+            (doc_id for doc_id, where in load_sources(self.settings).items()
              if where.get("google_id") == snapshot.doc_id
              and doc_id in self.documents()),
             None,
@@ -264,21 +294,21 @@ class Workspace:
             # and the capitals, and a Google Doc's name is already prose.
             self.set_label(doc_id, snapshot.title)
 
-        sources = load_sources(self.inputs)
+        sources = load_sources(self.settings)
         sources[doc_id] = gdoc.record(snapshot, doc_id)
-        save_sources(self.inputs, sources)
+        save_sources(self.settings, sources)
         return doc_id, bool(existing)
 
     def forget_source(self, doc_id: str) -> None:
-        sources = load_sources(self.inputs)
+        sources = load_sources(self.settings)
         if sources.pop(doc_id, None) is not None:
-            save_sources(self.inputs, sources)
+            save_sources(self.settings, sources)
 
     def move_source(self, old: str, new: str) -> None:
-        sources = load_sources(self.inputs)
+        sources = load_sources(self.settings)
         if old in sources:
             sources[new] = sources.pop(old)
-            save_sources(self.inputs, sources)
+            save_sources(self.settings, sources)
 
     def remap_slots(self, moved: list[int]) -> int:
         """Renumber every annotation so a reordered scheme looks unchanged.
@@ -381,6 +411,8 @@ class Workspace:
             title=humanize(md.stem),
             doc_id=doc_id,
             tree=tree if tree is not None else self.tree(),
+            tree_base=self.tree_base(),
+            managed=self.managed,
         )
 
     def tree(self):
@@ -392,9 +424,9 @@ class Workspace:
         """
         return build_tree(
             list(self.documents()),
-            load_order(self.inputs),
+            load_order(self.settings),
             [f for f in self.folders() if f],
-            load_labels(self.inputs),
+            load_labels(self.settings),
         )
 
     def write_html(self, doc_id: str, annotations: list[Annotation], tree=None):
@@ -431,7 +463,7 @@ class Workspace:
         """
         if doc_id not in self.documents():
             return None
-        return render_sidebar(self.tree(), doc_id)
+        return render_sidebar(self.tree(), doc_id, self.tree_base(), self.managed)
 
     def rebuild_tree(self, render_ids: set[str] = frozenset()) -> None:
         """Refresh the navigation everywhere, re-rendering as little as possible.
@@ -445,7 +477,7 @@ class Workspace:
         A page that is missing, or was written before the markers existed, falls
         back to a full render rather than being left stale.
         """
-        tree = self.tree()
+        tree, base = self.tree(), self.tree_base()
         for doc_id in self.documents():
             page = self.outputs / f"{doc_id}.html"
             html = page.read_text(encoding="utf-8") if page.exists() else ""
@@ -455,7 +487,9 @@ class Workspace:
             # is identical after a reorder -- and treating that as "no markers"
             # sent every one of them through a full render.
             if doc_id not in render_ids and SIDEBAR_OPEN in html:
-                spliced = splice_sidebar(html, render_sidebar(tree, doc_id))
+                spliced = splice_sidebar(
+                    html, render_sidebar(tree, doc_id, base, self.managed)
+                )
                 if spliced != html:
                     page.write_text(spliced, encoding="utf-8")
                 continue
@@ -731,7 +765,7 @@ class Workspace:
         Two things move: the folder's own name in its parent's list, and every
         order key recorded for it or anything beneath it.
         """
-        order = load_order(self.inputs)
+        order = load_order(self.settings)
 
         parent, _, name = old.rpartition("/")
         listed = order.get(parent)
@@ -747,7 +781,7 @@ class Workspace:
             if new is not None:
                 order[new + key[len(old) :]] = names
 
-        save_order(self.inputs, order)
+        save_order(self.settings, order)
 
     def set_order(self, folder: str, names: list[str]) -> list[str]:
         """Remember the order of one folder's children."""
@@ -759,18 +793,18 @@ class Workspace:
         # too, and letting it accumulate ghosts makes it unreadable.
         kept = [name for name in names if name in children]
 
-        order = load_order(self.inputs)
+        order = load_order(self.settings)
         if kept:
             order[folder] = kept
         else:
             order.pop(folder, None)
-        save_order(self.inputs, order)
+        save_order(self.settings, order)
         return kept
 
     def _reindex(self, old_id: str, new_id: str | None) -> None:
         """Follow a move or a delete through the hand-arranged order."""
         old_folder, _, old_name = old_id.rpartition("/")
-        order = load_order(self.inputs)
+        order = load_order(self.settings)
         listed = order.get(old_folder)
         if not listed or old_name not in listed:
             return
@@ -786,7 +820,7 @@ class Workspace:
                 listed.insert(at, new_name)
 
         order[old_folder] = listed
-        save_order(self.inputs, order)
+        save_order(self.settings, order)
 
     # --- editing the prose ------------------------------------------------
 
@@ -876,12 +910,22 @@ class Workspace:
                 found.append((annotation, where))
         return found, index
 
-    def apply_highlight(self, doc_id: str, target: TextTarget, color: int) -> dict:
+    def apply_highlight(
+        self, doc_id: str, target: TextTarget, color: int | str, kind: str = "highlight"
+    ) -> dict:
         """Paint a selection. One rule, no exceptions.
 
         Picking a color means "make the whole selection this color",
         whatever is underneath -- so re-coloring part of a highlight, or a
         patch of mixed colors, both end up as one clean highlight.
+
+        `kind` is how it is painted: a fill ("highlight", `color` a slot) or
+        a rule under the text ("underline", `color` an ink). The rule is the
+        same for both, and they
+        absorb each other: underlining highlighted text replaces the fill
+        with a rule rather than stacking the two, because two marks on one
+        span would be two annotations claiming the same text, which the
+        renderer refuses as an overlap.
 
         It used to also *clear*, when the selection was already entirely and
         only the color pressed. That made a press ambiguous: the same gesture
@@ -916,7 +960,7 @@ class Workspace:
         fresh = Annotation(
             id=self.new_id({a.id for a in self.annotations_for(doc_id)} | absorbed),
             target=target,
-            kind="highlight",
+            kind=kind,
             color=color,
         )
         candidate = keep + [fresh]
@@ -932,11 +976,15 @@ class Workspace:
             "replaced": [a.id for a, _ in touching],
         }
 
-    def erase_highlight(self, doc_id: str, target: TextTarget) -> dict:
+    def erase_highlight(
+        self, doc_id: str, target: TextTarget, kind: str | None = None
+    ) -> dict:
         """Take the highlighting off a selection, whatever colors it had.
 
-        The counterpart to a color press, and the reason a press can be
-        unconditional. Comments are left where they are: their highlight is
+        `kind` narrows it to highlights or to underlines -- each row of the
+        menu has its own eraser, and the one beside the inks should not take
+        the fills off too. None clears every bare mark. The counterpart to a
+        color press, and the reason a press can be unconditional. Comments are left where they are: their highlight is
         the handle for a thread, and an eraser aimed at color should not
         delete a conversation. Removing one is what its own card is for.
         """
@@ -950,6 +998,7 @@ class Workspace:
         touching = [
             a for a, where in placed
             if where[0] < span[1] and span[0] < where[1] and not a.has_card
+            and (kind is None or a.kind == kind)
         ]
         if not touching:
             return {"cleared": []}
@@ -968,6 +1017,157 @@ class Workspace:
             candidate = "".join(random.choices(ID_ALPHABET, k=ID_LENGTH))
             if candidate not in taken:
                 return candidate
+
+
+# Said whenever a request would rearrange the filesystem under managed files.
+_STAYS_PUT = (
+    "a managed document is a file somewhere on this machine, and it stays where "
+    "it is -- add one with `mdweave serve <path>`, or drop it onto the sidebar"
+)
+
+
+@dataclass
+class ManagedWorkspace(Workspace):
+    """A list of files from anywhere on this machine, rather than a directory.
+
+    `inputs` is the filesystem root, so a document's id is its path under it
+    -- see `managed.py` for why the id is the whole path. Everything that
+    reads, edits, annotates or renders a document is inherited unchanged,
+    because none of it ever cared where the file was, only that `documents()`
+    vouched for it.
+
+    What does not carry over is rearranging. In a knowledge base the tree *is*
+    the directory, so a drag is a move and a new folder is a `mkdir`; here the
+    tree is a view of directories that belong to other things, and a sidebar
+    gesture that renamed a file inside somebody's codebase would be a
+    surprise of the worst kind. So those refuse, and the bin takes a document
+    off the list rather than off the disk.
+    """
+
+    home: Path = field(default_factory=managed_files.home)
+
+    managed = True
+
+    @property
+    def settings(self) -> Path:
+        return self.home
+
+    def documents(self) -> dict[str, Path]:
+        # A file that has gone stays on the list -- it may be a branch
+        # checkout away -- and is skipped, the way a dangling link is.
+        return {
+            managed_files.doc_id(path): path
+            for path in managed_files.load(self.home)
+            if path.is_file()
+        }
+
+    def missing(self) -> list[Path]:
+        """Paths on the list with no readable file behind them."""
+        return [p for p in managed_files.load(self.home) if not p.is_file()]
+
+    def tree_base(self) -> str:
+        return managed_files.common_folder(self.documents())
+
+    def default_label(self, name: str) -> str:
+        # The rows are files and folders the reader also meets in a terminal,
+        # so they are called what they are called there. `humanize` would
+        # turn `README` into "Readme" and `src` into "Src".
+        return name
+
+    def folders(self) -> dict[str, Path]:
+        """Every folder above a document. Nothing else exists, as far as this goes."""
+        found: dict[str, Path] = {"": self.inputs}
+        for doc in self.documents():
+            parts = doc.split("/")[:-1]
+            for depth in range(1, len(parts) + 1):
+                folder = "/".join(parts[:depth])
+                found[folder] = self.inputs / folder
+        return found
+
+    def tree(self):
+        """The least of the filesystem that holds every document.
+
+        Built whole and then descended to where the documents part ways, so
+        the order and the labels are keyed by real paths -- the same keys
+        whichever file happens to be the one that set the base.
+        """
+        nodes = build_tree(
+            list(self.documents()),
+            load_order(self.settings),
+            None,
+            load_labels(self.settings),
+            name_label=self.default_label,
+        )
+        base = self.tree_base()
+        for part in base.split("/") if base else []:
+            nodes = next(n for n in nodes if n.is_dir and n.name == part).children
+        return nodes
+
+    def has_remote(self) -> bool:
+        # Each file may be in a repository of its own, or none; there is no
+        # one remote to pull from, and pulling a codebase on a timer is not
+        # this tool's business.
+        return False
+
+    def repo_for(self, doc_id: str) -> Path:
+        return git_checkpoint.repo_root(self.markdown_for(doc_id).parent)
+
+    def files_of(self, doc_id: str) -> list[Path]:
+        # Not the page: it lives under mdweave's home, outside whatever
+        # repository the document is in.
+        markdown = self.markdown_for(doc_id)
+        return [markdown, sidecar.sidecar_path(markdown)]
+
+    # --- the list, in place of the tree operations -------------------------
+
+    def link_document(
+        self, source: str, folder: str = "", name: str = ""
+    ) -> tuple[str, Path]:
+        """Put a file on the list. Where it was dropped does not matter."""
+        if not Path(source).is_absolute():
+            raise ApiError(
+                HTTPStatus.BAD_REQUEST,
+                f"{source!r} must be an absolute path on this machine",
+            )
+        try:
+            path, _ = managed_files.add(self.home, source)
+        except ValueError as exc:
+            raise ApiError(HTTPStatus.BAD_REQUEST, str(exc))
+        return managed_files.doc_id(path), path
+
+    def delete_document(self, doc_id: str) -> None:
+        """Stop managing a document. The file and its comments stay on disk."""
+        markdown = self.markdown_for(doc_id)
+        managed_files.remove(self.home, markdown)
+        (self.outputs / f"{doc_id}.html").unlink(missing_ok=True)
+        self._reindex(doc_id, None)
+        self.forget_label(doc_id)
+
+    def set_order(self, folder: str, names: list[str]) -> list[str]:
+        # The strip under the tree says `""`, meaning the top of what is
+        # drawn -- which here is the shared folder, not the filesystem root.
+        return super().set_order(folder or self.tree_base(), names)
+
+    def add_document(self, *args, **kwargs):
+        raise ApiError(HTTPStatus.BAD_REQUEST, f"cannot import a copy: {_STAYS_PUT}")
+
+    def create_document(self, target: str) -> str:
+        raise ApiError(HTTPStatus.BAD_REQUEST, f"cannot create {target!r}: {_STAYS_PUT}")
+
+    def import_gdoc(self, url: str, folder: str = "") -> tuple[str, bool]:
+        raise ApiError(HTTPStatus.BAD_REQUEST, f"cannot import a Google Doc: {_STAYS_PUT}")
+
+    def move_document(self, doc_id: str, target: str) -> str:
+        raise ApiError(HTTPStatus.BAD_REQUEST, f"cannot move {doc_id!r}: {_STAYS_PUT}")
+
+    def create_folder(self, target: str) -> str:
+        raise ApiError(HTTPStatus.BAD_REQUEST, f"cannot make a folder: {_STAYS_PUT}")
+
+    def rename_folder(self, folder: str, target: str) -> str:
+        raise ApiError(HTTPStatus.BAD_REQUEST, f"cannot move {folder!r}: {_STAYS_PUT}")
+
+    def delete_folder(self, folder: str, recursive: bool) -> int:
+        raise ApiError(HTTPStatus.BAD_REQUEST, f"cannot delete {folder!r}: {_STAYS_PUT}")
 
 
 def credentials() -> tuple[str, str] | None:
@@ -1106,10 +1306,12 @@ class Handler(SimpleHTTPRequestHandler):
         """
         documents = sorted(self.workspace.documents())
         if not documents:
-            self._respond(
-                HTTPStatus.NOT_FOUND,
-                {"error": f"no documents under {self.workspace.inputs}"},
+            where = (
+                "managed yet -- add one with `mdweave serve <path>`"
+                if self.workspace.managed
+                else f"under {self.workspace.inputs}"
             )
+            self._respond(HTTPStatus.NOT_FOUND, {"error": f"no documents {where}"})
             return
         self.send_response(HTTPStatus.FOUND)
         self.send_header("Location", f"/{quote(documents[0])}.html")
@@ -1175,6 +1377,10 @@ class Handler(SimpleHTTPRequestHandler):
                 "pull": self.puller.status(),
                 # Whether "take what is on the remote" means anything here.
                 "remote": self.workspace.has_remote(),
+                # A list of files rather than a knowledge base: the sidebar
+                # offers only what makes sense for files that live elsewhere,
+                # and `mdweave serve <path>` knows it may add to this one.
+                "managed": self.workspace.managed,
                 "documents": sorted(self.workspace.documents()),
             }
 
@@ -1187,7 +1393,7 @@ class Handler(SimpleHTTPRequestHandler):
             }
 
         if route.path == "/api/semantics":
-            return HTTPStatus.OK, _semantics_sent(semantics.load(self.workspace.inputs))
+            return HTTPStatus.OK, _semantics_sent(semantics.load(self.workspace.settings))
 
         if route.path == "/api/annotations":
             doc_id = self._query(route, "document")
@@ -1236,7 +1442,7 @@ class Handler(SimpleHTTPRequestHandler):
 
         broker = self._broker()
         status = broker.status()
-        status["actions"] = [a.to_dict() for a in agent_actions.load(self.workspace.inputs)]
+        status["actions"] = [a.to_dict() for a in agent_actions.load(self.workspace.settings)]
 
         document = parse_qs(route.query).get("document", [""])[0]
         if document:
@@ -1374,6 +1580,9 @@ class Handler(SimpleHTTPRequestHandler):
             payload = self._json_body()
             doc_id = _require(payload, "document")
             self.workspace.markdown_for(doc_id)  # 404s an unknown document
+            erasing = payload.get("kind")
+            if erasing is not None and erasing not in BARE_KINDS:
+                raise ApiError(HTTPStatus.BAD_REQUEST, f"cannot erase {erasing!r}")
             return HTTPStatus.OK, self.workspace.erase_highlight(
                 doc_id,
                 TextTarget(
@@ -1382,6 +1591,7 @@ class Handler(SimpleHTTPRequestHandler):
                     suffix=str(payload.get("suffix", "")),
                     occurrence=int(payload.get("occurrence", 0)),
                 ),
+                erasing,
             )
 
         if route.path != "/api/annotations":
@@ -1392,9 +1602,10 @@ class Handler(SimpleHTTPRequestHandler):
 
         # A highlight is a comment with nothing to say: the same anchor and the
         # same color, no thread, and so no card. Its body is not merely
-        # optional -- it must be absent, or the card would come back.
+        # optional -- it must be absent, or the card would come back. An
+        # underline is the same thing drawn as a rule instead of a fill.
         kind = str(payload.get("kind", "comment"))
-        if kind not in ("comment", "highlight"):
+        if kind != "comment" and kind not in BARE_KINDS:
             raise ApiError(HTTPStatus.BAD_REQUEST, f"unknown kind: {kind!r}")
 
         quote = payload.get("quote")
@@ -1407,11 +1618,11 @@ class Handler(SimpleHTTPRequestHandler):
         # a bug in the caller and still gets the 400 it always got; `level`
         # is the client saying it meant it.
         if not (quote or "").strip() and str(payload.get("level", "")) == "document":
-            if kind == "highlight":
+            if kind in BARE_KINDS:
                 raise ApiError(
                     HTTPStatus.BAD_REQUEST,
                     "a document-level annotation is a comment; "
-                    "there is no text to highlight",
+                    f"there is no text to {kind}",
                 )
             return self._api_document_comment(doc_id, payload)
 
@@ -1426,6 +1637,10 @@ class Handler(SimpleHTTPRequestHandler):
         # A highlight goes through the painting rule rather than being
         # appended: a color pressed over an existing highlight recolors it,
         # unconditionally. Taking one off is /api/annotations/erase.
+        if kind == "underline":
+            return HTTPStatus.OK, self.workspace.apply_highlight(
+                doc_id, target, _parse_ink(payload.get("color", DEFAULT_INK)), kind
+            )
         if kind == "highlight":
             return HTTPStatus.OK, self.workspace.apply_highlight(
                 doc_id, target, _parse_color(payload.get("color", DEFAULT_COLOR))
@@ -1516,8 +1731,8 @@ class Handler(SimpleHTTPRequestHandler):
         except ValueError as exc:
             raise ApiError(HTTPStatus.BAD_REQUEST, str(exc))
 
-        semantics.save(self.workspace.inputs, parsed)
-        return HTTPStatus.OK, _semantics_sent(semantics.load(self.workspace.inputs))
+        semantics.save(self.workspace.settings, parsed)
+        return HTTPStatus.OK, _semantics_sent(semantics.load(self.workspace.settings))
 
     def _api_link(self):
         """Adopt a file from elsewhere on this machine without copying it.
@@ -1538,7 +1753,12 @@ class Handler(SimpleHTTPRequestHandler):
 
         body = _described(doc_id)
         body["linked"] = str(original)
-        body.update(self._publish_link(doc_id, original))
+        # A managed file is on the list, not in a repository of ours: there
+        # is no link to commit, and nothing on another machine waiting for it.
+        if self.workspace.managed:
+            body["managed"] = True
+        else:
+            body.update(self._publish_link(doc_id, original))
         return HTTPStatus.CREATED, _with_panel(self, payload, body)
 
     def _publish_link(self, doc_id: str, original: Path) -> dict:
@@ -1913,7 +2133,7 @@ class Handler(SimpleHTTPRequestHandler):
             self.workspace.markdown_for(doc_id)  # 404s a document that is gone
 
             name = _require(payload, "action")
-            action = agent_actions.find(self.workspace.inputs, name)
+            action = agent_actions.find(self.workspace.settings, name)
             if action is None:
                 raise ApiError(HTTPStatus.BAD_REQUEST, f"no action called {name!r}")
 
@@ -1966,7 +2186,7 @@ class Handler(SimpleHTTPRequestHandler):
                 HTTPStatus.BAD_REQUEST, "no comments were selected, so there is nothing to ask"
             )
 
-        action = agent_actions.find(self.workspace.inputs, agent_actions.REVIEW)
+        action = agent_actions.find(self.workspace.settings, agent_actions.REVIEW)
         if action is None:
             raise ApiError(
                 HTTPStatus.BAD_REQUEST,
@@ -2025,7 +2245,7 @@ class Handler(SimpleHTTPRequestHandler):
         would be two chances for the list to be drawn against a vocabulary
         that had just been edited in the other window.
         """
-        vocabulary = semantics.load(self.workspace.inputs)
+        vocabulary = semantics.load(self.workspace.settings)
         return {
             "comments": [
                 _as_comment(a)
@@ -2087,7 +2307,7 @@ class Handler(SimpleHTTPRequestHandler):
         a turn that answered four of their five remarks and reported success
         -- the one failure mode here that nobody would ever notice.
         """
-        vocabulary = semantics.load(self.workspace.inputs)
+        vocabulary = semantics.load(self.workspace.settings)
         by_id = {
             a.id: a for a in self.workspace.annotations_for(doc_id) if a.has_card
         }
@@ -2118,6 +2338,11 @@ class Handler(SimpleHTTPRequestHandler):
         pulled at startup.
         """
         self._json_body() if self._has_body() else {}
+        if self.workspace.managed:
+            # The runner edited the files where they are; there is nothing to
+            # pull, only pages to bring up to date with them.
+            self.workspace.rebuild_all()
+            return {"merged": False, "documents": sorted(self.workspace.documents())}
         try:
             repo = git_checkpoint.repo_root(self.workspace.inputs)
             # The pages this container rendered for itself are about to be
@@ -2144,6 +2369,10 @@ class Handler(SimpleHTTPRequestHandler):
         the reader pressed a button and is waiting to see the answer -- the
         background one exists precisely so that nobody has to.
         """
+        if self.workspace.managed:
+            raise ApiError(
+                HTTPStatus.BAD_REQUEST, "managed documents have no remote to pull from"
+            )
         outcome = self.puller.run_now()
         if outcome.error:
             raise ApiError(HTTPStatus.BAD_GATEWAY, outcome.error)
@@ -2161,12 +2390,14 @@ class Handler(SimpleHTTPRequestHandler):
 
         paths = self.workspace.files_of(doc_id)  # 404s an unknown document
         try:
-            repo = git_checkpoint.repo_root(self.workspace.inputs)
+            # A managed document commits to whichever repository it is in,
+            # and its page is not in that repository to be regenerated.
+            repo = self.workspace.repo_for(doc_id)
             result = git_checkpoint.checkpoint(
                 repo,
                 paths,
                 message,
-                generated=self.workspace.outputs,
+                generated=None if self.workspace.managed else self.workspace.outputs,
                 on_merge=self.workspace.rebuild_all,
             )
         except git_checkpoint.GitError as exc:
@@ -2214,7 +2445,10 @@ class Handler(SimpleHTTPRequestHandler):
         if "offset" in payload:
             target.offset = _parse_offset(payload["offset"])
         if "color" in payload:
-            target.color = _parse_color(payload["color"])
+            # An underline's color is an ink; a slot would quietly make it
+            # wear the scheme instead.
+            parse = _parse_ink if target.kind == "underline" else _parse_color
+            target.color = parse(payload["color"])
         # Tested for membership rather than read with a default, because null
         # is a value here: clearing the type is `{"semantic_type": null}`, and
         # a `.get` could not tell that from a PATCH that only moved the card.
@@ -2469,6 +2703,22 @@ def _parse_color(raw) -> int:
     return slot
 
 
+def _parse_ink(raw) -> str:
+    """Validate an underline's ink: black, blue or red, by name.
+
+    Not a slot and not a raw color. The inks are a fixed set the stylesheet
+    already knows, so the name is all that reaches the page -- as a class,
+    never inside a style attribute.
+    """
+    ink = str(raw).strip().lower() if isinstance(raw, str) else None
+    if ink not in UNDERLINE_INKS:
+        raise ApiError(
+            HTTPStatus.BAD_REQUEST,
+            f"unknown ink {raw!r}; an underline is one of {', '.join(UNDERLINE_INKS)}",
+        )
+    return ink
+
+
 def _parse_offset(raw) -> Offset | None:
     """Validate a client-supplied {dx, dy}. Zero or null means "reset"."""
     if raw is None:
@@ -2639,8 +2889,19 @@ def broker_for(workspace: Workspace):
     from .agent.broker import Broker
 
     store = protocol.setting(protocol.JOBS_STORE)
-    path = Path(store) if store else workspace.inputs.parent.parent / "agent-jobs.json"
+    if store:
+        path = Path(store)
+    elif workspace.managed:
+        path = workspace.home / "agent-jobs.json"
+    else:
+        path = workspace.inputs.parent.parent / "agent-jobs.json"
     return Broker(store=path)
+
+
+def document_url(host: str, port: int, doc_id: str) -> str:
+    """Where a browser on this machine reaches one document."""
+    where = "127.0.0.1" if host in ("0.0.0.0", "::", "") else host
+    return f"http://{where}:{port}/{quote(doc_id)}.html"
 
 
 def make_server(
@@ -2662,8 +2923,7 @@ def make_server(
 
 def start_bridge(
     httpd,
-    inputs: Path,
-    outputs: Path,
+    workspace: Workspace,
     host: str,
     *,
     model: str | None = None,
@@ -2691,8 +2951,12 @@ def start_bridge(
     runner = Runner(
         Config(
             remote=f"http://{where}:{httpd.server_port}",
-            inputs=inputs,
-            outputs=outputs,
+            inputs=workspace.inputs,
+            outputs=workspace.outputs,
+            # The server's own, so a managed list is a managed list to the
+            # runner too -- rebuilt from `inputs` it would be a knowledge base
+            # rooted at `/`.
+            workspace=workspace,
             runner_name=f"{_socket.gethostname()} (in-process)",
             model=model,
             permission_mode=permission_mode,
@@ -2727,17 +2991,33 @@ def serve(
     monolithic: bool = False,
     model: str | None = None,
     permission_mode: str = "bypassPermissions",
+    workspace: Workspace | None = None,
+    focus: str = "",
 ) -> int:
+    """Serve until interrupted.
+
+    `workspace` replaces the knowledge base at `inputs` -- a managed list is
+    one. `focus` is a document to name on its own line, for a command that was
+    asked to show one document rather than the whole set.
+    """
     refusal = refuse_insecure_bind(host)
     if refusal:
         print(f"error: {refusal}", file=sys.stderr)
         return 1
 
-    workspace = Workspace(inputs=inputs, outputs=outputs)
-    autosave = autocommit_for(workspace)
-    # One lock between them: a fetch landing between a commit and its push
-    # would leave the commit stranded behind a remote that had just moved.
-    puller = puller_for(workspace, autosave.lock)
+    workspace = workspace or Workspace(inputs=inputs, outputs=outputs)
+    if workspace.managed:
+        # Off whatever the environment says. Both commit or merge one
+        # repository on a timer, and managed files are in many, or none --
+        # committing a codebase on somebody's behalf is not on offer.
+        autosave = AutoCommit(workspace.inputs, workspace.outputs)
+        puller = Pull(workspace.inputs, workspace.outputs, workspace.rebuild_all)
+    else:
+        autosave = autocommit_for(workspace)
+        # One lock between them: a fetch landing between a commit and its
+        # push would leave the commit stranded behind a remote that had just
+        # moved.
+        puller = puller_for(workspace, autosave.lock)
     jobs = broker_for(workspace)
     httpd = make_server(workspace, host, port, autosave, jobs, puller)
     puller.start()
@@ -2753,15 +3033,16 @@ def serve(
         f"[{RUNNING_FINGERPRINT}]{guarded}{saving}{pulling}{bridge}  (Ctrl-C to stop)"
     )
     for name in workspace.documents():
-        print(f"  http://{host}:{httpd.server_port}/{name}.html")
+        print(f"  http://{host}:{httpd.server_port}/{quote(name)}.html")
+    if focus:
+        print(f"\n{document_url(host, httpd.server_port, focus)}\n", flush=True)
 
     # After the socket is bound -- `make_server` binds, `serve_forever` only
     # begins accepting -- so the runner's first claim cannot race the listen.
     if monolithic:
         start_bridge(
             httpd,
-            inputs,
-            outputs,
+            workspace,
             host,
             model=model,
             permission_mode=permission_mode,

@@ -251,6 +251,7 @@ def build_tree(
     order: dict[str, list[str]] | None = None,
     folders: list[str] | None = None,
     labels: dict[str, str] | None = None,
+    name_label=humanize,
 ) -> list[Node]:
     """Assemble a nested tree from flat document ids.
 
@@ -279,7 +280,7 @@ def build_tree(
                 here = "/".join(parts[: depth + 1])
                 match = Node(
                     name=part,
-                    label=(labels or {}).get(here) or humanize(part),
+                    label=(labels or {}).get(here) or name_label(part),
                     is_dir=not is_file,
                     doc_id=doc_id if is_file else None,
                 )
@@ -299,7 +300,7 @@ def build_tree(
             if match is None:
                 here = "/".join(seen)
                 match = Node(
-                    name=part, label=(labels or {}).get(here) or humanize(part), is_dir=True
+                    name=part, label=(labels or {}).get(here) or name_label(part), is_dir=True
                 )
                 cursor.children.append(match)
             cursor = match

@@ -57,6 +57,9 @@ class Config:
     add_dirs: tuple[str, ...] = ()
     once: bool = False
     verbose: bool = False
+    # The server's workspace, when the runner shares its process. A managed
+    # list cannot be rebuilt from `inputs` alone.
+    workspace: object | None = None
 
 
 class Transport:
@@ -142,7 +145,9 @@ class Runner:
             except (urllib.error.URLError, OSError, ValueError) as exc:
                 _log(f"could not report the result of {job_id}: {exc}")
 
-        workspace = Workspace(inputs=self.config.inputs, outputs=self.config.outputs)
+        workspace = self.config.workspace or Workspace(
+            inputs=self.config.inputs, outputs=self.config.outputs
+        )
 
         try:
             # A job naming a document that is not here should fail now and say
@@ -153,7 +158,7 @@ class Runner:
             finish(False, f"no document called {document!r} here ({exc})")
             return
 
-        action = registry.find(self.config.inputs, action_name)
+        action = registry.find(workspace.settings, action_name)
         if action is None:
             finish(False, f"no action called {action_name!r} in this knowledge base")
             return
@@ -165,7 +170,13 @@ class Runner:
         _log(f"{job_id}: {action.name} on {document}")
         note("status", f"{action.label} — {document}")
 
-        location, extra_dirs = self.locate(path, document)
+        if workspace.managed:
+            # No checkout to run in and nothing relative to name it by: the
+            # file is where it is, and the turn works beside it.
+            location, extra_dirs, root = str(path), [str(path.parent)], path.parent
+        else:
+            location, extra_dirs = self.locate(path, document)
+            root = self.config.inputs.parent
         if action.name == registry.REVIEW:
             prompt = registry.review_prompt(action, location, instruction, comments)
             if not comments:
@@ -174,11 +185,11 @@ class Runner:
                     "no comments were selected; asking for a read-through instead",
                 )
         else:
-            prompt = action.render(document, instruction)
+            prompt = action.render(location if workspace.managed else document, instruction)
 
         outcome = runner.run(
             prompt,
-            root=self.config.inputs.parent,
+            root=root,
             on_event=note,
             model=self.config.model,
             permission_mode=self.config.permission_mode,
@@ -192,7 +203,7 @@ class Runner:
 
         revision = ""
         try:
-            note("status", "re-rendering and pushing")
+            note("status", "re-rendering" if workspace.managed else "re-rendering and pushing")
             revision = self.publish(workspace, document, action, instruction)
         except Exception as exc:  # noqa: BLE001 -- reported, never raised
             note("error", f"the edit is saved here but not pushed: {exc}")
@@ -255,6 +266,11 @@ class Runner:
         from .. import checkpoint as git
 
         workspace.rebuild_all()
+        # Managed files belong to whatever repository they are in, if any, and
+        # a button press is not consent to commit to it. The edit is on disk;
+        # Checkpoint is there for when the reader wants it committed.
+        if workspace.managed:
+            return ""
 
         repo = git.repo_root(self.config.inputs)
         summary = instruction.strip().splitlines()[0] if instruction.strip() else action.label
@@ -301,7 +317,10 @@ class Runner:
 
     def loop(self) -> int:
         _log(f"talking to {self.config.remote}")
-        _log(f"knowledge base at {self.config.inputs}")
+        if getattr(self.config.workspace, "managed", False):
+            _log(f"managed documents listed in {self.config.workspace.home}")
+        else:
+            _log(f"knowledge base at {self.config.inputs}")
         _log(f"permission mode: {self.config.permission_mode}")
 
         failures = 0

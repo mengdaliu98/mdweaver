@@ -218,6 +218,31 @@ def test_a_highlight_without_a_thread_gets_no_card():
     assert "note__body" not in result.html
 
 
+def test_an_underline_is_a_bare_mark_drawn_as_a_rule():
+    result = render_document(
+        "Serve over CRAM/BAM.", [ann("CRAM/BAM", kind="underline", thread=[], color="red")]
+    )
+
+    mark = BeautifulSoup(result.html, "html.parser").select_one("mark.hl")
+    assert mark is not None and mark.get_text() == "CRAM/BAM"
+    assert {"hl--underline", "hl--ink-red"} <= set(mark["class"])
+    assert not mark.get("style"), "an ink is a class, never an inline colour"
+    assert "note__body" not in result.html
+
+
+def test_a_highlight_is_not_drawn_as_an_underline():
+    result = render_document(
+        "Serve over CRAM/BAM.", [ann("CRAM/BAM", kind="highlight", thread=[])]
+    )
+    assert "hl--underline" not in result.html
+
+
+def test_an_underline_survives_a_sidecar_round_trip():
+    raw = {"id": "u1", "kind": "underline", "color": "blue", "status": "open",
+           "target": {"quote": "CRAM/BAM"}}
+    assert Annotation.from_dict(raw).to_dict() == raw
+
+
 def test_comment_bodies_are_escaped():
     hostile = Annotation(
         id="x",

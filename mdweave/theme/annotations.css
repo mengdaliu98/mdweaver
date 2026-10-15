@@ -20,6 +20,9 @@
    │                                                                          │
    │ A single annotation can still opt out: set "color": "rgb(255 0 128)"     │
    │ in its .ann.json and the color is emitted inline, below.                 │
+   │                                                                          │
+   │ The one exception is underlines: three fixed inks, not slots. See the    │
+   │ underline section for why.                                               │
    └──────────────────────────────────────────────────────────────────────────┘
    ========================================================================== */
 
@@ -55,6 +58,27 @@ mark.hl {
 }
 
 mark.hl--has-note { cursor: pointer; }
+
+/* The other bare mark: a rule under the text instead of a fill behind it. In
+   the edge color, not the fill -- the fill is a pastel chosen to sit behind
+   body text, and drawn as a 2px line it all but disappears. The edge is the
+   one darkened until it clears contrast, which is what a thin line needs. */
+mark.hl--underline {
+  background: none;
+  text-decoration-line: underline;
+  text-decoration-color: var(--hl-edge);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 0.18em;
+}
+
+/* An underline's inks are fixed, not slots -- the one place this file names a
+   hue. Black, blue and red are what a pen underlines in, and they mean
+   something on their own; mapping them onto a scheme would let a pastel
+   palette turn "red" into peach. Both variables point at the ink, so the
+   swatch in the menu is filled with it too. */
+.hl--ink-black, .swatch--ink-black { --hl-bg: #1f2328; --hl-edge: #1f2328; }
+.hl--ink-blue,  .swatch--ink-blue  { --hl-bg: #0969da; --hl-edge: #0969da; }
+.hl--ink-red,   .swatch--ink-red   { --hl-bg: #cf222e; --hl-edge: #cf222e; }
 
 /* Applied by notes.js while the matching note is open or hovered. */
 mark.hl--active {

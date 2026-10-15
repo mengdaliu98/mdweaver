@@ -731,6 +731,47 @@ def test_a_new_highlight_is_painted_without_a_reload(prose):
     assert fill_of(page, "mark.hl") == painted, "the reload changed its colour"
 
 
+def test_a_new_underline_is_drawn_without_a_reload(prose):
+    page = prose
+    select_words(page, "bravo", "charlie")
+    page.click('.selection-toolbar__row[aria-label="Underline"] .swatch--ink-red')
+    page.wait_for_selector("mark.hl--underline", timeout=5_000)
+
+    style = "el => { const s = getComputedStyle(el); return [s.textDecorationLine, s.textDecorationColor, s.backgroundColor]; }"
+    line, colour, fill = page.eval_on_selector("mark.hl", style)
+    assert "underline" in line, "placed but not underlined"
+    assert colour == "rgb(207, 34, 46)", "red, whatever the scheme"
+    assert fill in ("rgba(0, 0, 0, 0)", "transparent"), "an underline has no fill"
+
+    # And the server draws it the same way.
+    page.reload(wait_until="networkidle")
+    assert page.eval_on_selector("mark.hl--underline", style) == [line, colour, fill]
+
+
+def test_the_underline_row_is_three_inks_and_an_eraser(prose):
+    page = prose
+    select_words(page, "bravo", "charlie")
+    row = '.selection-toolbar__row[aria-label="Underline"]'
+    colours = page.eval_on_selector_all(row + " .swatch", "els => els.map(e => e.dataset.color)")
+    assert colours == ["black", "blue", "red"]
+    assert page.locator(row + ' .selection-toolbar__eraser[data-erase="underline"]').count() == 1
+
+
+def test_the_underline_eraser_leaves_a_highlight_beside_it(prose):
+    page = prose
+    select_words(page, "bravo", "bravo")
+    page.click('.selection-toolbar__row[aria-label="Underline"] .swatch--ink-blue')
+    page.wait_for_selector("mark.hl--underline", timeout=5_000)
+    select_words(page, "charlie", "charlie")
+    page.click('.selection-toolbar__row[aria-label="Highlight"] .swatch--c3')
+    page.wait_for_selector("mark.hl:not(.hl--underline)", timeout=5_000)
+
+    select_words(page, "bravo", "charlie")
+    page.click('.selection-toolbar__row[aria-label="Underline"] .selection-toolbar__eraser')
+    page.wait_for_selector("mark.hl--underline", state="detached", timeout=5_000)
+    assert page.locator("mark.hl").count() == 1
+
+
 def test_a_new_comment_keeps_its_colour_after_the_composer_closes(prose):
     """Reported precisely: the colour shows while typing -- that is the pending
     highlight, which uses the swatch's own token -- and vanishes on submit,
@@ -768,7 +809,7 @@ def test_the_menu_puts_format_above_the_annotations(prose):
     rows = page.eval_on_selector_all(
         ".selection-toolbar__row", "els => els.map(e => e.getAttribute('aria-label'))"
     )
-    assert rows == ["Format", "Comment", "Highlight"]
+    assert rows == ["Format", "Comment", "Highlight", "Underline"]
     assert page.locator(".selection-toolbar__split").count() == 1
 
 
@@ -874,3 +915,120 @@ def test_without_the_cli_the_button_goes_straight_to_the_file_picker(
         httpd.shutdown()
         httpd.server_close()
         thread.join(timeout=5)
+
+
+# --- managed documents --------------------------------------------------------
+#
+# A list of files rather than a knowledge base. The panel draws only the part
+# of the filesystem below where the files part ways, so every path it hands
+# back has to be the real one -- which is exactly the kind of thing that is
+# self-consistent on the server and wrong once a drag uses it.
+
+@pytest.fixture()
+def managed_served(tmp_path, monkeypatch):
+    from mdweave import managed
+    from mdweave.serve import ManagedWorkspace
+
+    home = tmp_path / "home"
+    monkeypatch.setenv(managed.HOME_ENV, str(home))
+    files = {}
+    for key, rel in (("one", "A/a/file1.md"), ("two", "A/b/file2.md")):
+        path = tmp_path / "root" / rel
+        path.parent.mkdir(parents=True)
+        path.write_text(f"# {path.stem}\n\nProse.\n", encoding="utf-8")
+        managed.add(home, path)
+        files[key] = path
+
+    workspace = ManagedWorkspace(
+        inputs=Path("/"), outputs=managed.outputs(home), home=home
+    )
+    workspace.rebuild_all()
+
+    httpd = make_server(workspace, "127.0.0.1", 0)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{httpd.server_port}", workspace, files
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+
+
+@pytest.fixture()
+def managed_page(browser, managed_served):
+    from mdweave import managed
+
+    base, _, files = managed_served
+    context = browser.new_context(viewport={"width": 1280, "height": 900})
+    page = context.new_page()
+    broke: list[str] = []
+    page.on("pageerror", lambda exc: broke.append(str(exc)))
+
+    page.goto(f"{base}/{managed.doc_id(files['one'])}.html", wait_until="networkidle")
+    page.wait_for_selector(".sidebar--manageable", timeout=10_000)
+    yield page
+
+    context.close()
+    assert not broke, "the panel threw: " + "; ".join(broke)
+
+
+def test_managed_folders_can_be_reordered(managed_page, managed_served):
+    _, workspace, files = managed_served
+    shared = workspace.tree_base()
+    a, b = f"{shared}/a", f"{shared}/b"
+
+    target = folder_row(managed_page, b)
+    box = target.bounding_box()
+    managed_page.drag_and_drop(
+        f'.tree__folder[data-path="{a}"] > summary.tree__row--folder',
+        f'.tree__folder[data-path="{b}"] > summary.tree__row--folder',
+        target_position={"x": box["width"] / 2, "y": box["height"] - 2},
+    )
+    managed_page.wait_for_function(
+        f"""() => document.querySelector('ul.tree[data-path="{shared}"] .tree__folder')
+                    .dataset.path === '{b}'""",
+        timeout=10_000,
+    )
+    order = json.loads((workspace.home / ORDER_FILE).read_text(encoding="utf-8"))
+    assert order == {shared: ["b", "a"]}
+
+
+def test_a_managed_document_cannot_be_dragged_into_another_folder(
+    managed_page, managed_served
+):
+    _, workspace, files = managed_served
+    b = f"{workspace.tree_base()}/b"
+    box = folder_row(managed_page, b).bounding_box()
+
+    managed_page.drag_and_drop(
+        '.tree__row--file[data-name="file1"]',
+        f'.tree__folder[data-path="{b}"] > summary.tree__row--folder',
+        target_position={"x": box["width"] / 2, "y": box["height"] / 2},
+    )
+    managed_page.wait_for_selector("text=stay where they are on disk", timeout=5_000)
+    assert files["one"].exists()
+
+
+def test_the_bin_stops_managing_without_deleting(managed_page, managed_served):
+    from mdweave import managed
+
+    _, workspace, files = managed_served
+    asked: list[str] = []
+
+    def answer(dialog):
+        asked.append(dialog.message)
+        dialog.accept()
+
+    managed_page.on("dialog", answer)
+    row = managed_page.locator('.tree__file:has([data-name="file2"])')
+    row.hover()
+    row.locator('[data-action="delete"]').click()
+
+    managed_page.wait_for_function(
+        """() => !document.querySelector('.tree__row--file[data-name="file2"]')""",
+        timeout=10_000,
+    )
+    assert asked and asked[0].startswith('Stop managing "file2"?')
+    assert files["two"].exists()
+    assert files["two"] not in managed.load(workspace.home)

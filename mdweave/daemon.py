@@ -201,3 +201,42 @@ def open_page(url: str) -> bool:
         except OSError:
             continue
     return False
+
+
+# --- talking to a server that is already up --------------------------------
+
+def post(host: str, port: int, path: str, payload: dict, timeout: float = 120.0) -> dict:
+    """One JSON request to the running server, as the browser would make it.
+
+    The same Content-Type every write needs, and the page password when one is
+    set -- the server cannot tell this from a page, and should not have to.
+    Raises RuntimeError carrying the server's own words when it refuses.
+    """
+    import base64
+
+    from .serve import credentials
+
+    headers = {"Content-Type": "application/json"}
+    wanted = credentials()
+    if wanted:
+        token = base64.b64encode(f"{wanted[0]}:{wanted[1]}".encode()).decode()
+        headers["Authorization"] = f"Basic {token}"
+
+    request = urllib.request.Request(
+        f"http://{host}:{port}{path}",
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+        headers=headers,
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read()
+            return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as exc:
+        try:
+            said = json.loads(exc.read()).get("error") or exc.reason
+        except (ValueError, AttributeError):
+            said = exc.reason
+        raise RuntimeError(f"{exc.code}: {said}") from None
+    except (urllib.error.URLError, OSError) as exc:
+        raise RuntimeError(str(exc)) from None
