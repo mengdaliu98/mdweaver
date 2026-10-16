@@ -363,15 +363,18 @@
   margin-bottom: 0.15rem;
 }
 
-/* A card on the left that is not coming back. Struck through rather than
-   greyed out: this one is about to be deleted, and "faded" is already what
-   the rejected half of a hunk looks like a few centimetres above. */
-.merge__card--handled {
-  border-style: dashed;
-  opacity: 0.7;
-}
+/* One column of cards, each with Claude's answer set into it. */
+.merge__cards--replies { grid-template-columns: minmax(0, 1fr); }
 
-.merge__card--handled .review__body { text-decoration: line-through; }
+.merge__reply {
+  margin-top: 0.35rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid color-mix(in srgb, var(--hl-edge, var(--rule)) 28%, transparent);
+  border-radius: 6px;
+  background: var(--paper);
+  color: var(--ink);
+}
+.merge__reply--none { opacity: 0.6; font-style: italic; }
 
 .merge__gone {
   margin: 0.25rem 0 0;

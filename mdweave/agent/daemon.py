@@ -25,8 +25,10 @@ it the edit is safely committed and invisible.
 from __future__ import annotations
 
 import json
+import shutil
 import socket
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -115,6 +117,7 @@ class Runner:
         instruction = job.get("instruction", "")
         raw_comments = job.get("comments") or []
         comments = [c for c in raw_comments if isinstance(c, dict)]
+        mode = str(job.get("mode") or "")
 
         def note(kind: str, text: str) -> None:
             try:
@@ -127,7 +130,13 @@ class Runner:
                 if self.config.verbose:
                     _log(f"could not post an event: {exc}")
 
-        def finish(ok: bool, detail: str, revision: str = "", session: str = "") -> None:
+        def finish(
+            ok: bool,
+            detail: str,
+            revision: str = "",
+            session: str = "",
+            replies: dict | None = None,
+        ) -> None:
             # `session` is reported for the record, not to be resumed from:
             # it is the id of the one fresh session that ran this job, which
             # is what you need to find its transcript on this machine
@@ -140,6 +149,7 @@ class Runner:
                         "detail": detail,
                         "revision": revision,
                         "session": session,
+                        "replies": replies or {},
                     },
                 )
             except (urllib.error.URLError, OSError, ValueError) as exc:
@@ -177,8 +187,22 @@ class Runner:
         else:
             location, extra_dirs = self.locate(path, document)
             root = self.config.inputs.parent
+        # Where the turn writes its answer to each comment. A directory of its
+        # own, opened to the session, because a session that may only edit
+        # beside the document would be refused a file anywhere else.
+        replies_dir = (
+            tempfile.mkdtemp(prefix="mdweave-replies-")
+            if action.name == registry.REVIEW and comments
+            else None
+        )
+        replies_path = str(Path(replies_dir) / "replies.json") if replies_dir else ""
+        if replies_dir:
+            extra_dirs = [*extra_dirs, replies_dir]
+
         if action.name == registry.REVIEW:
-            prompt = registry.review_prompt(action, location, instruction, comments)
+            prompt = registry.review_prompt(
+                action, location, instruction, comments, replies_path, mode
+            )
             if not comments:
                 note(
                     "status",
@@ -195,6 +219,12 @@ class Runner:
             permission_mode=self.config.permission_mode,
             add_dirs=[*self.config.add_dirs, *extra_dirs],
         )
+
+        replies = read_replies(replies_path, comments)
+        if replies_dir:
+            shutil.rmtree(replies_dir, ignore_errors=True)
+        if replies_path and not replies and outcome.ok:
+            note("error", "Claude did not write any replies to the comments")
 
         if not outcome.ok:
             _log(f"{job_id}: failed — {outcome.error}")
@@ -220,7 +250,7 @@ class Runner:
             note("error", f"pushed, but the site could not pull it in: {exc}")
 
         _log(f"{job_id}: done — {outcome.summary}")
-        finish(True, outcome.summary, revision, outcome.session_id or "")
+        finish(True, outcome.summary, revision, outcome.session_id or "", replies)
 
     def locate(self, path: Path, document: str) -> tuple[str, list[str]]:
         """Where to send Claude for this document, and what else to open up.
@@ -383,6 +413,29 @@ class Runner:
             if failures:
                 delay = BACKOFF[min(failures - 1, len(BACKOFF) - 1)]
                 time.sleep(delay)
+
+
+def read_replies(path: str, comments: list[dict]) -> dict[str, str]:
+    """The answers a turn wrote, by comment id, or {} if there are none to use.
+
+    Forgiving about everything but the shape: a missing file, bad JSON or a
+    reply to a comment that was never sent each cost that reply and nothing
+    else -- the edit the turn made is still worth handing back.
+    """
+    if not path:
+        return {}
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    sent = {str(c.get("id")) for c in comments}
+    return {
+        str(key): value.strip()
+        for key, value in data.items()
+        if str(key) in sent and isinstance(value, str) and value.strip()
+    }
 
 
 def from_env(args) -> Config | None:

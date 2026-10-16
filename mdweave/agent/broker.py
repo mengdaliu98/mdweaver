@@ -147,6 +147,7 @@ class Broker:
         instruction: str = "",
         comments: list[dict] | None = None,
         before: str = "",
+        mode: str = "",
     ) -> Job:
         """Queue one job.
 
@@ -163,6 +164,7 @@ class Broker:
             instruction=instruction,
             comments=list(comments or []),
             before=before,
+            mode=mode,
         )
         with self._condition:
             self._expire()
@@ -283,6 +285,23 @@ class Broker:
             self._condition.notify_all()
             return event
 
+    def take_replies(self, job_id: str) -> dict[str, str] | None:
+        """Hand over a finished job's replies once, and mark them taken.
+
+        None for a job that is not here or not finished; an empty dict for one
+        whose replies were already written in, or that never had any. Under
+        the lock, so two tabs collecting the same job cannot both append.
+        """
+        with self._condition:
+            job = self._jobs.get(job_id)
+            if job is None or not job.finished:
+                return None
+            if job.replies_applied:
+                return {}
+            job.replies_applied = True
+            self._save()
+            return dict(job.replies)
+
     def finish(
         self,
         job_id: str,
@@ -291,6 +310,7 @@ class Broker:
         revision: str = "",
         session: str | None = None,
         after: str | None = None,
+        replies: dict[str, str] | None = None,
     ) -> Job | None:
         """Close a job out, optionally recording what the document became.
 
@@ -307,6 +327,8 @@ class Broker:
                 return None
             if after is not None:
                 job.after = after
+            if replies:
+                job.replies = dict(replies)
             job.state = DONE if ok else FAILED
             job.detail = detail
             job.revision = revision

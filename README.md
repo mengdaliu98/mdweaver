@@ -655,6 +655,35 @@ that does the same thing on the same document today as it did last week,
 rather than one whose behaviour depends on what was asked of it hours ago
 and is no longer visible anywhere on the page.
 
+**Claude answers in the comments.** Each comment sent to Claude comes back
+with a reply in its own thread, shown inside the card in a box of the page's
+color, whatever the card's color is. The reply is not part of the proposal:
+it is written into the comment as soon as the result arrives, so rejecting
+every hunk still leaves you with what Claude said. **Replies only**, beside
+Send in the dialog, asks for just the answers and tells the session not to
+touch the document.
+
+A reply needs a key per comment, and the turn's last message is clipped,
+free prose in a progress log, so the answers travel in a file instead. The
+runner makes an empty directory, opens it to the session with `--add-dir`,
+and the prompt says to write `{"<comment id>": "<reply>"}` there. That part
+of the prompt is appended in code rather than written into the action, so a
+knowledge base with its own review wording still gets replies. Each comment
+goes out with the thread so far, so a reply to Claude's reply is answered in
+context on the next press.
+
+The runner reports the replies, but the server does not write them then. The
+runner's routes take no password, and writing from one of them would let
+anyone who claimed a job put words in your notes. The replies are held on the
+job, and the page writes them in through `/api/agent/jobs/<id>/replies`,
+which does need the password, once.
+
+Comments are no longer deleted when the text they were about is rewritten.
+Each one now carries the reply that says what happened to that text, so the
+card moves to the top of the page instead, quoting the words it was about.
+Nothing on disk changes for that, so if the words come back the comment
+anchors to them again.
+
 **The buttons are yours.** An action is a name, a label and a prompt, and they
 live in `markdown_inputs/.mdweave-agent.json`, beside `.mdweave-theme.json` and
 for the same reason: both machines already have the knowledge base, so adding a
@@ -984,6 +1013,29 @@ anchor, not an absolute coordinate, so a moved note still travels with its
 highlight when the text around it changes. A moved note gets a `Reset position`
 action in its card. Dragging needs the server, same as commenting; over
 `file://` a drag lasts only for the session.
+
+**The composer moves too.** While a comment is being written, drag the panel
+by its margins or the bar along its top, for example to see the prose it was
+covering. The new card opens where the panel was left: its offset is saved
+with the comment.
+
+**Drag a card's lower-right corner to resize it.** The size is saved in the
+sidecar as `"size": {"w": …, "h": …}` and the card opens that size from then
+on. Anything that does not fit scrolls inside the card. The resizing itself is
+the browser's (`resize: both`). A card that opened to the left of its pin is
+held by its right edge, so as a resize begins it is pinned where it stands by
+its top-left, and the corner follows the pointer either way. It goes back to
+opening on whichever side has room the next time it is opened.
+
+**Editing and replying.** Every message in a card has an `Edit` control on
+hover, for the comment itself and for each reply alike, including Claude's.
+`Reply` in the footer adds a message to the thread. Replies are shown nested in
+boxes of the page's color. Both save with `Cmd-Enter`; `Esc` abandons an edit
+and leaves the card open.
+
+A comment whose text has been rewritten no longer disappears. It is drawn
+among the document-level cards at the top of the page, quoting what it was
+about, until those words come back.
 
 ## Commands
 

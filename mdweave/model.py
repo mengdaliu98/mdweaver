@@ -35,6 +35,11 @@ BARE_KINDS = ("highlight", "underline")
 UNDERLINE_INKS = ("black", "blue", "red")
 DEFAULT_INK = "black"
 
+# Who a reply written by a review turn is from. A reply is an ordinary thread
+# entry -- the thread has always been a list with an author on each message --
+# so this is a name like any other, and the card draws it like any other.
+CLAUDE_AUTHOR = "Claude"
+
 
 def resolve_color_token(color) -> str | None:
     """The class `color` names -- `c1`..`c6` -- or None for a raw CSS color."""
@@ -118,6 +123,29 @@ class Offset:
 
 
 @dataclass
+class Size:
+    """How big the reader dragged an open card, in CSS pixels.
+
+    Absent until somebody resizes one: the stylesheet's width and height are
+    the default, and a stored size is the reader overruling it.
+    """
+
+    w: float
+    h: float
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> Size | None:
+        try:
+            w, h = float(d.get("w", 0)), float(d.get("h", 0))
+        except (TypeError, ValueError):
+            return None
+        return cls(w=w, h=h) if w > 0 and h > 0 else None
+
+    def to_dict(self) -> dict[str, float]:
+        return {"w": self.w, "h": self.h}
+
+
+@dataclass
 class Annotation:
     """A highlight, optionally carrying a comment thread.
 
@@ -151,6 +179,8 @@ class Annotation:
     # screen makes you look at the whole list and deselect before anything runs
     # -- so the cost of a wrong default is one unticked box, not a surprise edit.
     send_to_claude: bool = True
+    # The open card's size, once the reader has dragged its corner.
+    size: Size | None = None
     # Free-form escape hatch so new features do not require a schema change.
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -158,8 +188,10 @@ class Annotation:
     def from_dict(cls, d: dict[str, Any]) -> Annotation:
         known = {
             "id", "target", "kind", "color", "status", "thread", "tags", "offset",
-            "semantic_type", "send_to_claude",
+            "semantic_type", "send_to_claude", "size",
         }
+        raw_size = d.get("size")
+        size = Size.from_dict(raw_size) if isinstance(raw_size, dict) else None
         raw_offset = d.get("offset")
         offset = Offset.from_dict(raw_offset) if isinstance(raw_offset, dict) else None
         raw_target = d.get("target")
@@ -177,6 +209,7 @@ class Annotation:
             offset=offset or None,
             semantic_type=(d.get("semantic_type") or None),
             send_to_claude=bool(d.get("send_to_claude", True)),
+            size=size,
             extra={k: v for k, v in d.items() if k not in known},
         )
 
@@ -202,6 +235,8 @@ class Annotation:
         # was never set by anybody.
         if not self.send_to_claude:
             d["send_to_claude"] = False
+        if self.size:
+            d["size"] = self.size.to_dict()
         d.update(self.extra)
         return d
 

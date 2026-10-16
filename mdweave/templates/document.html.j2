@@ -193,11 +193,9 @@
 
            `data-level` is how notes.js tells the two kinds apart, and it has
            to be said out loud rather than inferred from the absence of a
-           `<mark>`: a comment about the document as a whole has no highlight,
-           but neither does an anchored comment whose text has since been
-           edited away, and the two want opposite treatment -- the first is
-           placed in the corner grid, the second is hidden until its quote
-           comes back. #}
+           `<mark>`. A comment whose text has since been edited away is
+           `detached`, and goes to the corner grid too, saying what it was
+           about -- it may be carrying a reply, and hiding it would hide that. #}
         <div class="note note--{{ note.color_token }}"
              id="note-{{ note.dom_id }}"
              data-ann="{{ note.id }}"
@@ -219,8 +217,16 @@
              otherwise read "Comment on ““" -- a tooltip saying nothing and a
              screen reader announcing a pair of quotation marks. It is about
              the whole piece, and that is what they say instead. #}
-{% set pin_title = note.quote if note.anchored else "Comment on this document" %}
-{% set pin_label = "Comment on “" ~ note.quote ~ "”" if note.anchored else "Comment on this document" %}
+{% if note.anchored %}
+{% set pin_title = note.quote %}
+{% set pin_label = "Comment on “" ~ note.quote ~ "”" %}
+{% elif note.detached %}
+{% set pin_title = "Its text has changed: “" ~ note.quote ~ "”" %}
+{% set pin_label = "Comment on text that has since changed: “" ~ note.quote ~ "”" %}
+{% else %}
+{% set pin_title = "Comment on this document" %}
+{% set pin_label = "Comment on this document" %}
+{% endif %}
           <button class="note__pin" type="button"
                   aria-expanded="false"
                   aria-controls="note-body-{{ note.dom_id }}"
@@ -228,9 +234,16 @@
             <span class="note__initial" aria-hidden="true">{{ note.initial }}</span>
             <span class="sr-only">{{ pin_label }}</span>
           </button>
-          <div class="note__body" id="note-body-{{ note.dom_id }}" role="region">
-{% for entry in note.thread %}
-            <div class="note__entry">
+          {# A stored size is the reader having dragged the corner. `--sized`
+             lifts the stylesheet's height cap, so the box is exactly as big as
+             they made it and scrolls inside when the thread is longer. #}
+          <div class="note__body{% if note.size %} note__body--sized{% endif %}" id="note-body-{{ note.dom_id }}" role="region"
+               {% if note.size %}style="width: {{ note.size.w }}px; height: {{ note.size.h }}px;"{% endif %}>
+{% if note.detached %}
+            <p class="note__detached">The text this was about has changed: <q>{{ note.quote }}</q></p>
+{% endif %}
+{% for entry in note.thread[:1] %}
+            <div class="note__entry" data-entry="0">
               <div class="note__meta">
                 <span class="note__author">{{ entry.author }}</span>
                 {% if entry.at %}<time class="note__date">{{ entry.at }}</time>{% endif %}
@@ -238,6 +251,20 @@
               <p class="note__text">{{ entry.body }}</p>
             </div>
 {% endfor %}
+            {# Replies sit inside the card in boxes of the page's own color --
+               whatever the card's color is -- so an answer reads as something
+               set into the remark rather than as more of it. #}
+            <div class="note__replies">
+{% for reply in note.replies %}
+              <div class="note__entry note__reply{% if reply.claude %} note__reply--claude{% endif %}" data-entry="{{ reply.index }}">
+                <div class="note__meta">
+                  <span class="note__author">{{ reply.author }}</span>
+                  {% if reply.at %}<time class="note__date">{{ reply.at }}</time>{% endif %}
+                </div>
+                <p class="note__text">{{ reply.body }}</p>
+              </div>
+{% endfor %}
+            </div>
 {% if note.tags %}
             <div class="note__tags">
 {% for tag in note.tags %}

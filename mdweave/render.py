@@ -18,7 +18,7 @@ from pygments.lexers import get_lexer_by_name, guess_lexer
 from pygments.util import ClassNotFound
 
 from .inject import Placement, inject
-from .model import Annotation, safe_id
+from .model import CLAUDE_AUTHOR, Annotation, safe_id
 from .tree import Node, humanize, relative_prefix
 
 HERE = Path(__file__).parent
@@ -212,6 +212,17 @@ def render_document(
 
     placed = [p.annotation for p in placements if p.resolved]
     notes = [_note_context(a) for a in placed if a.has_card]
+    # A comment whose text has been rewritten used to vanish from the page,
+    # thread and all. Now that a thread can hold Claude's answer to it -- and
+    # an answer is most likely to arrive exactly when the text was rewritten
+    # -- that is losing the reply along with the remark. So it is drawn as a
+    # document-level card instead, saying what it was about. Nothing is
+    # changed on disk: if the words come back, it anchors to them again.
+    notes += [
+        _note_context(p.annotation, detached=True)
+        for p in placements
+        if not p.resolved and p.annotation.has_card
+    ]
 
     env = _environment()
     # A page nested under a folder has to climb back out to reach the shared
@@ -241,7 +252,7 @@ def render_document(
     return RenderResult(html=html, placements=placements)
 
 
-def _note_context(ann: Annotation) -> dict:
+def _note_context(ann: Annotation, detached: bool = False) -> dict:
     return {
         "id": ann.id,
         "dom_id": safe_id(ann.id),
@@ -254,7 +265,9 @@ def _note_context(ann: Annotation) -> dict:
         # template uses this for the pin's tooltip and the screen-reader
         # label, both of which have to read sensibly when it is empty.
         "quote": ann.quote,
-        "anchored": ann.anchored,
+        "anchored": ann.anchored and not detached,
+        "detached": detached,
+        "size": ann.size.to_dict() if ann.size else None,
         "semantic_type": ann.semantic_type or "",
         "send_to_claude": ann.send_to_claude,
         "author": ann.thread[0].author if ann.thread else "",
@@ -262,6 +275,19 @@ def _note_context(ann: Annotation) -> dict:
         "thread": [
             {"author": c.author, "at": _short_date(c.at), "body": c.body}
             for c in ann.thread
+        ],
+        # The thread's first message is the comment; everything after it is a
+        # reply, drawn nested inside the card. `index` is the position in the
+        # thread, which is what an edit names.
+        "replies": [
+            {
+                "index": at,
+                "author": c.author,
+                "at": _short_date(c.at),
+                "body": c.body,
+                "claude": c.author == CLAUDE_AUTHOR,
+            }
+            for at, c in enumerate(ann.thread[1:], start=1)
         ],
     }
 

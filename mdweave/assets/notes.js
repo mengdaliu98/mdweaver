@@ -26,6 +26,7 @@
   var STEP = PIN + 2; // shift applied to un-stack coincident pins
   var EDGE = 8; // keep cards this far inside the page
   var DRAG_SLOP = 4; // movement below this is a click, not a drag
+  var GRIP = 18; // how much of an open card's lower-right corner resizes it
 
   /* The corner grid the document-level pins are dealt into: how far in from
    * the top-left of the page it starts, and the air between neighbours.
@@ -142,7 +143,13 @@
     if (left + PIN + CARD_GAP + body.offsetWidth > bounds.width - EDGE) {
       note.classList.add("note--flip");
     }
-    if (top + body.offsetHeight > bounds.height - EDGE) {
+    // Up only when it fits up there. A card hanging below the end of a short
+    // document lengthens the page and can be scrolled to; one pushed above
+    // the top of it cannot be reached at all.
+    if (
+      top + body.offsetHeight > bounds.height - EDGE &&
+      top + PIN + CARD_GAP - body.offsetHeight >= 0
+    ) {
       note.classList.add("note--up");
     }
   }
@@ -258,13 +265,88 @@
     left = Math.max(EDGE, Math.min(left, bounds.width - width - EDGE));
 
     var top = pin.top - CARD_GAP;
-    if (top + height > bounds.height - EDGE) {
+    if (top + height > bounds.height - EDGE && pin.top + PIN + CARD_GAP - height >= 0) {
       top = pin.top + PIN + CARD_GAP - height; // the `.note--up` position
     }
     top = Math.max(EDGE, top);
 
+    // Then wherever the reader has dragged it, from where it opened. Kept
+    // inside the page, but applied after the clamp above so the panel follows
+    // the pointer one for one even when it opened pressed against an edge.
+    var shift = offsetOf(composer);
+    left = Math.max(EDGE, Math.min(left + shift.dx, bounds.width - width - EDGE));
+    top = Math.max(EDGE, top + shift.dy);
+
     composer.style.left = left + "px";
     composer.style.top = top + "px";
+
+    // Where the card would open, unmoved and unflipped -- what a dragged
+    // panel's displacement is measured from when it becomes a note's offset.
+    composer.dataset.naturalLeft = String(pin.left + PIN + CARD_GAP);
+    composer.dataset.naturalTop = String(pin.top - CARD_GAP);
+  }
+
+  /* Things inside a panel that are for typing or pressing, not for dragging
+   * it by. Anywhere else on it -- the margin, the quote, the grip -- moves it. */
+  var NOT_A_HANDLE = "textarea, input, button, select, label, a, [contenteditable]";
+
+  /* Let the composer be moved while it is being written in.
+   *
+   * It sits where the card is going to open, which is often exactly on top of
+   * the prose the comment is about -- the one thing the writer wants to read
+   * while writing. The displacement is kept on the panel as `data-dx`/`data-dy`,
+   * like a note's, and sent with the comment so the new card is born there. */
+  function dragComposer(composer) {
+    var from = null;
+    var base = null;
+    var active = null;
+
+    composer.addEventListener("pointerdown", function (event) {
+      if (event.button !== 0) return;
+      if (event.target.closest && event.target.closest(NOT_A_HANDLE)) return;
+      active = event.pointerId;
+      from = { x: event.clientX, y: event.clientY };
+      base = offsetOf(composer);
+      composer.setPointerCapture(active);
+      composer.classList.add("composer--dragging");
+      event.preventDefault(); // no text selection from the quote while moving
+    });
+
+    composer.addEventListener("pointermove", function (event) {
+      if (active === null || event.pointerId !== active) return;
+      var delta = dragPixels(event, from);
+      composer.dataset.dx = String(base.dx + delta.dx);
+      composer.dataset.dy = String(base.dy + delta.dy);
+      layoutComposer(composer, layer.getBoundingClientRect());
+    });
+
+    function finish(event) {
+      if (active === null || (event && event.pointerId !== active)) return;
+      try {
+        composer.releasePointerCapture(active);
+      } catch (err) {
+        /* the capture may already be gone */
+      }
+      active = null;
+      composer.classList.remove("composer--dragging");
+    }
+
+    composer.addEventListener("pointerup", finish);
+    composer.addEventListener("pointercancel", finish);
+  }
+
+  /* The offset to give the note a dragged composer becomes, or null if it was
+   * never moved. Measured from where its card would naturally open to where
+   * the panel actually is, so the card opens exactly where it was left --
+   * the panel's own drag distance would be off by however far it had been
+   * pushed in from an edge. */
+  function composerOffset(composer) {
+    var shift = offsetOf(composer);
+    if (!shift.dx && !shift.dy) return null;
+    return {
+      dx: (parseFloat(composer.style.left) || 0) - (parseFloat(composer.dataset.naturalLeft) || 0),
+      dy: (parseFloat(composer.style.top) || 0) - (parseFloat(composer.dataset.naturalTop) || 0),
+    };
   }
 
   /* Every panel in the layer, not the first one found. There are two kinds --
@@ -281,6 +363,9 @@
 
   function setOpen(note, open) {
     note.classList.toggle("note--open", open);
+    // A card resized while open was pinned where it stood (see `makeResizable`);
+    // closed, it goes back to opening whichever way has room for its new size.
+    if (!open) unfreeze(note);
 
     var pin = note.querySelector(".note__pin");
     if (pin) pin.setAttribute("aria-expanded", open ? "true" : "false");
@@ -371,6 +456,89 @@
     pin.addEventListener("pointercancel", finish);
   }
 
+  /* --- resizing ----------------------------------------------------------- */
+
+  /* Set for the one click that ends a resize; see `makeResizable`. */
+  var swallowOutsideClick = false;
+
+  /* Set by annotate.js to persist a card's size. */
+  var sizeHandler = null;
+
+  /* An open card can be resized from its lower-right corner, and scrolls
+   * inside when what it holds is longer than the box.
+   *
+   * The resizing itself is the browser's (`resize: both` in the stylesheet),
+   * which brings the familiar grip and keyboard-free behaviour for nothing.
+   * What it does not know is that the card is positioned from whichever side
+   * had room: a card flipped to the left of its pin is held by its right
+   * edge, and the browser growing it would push its left edge out while the
+   * corner under the cursor stayed put. So on the way into a resize the card
+   * is pinned by its top-left, exactly where it already is, and the corner
+   * then follows the pointer whichever way the card had opened. */
+  function cardOf(note) {
+    return note.querySelector(".note__body");
+  }
+
+  function freeze(note) {
+    var panel = cardOf(note);
+    var box = panel.getBoundingClientRect();
+    var origin = note.getBoundingClientRect();
+    panel.style.left = box.left - origin.left + "px";
+    panel.style.top = box.top - origin.top + "px";
+    panel.style.right = "auto";
+    panel.style.bottom = "auto";
+    panel.style.width = box.width + "px";
+    panel.style.height = box.height + "px";
+    panel.classList.add("note__body--sized");
+  }
+
+  function unfreeze(note) {
+    var panel = cardOf(note);
+    if (!panel) return;
+    panel.style.left = "";
+    panel.style.top = "";
+    panel.style.right = "";
+    panel.style.bottom = "";
+  }
+
+  function makeResizable(note) {
+    var panel = cardOf(note);
+    if (!panel) return;
+
+    panel.addEventListener("pointerdown", function (event) {
+      if (event.button !== 0 || !note.classList.contains("note--open")) return;
+      var box = panel.getBoundingClientRect();
+      if (event.clientX < box.right - GRIP || event.clientY < box.bottom - GRIP) return;
+
+      var before = { w: box.width, h: box.height };
+      freeze(note);
+
+      // The browser does the resizing; all that is left is to notice when it
+      // stops. On the document, because the pointer is rarely still over the
+      // card by then -- and the click that follows a release outside it lands
+      // outside it too, which would close the card it had just resized.
+      document.addEventListener(
+        "pointerup",
+        function () {
+          swallowOutsideClick = true;
+          setTimeout(function () {
+            swallowOutsideClick = false;
+          }, 0);
+          var after = panel.getBoundingClientRect();
+          if (
+            Math.abs(after.width - before.w) < 1 &&
+            Math.abs(after.height - before.h) < 1
+          ) {
+            return;
+          }
+          layout();
+          if (sizeHandler) sizeHandler(note.dataset.ann, after.width, after.height);
+        },
+        { once: true }
+      );
+    });
+  }
+
   /** Put a note back where its anchor says it belongs. */
   function resetPosition(id) {
     var note = noteFor(id);
@@ -398,6 +566,7 @@
       });
       makeDraggable(note, pin);
     }
+    makeResizable(note);
 
     // Hovering a collapsed note previews which text it refers to.
     note.addEventListener("mouseenter", function () {
@@ -454,6 +623,7 @@
     function (event) {
       var target = event.target;
       if (!target || !target.closest) return;
+      if (swallowOutsideClick) return; // the end of a resize, not a dismissal
       if (target.closest(".note")) return; // working inside a card
       if (target.closest("mark.hl--has-note")) return; // the toggle handles it
       if (target.closest(".composer, .selection-toolbar")) return;
@@ -500,6 +670,7 @@
     panel.className = "composer note--" + DEFAULT_COLOR;
     panel.dataset.level = "document";
     panel.innerHTML =
+      '<div class="composer__grip" title="Drag to move" aria-hidden="true"></div>' +
       '<textarea class="composer__input" rows="4"' +
       ' placeholder="Add a comment about this document…"' +
       ' aria-label="' + DOC_LABEL + '"></textarea>' +
@@ -510,6 +681,7 @@
 
     layer.appendChild(panel);
     docComposer = panel;
+    dragComposer(panel);
     layout();
 
     var input = panel.querySelector(".composer__input");
@@ -558,6 +730,7 @@
         semantic_type: null,
         author: localStorage.getItem("mdweave.author") || "me",
         at: new Date().toISOString(),
+        offset: docComposer ? composerOffset(docComposer) : null,
       }),
     })
       .then(function (response) {
@@ -592,6 +765,10 @@
     note.dataset.ann = annotation.id;
     note.dataset.status = annotation.status || "open";
     note.dataset.level = "document";
+    if (annotation.offset) {
+      note.dataset.dx = String(annotation.offset.dx || 0);
+      note.dataset.dy = String(annotation.offset.dy || 0);
+    }
 
     var pin = document.createElement("button");
     pin.type = "button";
@@ -630,14 +807,19 @@
 
     var item = document.createElement("div");
     item.className = "note__entry";
+    item.dataset.entry = "0";
     item.appendChild(meta);
     item.appendChild(text);
+
+    var replies = document.createElement("div");
+    replies.className = "note__replies";
 
     var body = document.createElement("div");
     body.className = "note__body";
     body.id = "note-body-" + annotation.id;
     body.setAttribute("role", "region");
     body.appendChild(item);
+    body.appendChild(replies);
 
     note.appendChild(pin);
     note.appendChild(body);
@@ -718,6 +900,11 @@
     setMoveHandler: function (fn) {
       moveHandler = fn;
     },
+    setSizeHandler: function (fn) {
+      sizeHandler = fn;
+    },
+    dragComposer: dragComposer,
+    composerOffset: composerOffset,
     setRefreshHandler: function (fn) {
       refreshHandler = fn;
     },

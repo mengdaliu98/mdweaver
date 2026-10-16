@@ -37,8 +37,8 @@ from . import edits
 from .agent import protocol
 from .autosave import DEFAULT_DELAY, AutoCommit
 from .model import (
-    BARE_KINDS, COLOR_TOKENS, DEFAULT_COLOR, DEFAULT_INK, UNDERLINE_INKS,
-    Annotation, Comment, Offset, TextTarget,
+    BARE_KINDS, CLAUDE_AUTHOR, COLOR_TOKENS, DEFAULT_COLOR, DEFAULT_INK, UNDERLINE_INKS,
+    Annotation, Comment, Offset, Size, TextTarget,
 )
 from .render import (
     SIDEBAR_OPEN,
@@ -104,11 +104,16 @@ def _writes_something(path: str) -> bool:
     if path in READ_ONLY_POSTS:
         return False
     if path.startswith("/api/agent/"):
-        # Two exceptions, both of which put prose on the disk. `reconcile`
+        # Three exceptions, all of which write something down. `reconcile`
         # pulls in what the runner pushed and re-renders over it; `apply`
-        # writes the version of a reviewed document the reader accepted. The
-        # rest of the bridge's traffic is talk about a job.
-        return path == "/api/agent/reconcile" or path.endswith("/apply")
+        # writes the version of a reviewed document the reader accepted;
+        # `replies` puts Claude's answers into the comments. The rest of the
+        # bridge's traffic is talk about a job.
+        return (
+            path == "/api/agent/reconcile"
+            or path.endswith("/apply")
+            or path.endswith("/replies")
+        )
     return True
 
 # A dragged note may not be flung arbitrarily far from its anchor.
@@ -1707,6 +1712,9 @@ class Handler(SimpleHTTPRequestHandler):
                 erasing,
             )
 
+        if route.path.startswith("/api/annotations/") and route.path.endswith("/replies"):
+            return self._api_reply(route.path[len("/api/annotations/") : -len("/replies")])
+
         if route.path != "/api/annotations":
             raise ApiError(HTTPStatus.NOT_FOUND, f"no such endpoint: {route.path}")
 
@@ -1776,6 +1784,10 @@ class Handler(SimpleHTTPRequestHandler):
             ],
             semantic_type=_parse_semantic_type(payload.get("semantic_type")),
             send_to_claude=_parse_sending(payload, True),
+            # Where the reader dragged the composer while writing it. The card
+            # opens where the panel was, which is the only sensible meaning of
+            # having moved the panel at all.
+            offset=_parse_offset(payload.get("offset")),
         )
 
         # Round-trip check before writing: confirm the anchor the browser
@@ -1791,6 +1803,36 @@ class Handler(SimpleHTTPRequestHandler):
 
         self.workspace.save(doc_id, candidate)
         return HTTPStatus.CREATED, {"annotation": _sent(annotation)}
+
+    def _api_reply(self, ann_id: str):
+        """Add a message to a comment's thread.
+
+        The thread was always a list with an author on each entry; nothing
+        wrote past the first one. A reply from the reader comes in here, and
+        one from Claude through `_api_agent_replies` -- the same append, with
+        a different name on it.
+        """
+        payload = self._json_body()
+        doc_id = _require(payload, "document")
+        body = _require(payload, "body")
+
+        annotations = self.workspace.annotations_for(doc_id)
+        target = next((a for a in annotations if a.id == ann_id and a.has_card), None)
+        if target is None:
+            raise ApiError(HTTPStatus.NOT_FOUND, f"no comment {ann_id!r}")
+
+        target.thread.append(
+            Comment(
+                body=body,
+                author=str(payload.get("author", "me"))[:80] or "me",
+                at=payload.get("at"),
+            )
+        )
+        self.workspace.save(doc_id, annotations)
+        return HTTPStatus.CREATED, {
+            "annotation": _sent(target),
+            "index": len(target.thread) - 1,
+        }
 
     def _api_document_comment(self, doc_id: str, payload: dict):
         """A remark about the piece as a whole, with no sentence to pin it to.
@@ -1824,6 +1866,10 @@ class Handler(SimpleHTTPRequestHandler):
             ],
             semantic_type=_parse_semantic_type(payload.get("semantic_type")),
             send_to_claude=_parse_sending(payload, True),
+            # Where the reader dragged the composer while writing it. The card
+            # opens where the panel was, which is the only sensible meaning of
+            # having moved the panel at all.
+            offset=_parse_offset(payload.get("offset")),
         )
 
         self.workspace.save(doc_id, annotations + [annotation])
@@ -2244,6 +2290,7 @@ class Handler(SimpleHTTPRequestHandler):
                 str(payload.get("revision", ""))[:80],
                 str(payload.get("session", ""))[:80] or None,
                 after=self._reviewed_markdown(broker.get(job_id)),
+                replies=_parse_replies(payload.get("replies"), broker.get(job_id)),
             )
             if job is None:
                 raise ApiError(HTTPStatus.NOT_FOUND, "no such job")
@@ -2290,6 +2337,11 @@ class Handler(SimpleHTTPRequestHandler):
                 broker, path[len("/api/agent/jobs/") : -len("/apply")]
             )
 
+        if path.startswith("/api/agent/jobs/") and path.endswith("/replies"):
+            return self._api_agent_replies(
+                broker, path[len("/api/agent/jobs/") : -len("/replies")]
+            )
+
         raise ApiError(HTTPStatus.NOT_FOUND, f"no such endpoint: {path}")
 
     def _api_agent_review(self, broker):
@@ -2332,14 +2384,60 @@ class Handler(SimpleHTTPRequestHandler):
                 "no runner is connected — start `mdweave agent` on the devserver",
             )
 
+        mode = _optional(payload, "mode")
+        if mode not in ("", "reply"):
+            raise ApiError(HTTPStatus.BAD_REQUEST, f"unknown mode: {mode!r}")
+
         job = broker.submit(
             doc_id,
             action.name,
             _optional(payload, "instruction").strip()[:8000],
             comments=chosen,
             before=before,
+            mode=mode,
         )
         return HTTPStatus.ACCEPTED, {"job": job.summary()}
+
+    def _api_agent_replies(self, broker, job_id: str):
+        """Write a finished review's answers into the comments they answer.
+
+        Called by the page as soon as it collects the result -- before, and
+        whatever happens to, the decision about the diff. A reply is not part
+        of the proposal: rejecting every hunk still leaves Claude having
+        answered, and the answer is worth keeping.
+
+        Here rather than when the runner reports, because the runner's routes
+        take no password and this one does. Holding the replies on the job
+        until now costs a request; writing them from an unauthenticated route
+        would let anyone who claimed a job put words in the reader's notes.
+        Once only: `take_replies` marks them, so a second tab adds nothing.
+        """
+        if self._has_body():
+            self._json_body()
+        job = broker.get(job_id)
+        if job is None:
+            raise ApiError(HTTPStatus.NOT_FOUND, "no such job")
+        replies = broker.take_replies(job_id)
+        if replies is None:
+            raise ApiError(HTTPStatus.CONFLICT, "that job has not finished")
+
+        annotations = self.workspace.annotations_for(job.document)
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        added = []
+        for annotation in annotations:
+            text = replies.get(annotation.id)
+            if text and annotation.has_card:
+                annotation.thread.append(
+                    Comment(body=text, author=CLAUDE_AUTHOR, at=stamp)
+                )
+                added.append(annotation.id)
+        if added:
+            self.workspace.save(job.document, annotations)
+
+        return HTTPStatus.OK, {
+            "added": added,
+            "annotations": [_sent(a) for a in annotations if a.has_card],
+        }
 
     def _api_agent_apply(self, broker, job_id: str):
         """Write the version of a reviewed document the reader accepted.
@@ -2405,7 +2503,12 @@ class Handler(SimpleHTTPRequestHandler):
             # answer -- and if nothing was written it matches `before` and
             # the diff is correctly empty.
             after = self._reviewed_markdown(job, always=True)
-        return {"before": job.before, "after": after}
+        return {
+            "before": job.before,
+            "after": after,
+            "mode": job.mode,
+            "replies": dict(job.replies),
+        }
 
     def _reviewed_markdown(self, job, always: bool = False) -> str:
         """The document behind a review job, as it stands right now.
@@ -2586,6 +2689,19 @@ class Handler(SimpleHTTPRequestHandler):
             target.semantic_type = _parse_semantic_type(payload["semantic_type"])
         if "send_to_claude" in payload:
             target.send_to_claude = _parse_sending(payload, target.send_to_claude)
+        if "size" in payload:
+            target.size = _parse_size(payload["size"])
+        # Rewriting what was said: the comment itself at entry 0, or one of
+        # the replies after it. Only the words change -- who said it and when
+        # stay what they were.
+        if "body" in payload:
+            body = payload["body"]
+            if not isinstance(body, str) or not body.strip():
+                raise ApiError(HTTPStatus.BAD_REQUEST, "a comment cannot be empty")
+            entry = payload.get("entry", 0)
+            if not isinstance(entry, int) or not 0 <= entry < len(target.thread):
+                raise ApiError(HTTPStatus.BAD_REQUEST, f"no entry {entry!r} in that thread")
+            target.thread[entry].body = body.strip()
 
         self.workspace.save(doc_id, annotations)
         return HTTPStatus.OK, {"annotation": _sent(target)}
@@ -2736,7 +2852,7 @@ def _as_comment(annotation: Annotation) -> dict:
     Flatter than `_sent`, and deliberately a different shape: this is a row
     in a list of remarks to tick, not an annotation to re-render. `body` is
     the first thread entry because that is the comment -- anything after it
-    is a reply, and a reply is not a thing to send to Claude as a request.
+    is a reply, carried in `replies` as context rather than as a request.
 
     `semantic_type` is "" rather than null when there is none, matching what
     `render.py` puts in the page, so the browser has one convention for an
@@ -2753,6 +2869,12 @@ def _as_comment(annotation: Annotation) -> dict:
         "send_to_claude": annotation.send_to_claude,
         "color": annotation.color,
         "color_token": annotation.color_token,
+        # The conversation so far, so a second round can answer what was said
+        # to the first. Not part of the request -- `body` is that -- but
+        # context for it.
+        "replies": [
+            {"author": c.author, "body": c.body} for c in annotation.thread[1:]
+        ],
     }
 
 
@@ -2867,6 +2989,53 @@ def _parse_offset(raw) -> Offset | None:
     dy = max(-OFFSET_LIMIT, min(OFFSET_LIMIT, dy))
     offset = Offset(dx=dx, dy=dy)
     return offset if offset else None
+
+
+# The smallest and largest a card may be dragged to. Small enough to tuck away,
+# not so small the corner cannot be found again; large enough for a long
+# thread on a big screen, not so large a stray value could bury the page.
+SIZE_MIN = (160, 60)
+SIZE_MAX = 2000
+
+
+# How much of one reply is kept. A paragraph is an answer; a page is a
+# document, and belongs in the document rather than in its margin.
+REPLY_LIMIT = 4000
+
+
+def _parse_replies(raw, job) -> dict[str, str]:
+    """The runner's replies, kept only for comments the job was about.
+
+    Anything else -- a reply to a comment that was not sent, a non-string, an
+    empty answer -- is dropped rather than refused: the turn has already
+    happened, and failing its report would strand the whole result.
+    """
+    if not isinstance(raw, dict) or job is None:
+        return {}
+    sent = {str(c.get("id")) for c in job.comments}
+    return {
+        key: value.strip()[:REPLY_LIMIT]
+        for key, value in raw.items()
+        if key in sent and isinstance(value, str) and value.strip()
+    }
+
+
+def _parse_size(raw) -> Size | None:
+    """Validate a client-supplied {w, h}. Null means "back to the default"."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ApiError(HTTPStatus.BAD_REQUEST, "size must be an object")
+    try:
+        w, h = float(raw.get("w")), float(raw.get("h"))
+    except (TypeError, ValueError):
+        raise ApiError(HTTPStatus.BAD_REQUEST, "size w and h must be numbers")
+    if not (math.isfinite(w) and math.isfinite(h)):
+        raise ApiError(HTTPStatus.BAD_REQUEST, "size w and h must be finite")
+    return Size(
+        w=round(max(SIZE_MIN[0], min(SIZE_MAX, w))),
+        h=round(max(SIZE_MIN[1], min(SIZE_MAX, h))),
+    )
 
 
 def _covers(span: tuple[int, int], others: list[tuple[int, int]], text: str) -> bool:

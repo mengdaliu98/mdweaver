@@ -162,6 +162,23 @@ mark.hl--pending {
   box-shadow: var(--shadow-md);
 }
 
+/* The composer can be moved while it is being written in -- by its margins,
+   or by this bar, which is there mostly to say that it can. */
+.composer__grip {
+  width: 2.2rem;
+  height: 4px;
+  margin: -0.25rem auto 0.45rem;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--hl-edge) 45%, transparent);
+  cursor: grab;
+}
+
+.composer { cursor: grab; touch-action: none; }
+.composer textarea, .composer button, .composer input, .composer label { cursor: auto; }
+.composer button, .composer label { cursor: pointer; }
+.composer--dragging, .composer--dragging .composer__grip { cursor: grabbing; }
+.composer--dragging { box-shadow: var(--shadow-lg, var(--shadow-md)); user-select: none; }
+
 .composer__quote {
   margin: 0 0 0.55rem;
   padding: 0 0 0 0.55rem;
@@ -382,6 +399,7 @@ mark.hl--pending {
 .note__reset { display: none; }
 .note--moved .note__reset { display: inline-block; }
 
+.note__replyto,
 .note__reset,
 .note__delete {
   padding: 0.16rem 0.45rem;
@@ -394,6 +412,11 @@ mark.hl--pending {
   cursor: pointer;
 }
 
+/* Reply comes first in the row and pushes the rest right: it is about the
+   thread, the others about the card. */
+.note__replyto { margin-right: auto; }
+
+.note__replyto:hover:not(:disabled),
 .note__reset:hover:not(:disabled) {
   opacity: 1;
   background: color-mix(in srgb, var(--hl-edge) 16%, transparent);

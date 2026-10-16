@@ -81,9 +81,42 @@ _REVIEW_PROMPT = (
     "saying what kind of remark it is and how that kind should be handled.\n\n"
     "Edit the file directly. Keep my voice and formatting conventions, change "
     "nothing the comments did not ask about, and do not write a summary of "
-    "your changes into the document. When you are done, reply with one "
-    "sentence per comment saying what you did about it.\n\n"
+    "your changes into the document.\n\n"
     "{instruction}"
+)
+
+# The other way to send comments: for an answer, not an edit. Not an entry in
+# the registry, because it is not a different request so much as the same one
+# with the editing taken out -- and a knowledge base that rewords its review
+# prompt should not then have to keep a second one in step with it.
+_REPLY_ONLY_PROMPT = (
+    "You are co-writing a knowledge base with me. The document is "
+    "`{document}`.\n\n"
+    "I have read the document and left comments on it, and this time I want "
+    "your answer to each one rather than an edit. Do not change the document, "
+    "or any file other than the one named below. Read the document, and "
+    "whatever around it you need, and reply to every comment listed: answer "
+    "the question if it asks one, give your view if it asks for one, and if it "
+    "asks for a change, say what you would change and why.\n\n"
+    "{instruction}"
+)
+
+# How replies come back. Appended by `review_prompt` rather than written into
+# the templates above, so a knowledge base with its own wording still gets
+# answers in the comments: what it can reword is how to treat them, not the
+# plumbing that carries the answer home.
+#
+# A file rather than the turn's final message. That message is a progress
+# line in a log, clipped, and free prose; a reply per comment needs a key per
+# comment, and a file the model writes on purpose is the one channel that
+# survives a chatty last turn intact.
+_REPLIES_INSTRUCTION = (
+    "Answer every comment in its own thread{also}. Write the answers to "
+    "`{path}` as one JSON object mapping each comment's id to your reply, "
+    "for example {{\"{example}\": \"…\"}}. Each reply is shown inside the comment "
+    "it answers, addressed to me: {what} Keep each to a few sentences of plain "
+    "text. Write that file even if some comments needed nothing done, and say "
+    "so in their replies. When you are finished, end with a one-line summary."
 )
 
 DEFAULTS = [
@@ -127,9 +160,19 @@ def describe_comments(comments: list[dict]) -> str:
 
         lines = [
             f"--- Comment {at} of {len(comments)} ---",
+            f"Id: {comment.get('id', '')}",
             where,
             f"What I wrote: {str(comment.get('body') or '').strip()}",
         ]
+        # A second round on the same comment: the reader answered the last
+        # reply, and the answer only makes sense next to what it answers.
+        earlier = [r for r in comment.get("replies") or [] if isinstance(r, dict)]
+        if earlier:
+            lines.append("The thread so far, oldest first:")
+            lines.extend(
+                f"  {str(r.get('author') or 'someone')}: {str(r.get('body') or '').strip()}"
+                for r in earlier
+            )
         if kind:
             lines.append(f"Kind of remark: {kind}")
             # A type with no instruction still earns its line. It groups this
@@ -148,12 +191,43 @@ def describe_comments(comments: list[dict]) -> str:
 
 
 def review_prompt(
-    action: Action, location: str, instruction: str, comments: list[dict]
+    action: Action,
+    location: str,
+    instruction: str,
+    comments: list[dict],
+    replies_path: str = "",
+    mode: str = "",
 ) -> str:
-    """The whole prompt for one review turn: the framing, then the comments."""
-    framing = action.render(location, instruction.strip()).strip()
-    listing = describe_comments(comments)
-    return f"{framing}\n\n{listing}".strip() if listing else framing
+    """The whole prompt for one review turn: framing, comments, how to answer.
+
+    `mode` "reply" swaps the reader's framing for one that forbids editing.
+    `replies_path` is where the per-comment answers are to be written; with
+    none, the turn edits and nothing is asked of it beyond that.
+    """
+    if mode == "reply":
+        framing = (
+            _REPLY_ONLY_PROMPT.replace("{document}", location)
+            .replace("{instruction}", instruction.strip())
+            .strip()
+        )
+    else:
+        framing = action.render(location, instruction.strip()).strip()
+    parts = [framing, describe_comments(comments)]
+    if replies_path and comments:
+        what = (
+            "answer it, or say what you would change and why."
+            if mode == "reply"
+            else "say what you changed and why, or answer it if it asked a question."
+        )
+        parts.append(
+            _REPLIES_INSTRUCTION.format(
+                path=replies_path,
+                example=str(comments[0].get("id") or "abc12"),
+                what=what,
+                also="" if mode == "reply" else " as well",
+            )
+        )
+    return "\n\n".join(p for p in parts if p).strip()
 
 
 def load(inputs: Path) -> list[Action]:

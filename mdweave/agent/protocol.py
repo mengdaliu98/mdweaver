@@ -163,6 +163,13 @@ class Job:
     They exist so the browser can draw a diff once the job is done, which it
     cannot reconstruct afterwards: the file on disk has already moved, and git
     is on the other machine until the push lands.
+
+    `mode` is "" for the review that edits the document and answers each
+    comment, or "reply" for one that only answers. `replies` is what came
+    back, by comment id. They are held here rather than written into the
+    comments when the runner reports, because the runner's routes take no
+    password: the page writes them in, through a route that does, and
+    `replies_applied` stops that happening twice.
     """
 
     id: str
@@ -180,6 +187,9 @@ class Job:
     comments: list[dict] = field(default_factory=list)
     before: str = ""
     after: str = ""
+    mode: str = ""
+    replies: dict[str, str] = field(default_factory=dict)
+    replies_applied: bool = False
 
     @property
     def finished(self) -> bool:
@@ -203,6 +213,8 @@ class Job:
             "revision": self.revision,
             "events": len(self.events),
             "comments": len(self.comments),
+            "mode": self.mode,
+            "replies": len(self.replies),
         }
 
     def to_dict(self) -> dict:
@@ -216,6 +228,8 @@ class Job:
                 "comments": list(self.comments),
                 "before": self.before,
                 "after": self.after,
+                "replies": dict(self.replies),
+                "replies_applied": self.replies_applied,
             }
         )
         return payload
@@ -230,6 +244,12 @@ class Job:
         # rather than taking the whole store down on load.
         stored = data.get("comments")
         comments = [c for c in stored if isinstance(c, dict)] if isinstance(stored, list) else []
+        raw_replies = data.get("replies")
+        replies = (
+            {str(k): v for k, v in raw_replies.items() if isinstance(v, str)}
+            if isinstance(raw_replies, dict)
+            else {}
+        )
         return cls(
             id=str(data.get("id") or new_id()),
             document=str(data.get("document", "")),
@@ -246,6 +266,9 @@ class Job:
             comments=comments,
             before=str(data.get("before", "")),
             after=str(data.get("after", "")),
+            mode=str(data.get("mode", "")),
+            replies=replies,
+            replies_applied=bool(data.get("replies_applied", False)),
         )
 
 
@@ -263,5 +286,6 @@ def dispatch(job: Job) -> dict:
         "action": job.action,
         "instruction": job.instruction,
         "comments": job.comments,
+        "mode": job.mode,
         "lease": LEASE_SECONDS,
     }

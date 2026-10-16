@@ -13,7 +13,9 @@
  * The second is what came back. The job does not write the document; it hands
  * back the text it would have written, and this page shows it beside the text
  * that is there, hunk by hunk, with accept and reject on each. Only then is
- * anything written. The flow this replaces wrote first and showed you
+ * anything written. It also hands back an answer to each comment, which is not
+ * a proposal: it goes into the comment's thread as soon as it arrives, and is
+ * shown here under the comment it answers. "Replies only" asks for just those. The flow this replaces wrote first and showed you
  * afterwards, which is a fine bargain for a typo fix and a poor one for a
  * model rewriting prose you care about.
  *
@@ -73,6 +75,8 @@
   var hunkCount = 0;
   var accepted = []; // one flag per hunk, index-aligned with the `hunk` field
   var jobId = "";
+  var mode = ""; // "" edits and answers; "reply" only answers
+  var replies = {}; // comment id -> Claude's answer, for the result screen
   var stream = null;
   var parts = null; // the shell's elements, found once and kept
 
@@ -102,6 +106,9 @@
     '<p class="checkpoint-dialog__error review__error" hidden></p>' +
     '<div class="checkpoint-dialog__actions">' +
     '<button type="button" class="checkpoint-dialog__cancel review__close">Cancel</button>' +
+    '<button type="button" class="checkpoint-dialog__cancel review__reply"' +
+    ' title="Claude answers each comment in its thread and leaves the document alone">' +
+    "Replies only</button>" +
     '<button type="button" class="checkpoint-dialog__submit review__go">Send to Claude</button>' +
     "</div>";
 
@@ -122,14 +129,18 @@
       result: dialog.querySelector(".review__stage--result"),
       error: dialog.querySelector(".review__error"),
       close: dialog.querySelector(".review__close"),
+      reply: dialog.querySelector(".review__reply"),
       go: dialog.querySelector(".review__go"),
     };
 
     parts.close.addEventListener("click", close);
     parts.go.addEventListener("click", function () {
       if (parts.go.disabled) return;
-      if (stageName === "pick") send();
+      if (stageName === "pick") send("");
       else if (stageName === "result") apply();
+    });
+    parts.reply.addEventListener("click", function () {
+      if (!parts.reply.disabled && stageName === "pick") send("reply");
     });
   }
 
@@ -143,6 +154,7 @@
     pick: "Comments on this document",
     run: "Claude is reading the comments",
     result: "What Claude would change",
+    answered: "What Claude said",
   };
 
   function stage(name) {
@@ -150,7 +162,8 @@
     parts.title.textContent = HEADINGS[name];
     parts.pick.hidden = name !== "pick";
     parts.run.hidden = name !== "run";
-    parts.result.hidden = name !== "result";
+    // "answered" is the result screen with nothing to merge: the same panel.
+    parts.result.hidden = name !== "result" && name !== "answered";
 
     /* The merge view needs two columns of prose side by side; the comment
      * list does not, and a list floating in a wide dialog reads as a mistake.
@@ -158,6 +171,7 @@
     dialog.classList.toggle("review-dialog--wide", name === "result");
 
     parts.go.hidden = false;
+    parts.reply.hidden = name !== "pick";
     parts.close.textContent = name === "pick" ? "Cancel" : "Close";
     if (name === "run") {
       parts.go.disabled = true;
@@ -364,6 +378,7 @@
   function tally() {
     var count = chosen().length;
     parts.go.disabled = count === 0;
+    parts.reply.disabled = count === 0;
     parts.go.textContent =
       count === 0
         ? "Send to Claude"
@@ -402,9 +417,11 @@
 
   /* --- sending, and watching it run ------------------------------------------ */
 
-  function send() {
+  function send(how) {
     sent = chosen();
     if (!sent.length) return;
+    mode = how || "";
+    replies = {};
 
     var ids = sent.map(function (comment) {
       return comment.id;
@@ -418,7 +435,7 @@
     fetch("/api/agent/review", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ document: DOC_ID, ids: ids }),
+      body: JSON.stringify({ document: DOC_ID, ids: ids, mode: mode }),
     })
       .then(function (response) {
         if (!response.ok) return ui.reject(response);
@@ -496,13 +513,18 @@
   }
 
   function collect() {
+    var diff = null;
     fetch("/api/agent/jobs/" + encodeURIComponent(jobId) + "/diff")
       .then(function (response) {
         if (!response.ok) return ui.reject(response);
         return response.json();
       })
       .then(function (payload) {
-        result(payload || {});
+        diff = payload || {};
+        return takeReplies();
+      })
+      .then(function () {
+        result(diff);
       })
       .catch(function (error) {
         parts.go.disabled = false;
@@ -510,6 +532,37 @@
         stage("pick");
         tally();
         showError("It ran, but what it wrote could not be read back: " + error.message);
+      });
+  }
+
+  /* Put Claude's answers into the comments, now, and show them on the cards.
+   *
+   * Before the diff is even drawn, and whatever is decided about it: an answer
+   * is not part of the proposal, and rejecting every hunk should still leave
+   * the reader with what Claude said. The server writes them -- this request
+   * carries the page password, which the runner's report did not -- and hands
+   * back the comments so the cards behind this dialog can show the replies
+   * without the page being re-rendered from a document that, until Apply, is
+   * not the one on screen.
+   *
+   * A failure costs the replies on the cards, not the review: it is reported
+   * in the log and the result screen still opens. */
+  function takeReplies() {
+    return fetch("/api/agent/jobs/" + encodeURIComponent(jobId) + "/replies", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    })
+      .then(function (response) {
+        if (!response.ok) return ui.reject(response);
+        return response.json();
+      })
+      .then(function (payload) {
+        var threads = window.mdweaveThreads;
+        if (threads && payload && payload.annotations) threads.sync(payload.annotations);
+      })
+      .catch(function (error) {
+        note("error", "Claude's replies could not be saved to the comments: " + error.message);
       });
   }
 
@@ -677,6 +730,7 @@
   /* --- stage two: accept or reject -------------------------------------------- */
 
   function result(payload) {
+    replies = payload.replies || {};
     pieces = piecesOf(diffOps(splitLines(payload.before), splitLines(payload.after)));
     accepted = [];
     var i;
@@ -691,15 +745,21 @@
     parts.result.innerHTML = "";
 
     if (!hunkCount) {
-      /* Nothing to accept and nothing to delete: a comment is only dealt with
-       * by the text changing, and the text did not. One sentence does not
-       * need the two-column width either. */
+      /* Nothing to accept. What is left to show is what Claude said, which
+       * is already in the comments; this is the place to read it once. One
+       * column of cards does not need the two-column width either. */
+      stage("answered");
       dialog.classList.remove("review-dialog--wide");
       var empty = document.createElement("p");
       empty.className = "review__note";
       empty.textContent =
-        "Claude read the comments and left the document exactly as it was.";
+        mode === "reply"
+          ? "Claude answered in the comments. The document is as it was."
+          : "Claude left the document exactly as it was, and answered in the comments.";
       parts.result.appendChild(empty);
+      var list = column("replies", "Claude's replies");
+      parts.result.appendChild(list);
+      fillReplies(list.querySelector(".merge__cardlist"), null);
       parts.go.hidden = true;
       parts.close.textContent = "Close";
       return;
@@ -743,9 +803,8 @@
     root.appendChild(body);
 
     var cards = document.createElement("div");
-    cards.className = "merge__cards";
-    cards.appendChild(column("before", "Sent to Claude"));
-    cards.appendChild(column("after", "Still open afterwards"));
+    cards.className = "merge__cards merge__cards--replies";
+    cards.appendChild(column("replies", "Claude's replies"));
     root.appendChild(cards);
 
     return root;
@@ -923,20 +982,33 @@
     return String(text || "").replace(/\s+/g, " ").trim();
   }
 
+  /* Whether the text a comment is pinned to is still there. Nothing is
+   * deleted on the strength of it any more -- a comment now carries Claude's
+   * reply, which is worth keeping exactly when its text was rewritten -- but
+   * the reader is told, because such a card moves: it is drawn at the top of
+   * the page, saying what it was about, until those words come back. */
   function survives(comment, haystack) {
-    /* A document-level comment has no quoted text, so there is nothing to
-     * look for and no evidence either way. It stays. Deleting a comment we
-     * cannot show was dealt with is the one mistake here that loses writing
-     * somebody did. */
     if (!comment.anchored || !comment.quote) return true;
     return haystack.indexOf(flatten(comment.quote)) !== -1;
   }
 
-  /* Redraw everything that depends on which hunks are in: the right-hand
-   * column of cards, the marks on the left-hand ones, and the button's count.
-   * Cheap enough to run on every click, and running it on every click is what
-   * makes the right-hand column mean "what you would be left with" rather than
-   * "what Claude proposed". */
+  /* The comments that were sent, each with Claude's answer set into it.
+   * `haystack` is the document as it would be written, to say which cards
+   * are about to lose their text; null when nothing is changing. */
+  function fillReplies(list, haystack) {
+    list.innerHTML = "";
+    if (!sent.length) {
+      list.appendChild(hint("No comments were sent."));
+      return;
+    }
+    sent.forEach(function (comment) {
+      list.appendChild(card(comment, haystack !== null && !survives(comment, haystack)));
+    });
+  }
+
+  /* Redraw everything that depends on which hunks are in: the cards' warnings
+   * about text being rewritten, and the button's count. Cheap enough to run on
+   * every click, which is what lets the warnings follow the ticks. */
   function outcome() {
     var markdown = merged();
     var haystack = flatten(markdown);
@@ -944,27 +1016,9 @@
     var taken = 0;
     for (var i = 0; i < accepted.length; i++) if (accepted[i]) taken++;
 
-    var left = parts.result.querySelector(".merge__column--before .merge__cardlist");
-    var right = parts.result.querySelector(".merge__column--after .merge__cardlist");
-    if (!left || !right) return;
-
-    left.innerHTML = "";
-    right.innerHTML = "";
-
-    if (!sent.length) {
-      left.appendChild(hint("No comments were sent."));
-      right.appendChild(hint("Nothing to carry over."));
-    }
-
-    sent.forEach(function (comment) {
-      var stays = survives(comment, haystack);
-      left.appendChild(card(comment, !stays));
-      if (stays) right.appendChild(card(comment, false));
-    });
-
-    if (sent.length && !right.childNodes.length) {
-      right.appendChild(hint("Every comment sent has been dealt with."));
-    }
+    var list = parts.result.querySelector(".merge__column--replies .merge__cardlist");
+    if (!list) return;
+    fillReplies(list, haystack);
 
     /* Rejecting everything leaves the document byte-for-byte what it already
      * is, and the apply endpoint commits -- so offering it would be offering
@@ -990,9 +1044,9 @@
     return el;
   }
 
-  function card(comment, handled) {
+  function card(comment, rewritten) {
     var el = document.createElement("div");
-    el.className = "merge__card" + (handled ? " merge__card--handled" : "");
+    el.className = "merge__card";
     if (comment.color) wear(el, comment.color);
 
     var head = document.createElement("div");
@@ -1018,53 +1072,53 @@
     body.textContent = comment.body || "";
     el.appendChild(body);
 
-    if (handled) {
-      var gone = document.createElement("p");
-      gone.className = "merge__gone";
-      gone.textContent = "The text this is about is being rewritten — it will be deleted.";
-      el.appendChild(gone);
+    /* The answer, in a box of the page's own color inside the card: the same
+     * shape it takes on the comment itself. */
+    var answer = document.createElement("div");
+    answer.className = "note__reply note__reply--claude merge__reply";
+    var who = document.createElement("div");
+    who.className = "note__meta";
+    var name = document.createElement("span");
+    name.className = "note__author";
+    name.textContent = "Claude";
+    who.appendChild(name);
+    answer.appendChild(who);
+    var said = document.createElement("p");
+    said.className = "note__text";
+    said.textContent = replies[comment.id] || "No reply to this one.";
+    if (!replies[comment.id]) answer.classList.add("merge__reply--none");
+    answer.appendChild(said);
+    el.appendChild(answer);
+
+    if (rewritten) {
+      var moved = document.createElement("p");
+      moved.className = "merge__gone";
+      moved.textContent =
+        "The text this is about is being rewritten — the comment and its reply " +
+        "move to the top of the page.";
+      el.appendChild(moved);
     }
     return el;
   }
 
   /* --- writing it down --------------------------------------------------------- */
 
+  /* No comment is deleted here any more. Each one now holds Claude's answer,
+   * and the ones whose text was rewritten are exactly the ones whose answer
+   * says what happened -- so they are kept, and the page draws them at the
+   * top until their words come back. Deleting one is a click on its card. */
   function apply() {
     var markdown = merged();
-    var haystack = flatten(markdown);
-    var doomed = sent.filter(function (comment) {
-      return !survives(comment, haystack);
-    });
 
     parts.go.disabled = true;
     parts.go.textContent = "Applying…";
     hideError();
 
-    /* Comments first, then the document. The apply endpoint answers with the
-     * rendered page, and a comment deleted after that answer arrived would
-     * still be in the markup we are about to adopt -- back on screen, pinned
-     * to a sentence that no longer exists, until the next reload. */
-    erase(doomed)
-      .then(function (failed) {
-        return write(markdown).then(function (payload) {
-          return { payload: payload, failed: failed };
-        });
-      })
-      .then(function (got) {
-        ui.adopt(got.payload);
+    write(markdown)
+      .then(function (payload) {
+        ui.adopt(payload);
         close();
-        if (got.failed.length) {
-          ui.toast(
-            "Applied, but " +
-              got.failed.length +
-              " comment" +
-              (got.failed.length === 1 ? "" : "s") +
-              " could not be deleted",
-            "error"
-          );
-        } else {
-          ui.toast("Claude updated this document");
-        }
+        ui.toast("Claude updated this document");
       })
       .catch(function (error) {
         parts.go.disabled = false;
@@ -1081,36 +1135,6 @@
     }).then(function (response) {
       if (!response.ok) return ui.reject(response);
       return response.json();
-    });
-  }
-
-  /* Delete the comments the accepted hunks dealt with.
-   *
-   * Resolves with the ones that could not be deleted rather than rejecting on
-   * the first failure: a comment that outlives the sentence it was about is
-   * untidy, and refusing to write the document because of it would be worse.
-   * The reader is told, and can delete it by hand. */
-  function erase(list) {
-    var failed = [];
-    return Promise.all(
-      list.map(function (comment) {
-        return fetch(
-          ANNOTATIONS +
-            "/" +
-            encodeURIComponent(comment.id) +
-            "?document=" +
-            encodeURIComponent(DOC_ID),
-          { method: "DELETE" }
-        )
-          .then(function (response) {
-            if (!response.ok) failed.push(comment.id);
-          })
-          .catch(function () {
-            failed.push(comment.id);
-          });
-      })
-    ).then(function () {
-      return failed;
     });
   }
 

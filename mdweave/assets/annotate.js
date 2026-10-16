@@ -706,6 +706,7 @@
     composer.className = "composer note--" + (chosen || DEFAULT_COLOR);
     composer.dataset.ann = PENDING;
     composer.innerHTML =
+      '<div class="composer__grip" title="Drag to move" aria-hidden="true"></div>' +
       '<blockquote class="composer__quote"></blockquote>' +
       '<textarea class="composer__input" rows="4" placeholder="Add a comment…"></textarea>' +
       '<div class="composer__actions">' +
@@ -774,6 +775,9 @@
     composer.appendChild(send);
 
     layer.appendChild(composer);
+    // Movable while it is being written in, so it can be taken off the prose
+    // it is covering; the new card is born wherever it is left.
+    if (mdw.dragComposer) mdw.dragComposer(composer);
     mdw.layout();
 
     var input = composer.querySelector(".composer__input");
@@ -822,6 +826,7 @@
         send_to_claude: sendToClaude !== false,
         author: localStorage.getItem("mdweave.author") || "me",
         at: new Date().toISOString(),
+        offset: composer && mdw.composerOffset ? mdw.composerOffset(composer) : null,
       }),
     })
       .then(function (response) {
@@ -907,6 +912,10 @@
     note.id = "note-" + annotation.id;
     note.dataset.ann = annotation.id;
     note.dataset.status = annotation.status || "open";
+    if (annotation.offset) {
+      note.dataset.dx = String(annotation.offset.dx || 0);
+      note.dataset.dy = String(annotation.offset.dy || 0);
+    }
 
     var pin = document.createElement("button");
     pin.type = "button";
@@ -934,6 +943,7 @@
 
     var item = document.createElement("div");
     item.className = "note__entry";
+    item.dataset.entry = "0";
     item.appendChild(meta);
     item.appendChild(text);
 
@@ -941,12 +951,16 @@
     body.className = "note__body";
     body.id = "note-body-" + annotation.id;
     body.appendChild(item);
+    body.appendChild(el("div", "note__replies"));
     // Under the remark, not over it: the prose is what was written, the tag is
     // how it is to be read. The same order a server-rendered card gets below.
     if (annotation.semantic_type) {
       body.appendChild(semanticLabel(annotation.semantic_type));
     }
-    if (writable) body.appendChild(noteActions(note));
+    if (writable) {
+      body.appendChild(noteActions(note));
+      decorateEntries(note);
+    }
 
     note.appendChild(pin);
     note.appendChild(body);
@@ -993,6 +1007,229 @@
       });
   }
 
+  /* Persist a card's size after its corner was dragged. Same bargain again:
+   * the card is already that size, so a failure is reported, not undone. */
+  function persistSize(annId, width, height) {
+    fetch(API + "/" + encodeURIComponent(annId), {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        document: DOC_ID,
+        size: { w: Math.round(width), h: Math.round(height) },
+      }),
+    })
+      .then(function (response) {
+        if (!response.ok) return reject(response);
+      })
+      .catch(function (error) {
+        toast("Size not saved: " + error.message, "error");
+      });
+  }
+
+  /* --- the thread: replies and edits ------------------------------------- */
+
+  /* One message of a thread, as the template draws it. `index` is its place
+   * in the thread -- 0 is the comment, anything after is a reply -- which is
+   * what an edit names. Replies go in boxes of the page's own color. */
+  function entryElement(entry, index) {
+    var item = el("div", "note__entry");
+    item.dataset.entry = String(index);
+    if (index > 0) {
+      item.classList.add("note__reply");
+      if (entry.author === "Claude") item.classList.add("note__reply--claude");
+    }
+    var meta = el("div", "note__meta");
+    meta.appendChild(el("span", "note__author", entry.author || "me"));
+    if (entry.at) meta.appendChild(el("time", "note__date", String(entry.at).slice(0, 10)));
+    item.appendChild(meta);
+    item.appendChild(el("p", "note__text", entry.body || ""));
+    return item;
+  }
+
+  /* A small text box with two buttons, standing in for something being
+   * written: an edit to a message, or a new reply. Cmd-Enter saves, Escape
+   * gives up -- and goes no further, since Escape on the page closes every
+   * card, which is not what giving up on an edit means. */
+  function editorBox(initial, placeholder, label, onSave, onCancel) {
+    var box = el("div", "note__editor");
+    var input = document.createElement("textarea");
+    input.className = "note__editor-input";
+    input.rows = 3;
+    input.value = initial;
+    input.placeholder = placeholder;
+    box.appendChild(input);
+
+    var actions = el("div", "note__editor-actions");
+    var cancel = el("button", "composer__button composer__button--ghost", "Cancel");
+    cancel.type = "button";
+    var save = el("button", "composer__button", label);
+    save.type = "button";
+    actions.appendChild(cancel);
+    actions.appendChild(save);
+    box.appendChild(actions);
+
+    function commit() {
+      var text = input.value.trim();
+      if (!text) {
+        input.focus();
+        return;
+      }
+      save.disabled = true;
+      onSave(text, function () {
+        save.disabled = false;
+      });
+    }
+    cancel.addEventListener("click", function (event) {
+      event.stopPropagation();
+      onCancel();
+    });
+    save.addEventListener("click", function (event) {
+      event.stopPropagation();
+      commit();
+    });
+    input.addEventListener("keydown", function (event) {
+      if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+        event.preventDefault();
+        commit();
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        onCancel();
+      }
+    });
+    return { box: box, input: input };
+  }
+
+  /* Change what one message of the thread says, in place. */
+  function editEntry(note, item) {
+    if (item.querySelector(".note__editor")) return;
+    var text = item.querySelector(".note__text");
+    var index = parseInt(item.dataset.entry, 10) || 0;
+
+    var editor = editorBox(
+      text.textContent,
+      "",
+      "Save",
+      function (value, retry) {
+        fetch(API + "/" + encodeURIComponent(note.dataset.ann), {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ document: DOC_ID, entry: index, body: value }),
+        })
+          .then(function (response) {
+            if (!response.ok) return reject(response);
+            text.textContent = value;
+            finish();
+          })
+          .catch(function (error) {
+            retry();
+            toast("Not saved: " + error.message, "error");
+          });
+      },
+      finish
+    );
+
+    function finish() {
+      editor.box.remove();
+      text.hidden = false;
+      mdw.layout();
+    }
+
+    text.hidden = true;
+    text.parentNode.insertBefore(editor.box, text.nextSibling);
+    editor.input.focus();
+    editor.input.setSelectionRange(editor.input.value.length, editor.input.value.length);
+    mdw.layout();
+  }
+
+  /* Give every message on a card its pencil. Idempotent, like the footer. */
+  function decorateEntries(note) {
+    note.querySelectorAll(".note__entry").forEach(function (item) {
+      var meta = item.querySelector(".note__meta");
+      if (!meta || meta.querySelector(".note__edit")) return;
+      var pencil = actionButton("note__edit", "Edit", function () {
+        editEntry(note, item);
+      });
+      pencil.title = item.dataset.entry === "0" ? "Edit this comment" : "Edit this reply";
+      pencil.setAttribute("aria-label", pencil.title);
+      meta.appendChild(pencil);
+    });
+  }
+
+  /* Open a box under the thread for answering it. */
+  function openReply(note) {
+    var body = note.querySelector(".note__body");
+    var replies = body && body.querySelector(".note__replies");
+    if (!replies || body.querySelector(".note__replybox")) {
+      var open = body && body.querySelector(".note__replybox textarea");
+      if (open) open.focus();
+      return;
+    }
+
+    var editor = editorBox(
+      "",
+      "Reply…",
+      "Reply",
+      function (value, retry) {
+        fetch(API + "/" + encodeURIComponent(note.dataset.ann) + "/replies", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            document: DOC_ID,
+            body: value,
+            author: localStorage.getItem("mdweave.author") || "me",
+            at: new Date().toISOString(),
+          }),
+        })
+          .then(function (response) {
+            if (!response.ok) return reject(response);
+            return response.json();
+          })
+          .then(function (payload) {
+            var thread = (payload.annotation && payload.annotation.thread) || [];
+            var index = payload.index || thread.length - 1;
+            replies.appendChild(entryElement(thread[index] || { body: value }, index));
+            decorateEntries(note);
+            close();
+          })
+          .catch(function (error) {
+            retry();
+            toast("Reply not saved: " + error.message, "error");
+          });
+      },
+      close
+    );
+    editor.box.classList.add("note__replybox");
+
+    function close() {
+      editor.box.remove();
+      mdw.layout();
+    }
+
+    replies.parentNode.insertBefore(editor.box, replies.nextSibling);
+    editor.input.focus();
+    mdw.layout();
+  }
+
+  /* Redraw the replies on every card from the annotations given. How Claude's
+   * answers reach the cards behind the review dialog without re-rendering a
+   * page whose prose, until Apply, is not the prose on disk. */
+  function syncThreads(annotations) {
+    (annotations || []).forEach(function (annotation) {
+      var note = mdw.noteFor(annotation.id);
+      var replies = note && note.querySelector(".note__replies");
+      if (!replies) return;
+      replies.innerHTML = "";
+      (annotation.thread || []).slice(1).forEach(function (entry, at) {
+        replies.appendChild(entryElement(entry, at + 1));
+      });
+      if (writable) decorateEntries(note);
+    });
+    mdw.layout();
+  }
+
+  window.mdweaveThreads = { sync: syncThreads };
+
   function actionButton(className, label, onClick) {
     var button = document.createElement("button");
     button.type = "button";
@@ -1009,6 +1246,12 @@
     var annId = note.dataset.ann;
     var row = document.createElement("div");
     row.className = "note__footer";
+
+    row.appendChild(
+      actionButton("note__replyto", "Reply", function () {
+        openReply(note);
+      })
+    );
 
     row.appendChild(
       colorPicker(colorOf(note, "note--"), function (color) {
@@ -1051,6 +1294,7 @@
       if (body && !body.querySelector(".note__footer")) {
         body.appendChild(noteActions(note));
       }
+      decorateEntries(note);
     });
   }
 
@@ -1327,6 +1571,7 @@
       document.body.classList.add("mdweave-editable");
       addNoteActions();
       mdw.setMoveHandler(persistMove);
+      if (mdw.setSizeHandler) mdw.setSizeHandler(persistSize);
       // Saving an edit or refreshing replaces the notes layer, which throws
       // away every footer and every tag along with the cards that carried them.
       mdw.setRefreshHandler(addNoteActions);

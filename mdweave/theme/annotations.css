@@ -171,8 +171,10 @@ mark.hl--resolved {
   top: calc(-1 * var(--card-gap));
   left: calc(var(--pin) + var(--card-gap));
   width: var(--note-w);
+  min-width: 160px;
+  min-height: 60px;
   max-height: 60vh;
-  overflow-y: auto;
+  overflow: auto;
   padding: 0.6rem 0.7rem 0.7rem;
   border-radius: 10px;
   background: var(--note-bg);
@@ -194,7 +196,13 @@ mark.hl--resolved {
   visibility: visible;
   transform: none;
   transition: opacity 0.14s ease, transform 0.14s ease;
+  /* Drag the lower-right corner to resize. What does not fit scrolls. */
+  resize: both;
 }
+
+/* Once the reader has sized a card, the size is theirs: the stylesheet's
+   height cap would otherwise quietly undo a taller one. */
+.note__body--sized { max-height: none; }
 
 /* Flipped when the card would run off the right edge, or off the bottom. */
 .note--flip .note__body {
@@ -234,6 +242,87 @@ mark.hl--resolved {
   line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+/* --- replies -------------------------------------------------------------
+
+   Each reply is a box of the page's own color set into the card, whatever
+   color the card is: an answer reads as something placed inside the remark
+   rather than as more of it. The text follows the page too, so a reply is as
+   legible on a dark card as on a light one. */
+.note__replies .note__reply {
+  margin-top: 0.5rem;
+  padding: 0.4rem 0.55rem 0.45rem;
+  border: 1px solid color-mix(in srgb, var(--hl-edge) 28%, transparent);
+  border-radius: 7px;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+/* The thread rule between entries is for messages side by side; boxes have
+   edges of their own. */
+.note__replies .note__entry + .note__entry {
+  border-top: 1px solid color-mix(in srgb, var(--hl-edge) 28%, transparent);
+  padding-top: 0.4rem;
+}
+
+.note__reply--claude .note__author { color: var(--accent); }
+
+/* A comment whose words have been rewritten, drawn at the top of the page
+   until they come back. */
+.note__detached {
+  margin: 0 0 0.45rem;
+  font-size: 0.72rem;
+  font-style: italic;
+  opacity: 0.75;
+  overflow-wrap: anywhere;
+}
+
+/* The pencil on each message. Faded until the message is pointed at, like
+   the row controls in the sidebar, but always in the tab order. */
+.note__edit {
+  margin-left: auto;
+  padding: 0 0.3rem;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: 500 0.66rem/1.5 var(--font-body);
+  opacity: 0;
+  cursor: pointer;
+}
+
+.note__entry:hover .note__edit,
+.note__edit:focus-visible { opacity: 0.6; }
+.note__edit:hover { opacity: 1; background: color-mix(in srgb, var(--hl-edge) 16%, transparent); }
+
+/* Editing a message, or writing a reply: the composer's box, in the card. */
+.note__editor { margin-top: 0.35rem; }
+
+.note__replybox { margin-top: 0.5rem; }
+
+.note__editor-input {
+  display: block;
+  width: 100%;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid color-mix(in srgb, var(--hl-edge) 40%, transparent);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--ink);
+  font: 400 0.8rem/1.5 var(--font-body);
+  resize: vertical;
+}
+
+.note__editor-input:focus {
+  outline: 2px solid var(--hl-edge);
+  outline-offset: -1px;
+}
+
+.note__editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
 }
 
 .note__tags {

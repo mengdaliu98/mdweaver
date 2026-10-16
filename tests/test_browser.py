@@ -1032,3 +1032,212 @@ def test_the_bin_stops_managing_without_deleting(managed_page, managed_served):
     assert asked and asked[0].startswith('Stop managing "file2"?')
     assert files["two"].exists()
     assert files["two"] not in managed.load(workspace.home)
+
+
+# --- the comment card: editing, replies, moving the composer, resizing ---------
+
+@pytest.fixture()
+def commented(browser, tmp_path):
+    """One comment already on the page, its card closed."""
+    from mdweave.model import Annotation, Comment, TextTarget
+    from mdweave.sources import sidecar
+
+    inputs, outputs = tmp_path / "markdown_inputs", tmp_path / "html_outputs"
+    inputs.mkdir()
+    # Room below the first paragraph, so cards open downwards as they would
+    # in any real document rather than flipping up off a page three lines long.
+    filler = "\n\n".join(f"Paragraph {n} of filler, to give the page some length." for n in range(30))
+    (inputs / "doc.md").write_text(
+        "# Doc\n\nalpha bravo charlie delta echo foxtrot golf hotel.\n\n" + filler + "\n",
+        encoding="utf-8",
+    )
+    long_text = " ".join(["This comment goes on for a while."] * 30)
+    sidecar.save(inputs / "doc.ann.json", [
+        Annotation(id="k1", target=TextTarget(quote="bravo charlie"), kind="comment",
+                   thread=[Comment(body="why this?", author="me")]),
+        Annotation(id="k2", target=TextTarget(quote="golf"), kind="comment",
+                   thread=[Comment(body=long_text, author="me")]),
+    ])
+    workspace = Workspace(inputs=inputs, outputs=outputs)
+    workspace.rebuild_all()
+
+    httpd = make_server(workspace, "127.0.0.1", 0)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    context = browser.new_context(viewport={"width": 1200, "height": 900})
+    page = context.new_page()
+    broke: list[str] = []
+    page.on("pageerror", lambda exc: broke.append(str(exc)))
+    page.goto(f"http://127.0.0.1:{httpd.server_port}/doc.html", wait_until="networkidle")
+    page.wait_for_selector(".mdweave-editable .note__footer", state="attached", timeout=10_000)
+    try:
+        yield page, workspace
+    finally:
+        context.close()
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+    assert not broke, "the page threw: " + "; ".join(broke)
+
+
+def open_card(page, ann_id: str):
+    page.click(f'.note[data-ann="{ann_id}"] .note__pin')
+    page.wait_for_selector(f'.note[data-ann="{ann_id}"].note--open', timeout=5_000)
+    # Measured after the opening animation, which scales the card in.
+    page.wait_for_function(
+        """id => getComputedStyle(document.querySelector(
+             `.note[data-ann="${id}"] .note__body`)).transform === 'none'""",
+        arg=ann_id, timeout=5_000,
+    )
+
+
+def stored(workspace, ann_id: str):
+    return next(a for a in workspace.annotations_for("doc") if a.id == ann_id)
+
+
+def test_a_comment_can_be_edited_on_its_card(commented):
+    page, workspace = commented
+    open_card(page, "k1")
+    card = '.note[data-ann="k1"]'
+    page.hover(f'{card} .note__entry[data-entry="0"]')
+    page.click(f'{card} .note__entry[data-entry="0"] .note__edit')
+    page.fill(f"{card} .note__editor-input", "why this, exactly?")
+    page.keyboard.press("Control+Enter")
+
+    page.wait_for_selector(f"{card} .note__editor", state="detached", timeout=5_000)
+    assert page.text_content(f'{card} .note__entry[data-entry="0"] .note__text') == "why this, exactly?"
+    assert stored(workspace, "k1").thread[0].body == "why this, exactly?"
+    # Still open: finishing an edit is not dismissing the card.
+    assert "note--open" in page.get_attribute(card, "class")
+
+
+def test_escape_abandons_an_edit_and_leaves_the_card_open(commented):
+    page, workspace = commented
+    open_card(page, "k1")
+    card = '.note[data-ann="k1"]'
+    page.hover(f'{card} .note__entry[data-entry="0"]')
+    page.click(f'{card} .note__entry[data-entry="0"] .note__edit')
+    page.fill(f"{card} .note__editor-input", "never mind")
+    page.keyboard.press("Escape")
+
+    page.wait_for_selector(f"{card} .note__editor", state="detached", timeout=5_000)
+    assert "note--open" in page.get_attribute(card, "class")
+    assert stored(workspace, "k1").thread[0].body == "why this?"
+
+
+def test_a_reply_sits_in_a_box_the_colour_of_the_page(commented):
+    page, workspace = commented
+    open_card(page, "k1")
+    card = '.note[data-ann="k1"]'
+    page.click(f"{card} .note__replyto")
+    page.fill(f"{card} .note__replybox textarea", "fair point")
+    page.click(f'{card} .note__replybox .composer__button:not(.composer__button--ghost)')
+
+    page.wait_for_selector(f"{card} .note__reply", timeout=5_000)
+    paper = page.eval_on_selector("body", "el => getComputedStyle(el).backgroundColor")
+    assert fill_of(page, f"{card} .note__reply") == paper
+    assert fill_of(page, f"{card} .note__body") != paper, "the card keeps its own colour"
+    assert [c.body for c in stored(workspace, "k1").thread] == ["why this?", "fair point"]
+
+    # The server draws it the same way.
+    page.reload(wait_until="networkidle")
+    open_card(page, "k1")
+    assert page.text_content(f"{card} .note__reply .note__text") == "fair point"
+    assert fill_of(page, f"{card} .note__reply") == paper
+
+
+def test_claudes_replies_appear_on_the_cards_in_the_page_colour(commented):
+    """What the review dialog does once a job's answers have been written in."""
+    page, _ = commented
+    page.evaluate("""() => window.mdweaveThreads.sync([{
+        id: 'k1',
+        thread: [{author: 'me', body: 'why this?'}, {author: 'Claude', body: 'Because it scans.'}],
+    }])""")
+    open_card(page, "k1")
+    reply = '.note[data-ann="k1"] .note__reply--claude'
+    assert page.text_content(f"{reply} .note__text") == "Because it scans."
+    paper = page.eval_on_selector("body", "el => getComputedStyle(el).backgroundColor")
+    assert fill_of(page, reply) == paper
+    # And it can be edited like any other message.
+    assert page.locator(f"{reply} .note__edit").count() == 1
+
+
+def test_the_composer_can_be_moved_while_writing(commented):
+    page, workspace = commented
+    select_words(page, "delta", "echo")
+    page.click('.selection-toolbar__row[aria-label="Comment"] .swatch--c3')
+    page.wait_for_selector(".composer textarea", timeout=5_000)
+    page.fill(".composer textarea", "moved while typing")
+
+    grip = page.locator(".composer .composer__grip").bounding_box()
+    before = page.locator(".composer").bounding_box()
+    page.mouse.move(grip["x"] + grip["width"] / 2, grip["y"] + 2)
+    page.mouse.down()
+    page.mouse.move(grip["x"] + grip["width"] / 2 + 60, grip["y"] + 2 + 140, steps=8)
+    page.mouse.up()
+    after = page.locator(".composer").bounding_box()
+    assert after["x"] - before["x"] == pytest.approx(60, abs=2)
+    assert after["y"] - before["y"] == pytest.approx(140, abs=2)
+    # Typing still works after a move, and the text survived it.
+    assert page.input_value(".composer textarea") == "moved while typing"
+
+    page.focus(".composer textarea")
+    page.keyboard.press("Control+Enter")
+    page.wait_for_selector(".composer", state="detached", timeout=10_000)
+
+    created = next(
+        a for a in workspace.annotations_for("doc") if a.thread[0].body == "moved while typing"
+    )
+    assert created.offset, "the move was saved with the comment"
+    # The card opens where the panel was left -- now, and after a reload.
+    card = f'.note[data-ann="{created.id}"]'
+    page.wait_for_function(
+        """sel => getComputedStyle(document.querySelector(sel + ' .note__body')).transform === 'none'""",
+        arg=card, timeout=5_000,
+    )
+    box = page.locator(f"{card} .note__body").bounding_box()
+    assert box["x"] == pytest.approx(after["x"], abs=3)
+    assert box["y"] == pytest.approx(after["y"], abs=3)
+
+    page.reload(wait_until="networkidle")
+    open_card(page, created.id)
+    again = page.locator(f"{card} .note__body").bounding_box()
+    assert again["x"] == pytest.approx(after["x"], abs=3)
+    assert again["y"] == pytest.approx(after["y"], abs=3)
+
+
+def test_a_card_resizes_from_its_corner_and_scrolls_inside(commented):
+    page, workspace = commented
+    open_card(page, "k2")
+    body = '.note[data-ann="k2"] .note__body'
+    box = page.locator(body).bounding_box()
+
+    page.mouse.move(box["x"] + box["width"] - 4, box["y"] + box["height"] - 4)
+    page.mouse.down()
+    page.mouse.move(box["x"] + box["width"] + 96, box["y"] + 116, steps=10)
+    page.mouse.up()
+
+    resized = page.locator(body).bounding_box()
+    assert resized["width"] == pytest.approx(box["width"] + 100, abs=3)
+    assert resized["height"] == pytest.approx(120, abs=3)
+    # The corner followed the pointer, and the card stayed open and put.
+    assert resized["x"] == pytest.approx(box["x"], abs=1)
+    assert resized["y"] == pytest.approx(box["y"], abs=1)
+    assert "note--open" in page.get_attribute('.note[data-ann="k2"]', "class")
+    # Too short for the comment, so it scrolls rather than overflowing.
+    assert page.eval_on_selector(body, "el => el.scrollHeight > el.clientHeight")
+
+    for _ in range(20):  # let the PATCH land
+        size = stored(workspace, "k2").size
+        if size:
+            break
+        page.wait_for_timeout(100)
+    assert size.w == pytest.approx(resized["width"], abs=2)
+    assert size.h == pytest.approx(resized["height"], abs=2)
+
+    # And it comes back that size.
+    page.reload(wait_until="networkidle")
+    open_card(page, "k2")
+    again = page.locator(body).bounding_box()
+    assert again["width"] == pytest.approx(resized["width"], abs=2)
+    assert again["height"] == pytest.approx(resized["height"], abs=2)
