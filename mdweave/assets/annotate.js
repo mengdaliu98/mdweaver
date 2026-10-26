@@ -53,6 +53,7 @@
 
     while ((node = walker.nextNode())) {
       if (node.parentNode && SKIP_TAGS[node.parentNode.nodeName]) continue;
+      if (inDiagram(node)) continue;
       var value = node.nodeValue;
       for (var i = 0; i < value.length; i++) {
         var ch = value.charAt(i);
@@ -66,6 +67,13 @@
       }
     }
     return { text: chars.join(""), origins: origins };
+  }
+
+  /* A mermaid diagram, as source or as the SVG drawn from it. The server's
+   * index skips it too (anchors.SKIP_CLASS), so the two still agree. */
+  function inDiagram(node) {
+    var el = node.nodeType === Node.ELEMENT_NODE ? node : node.parentNode;
+    return !!(el && el.closest && el.closest(".mermaid"));
   }
 
   function normalize(text) {
@@ -1372,6 +1380,11 @@
 
     var range = selection.getRangeAt(0);
     if (!doc.contains(range.commonAncestorContainer)) {
+      hideToolbar();
+      return;
+    }
+    // A diagram's labels are not prose: there is nothing to anchor them to.
+    if (inDiagram(range.commonAncestorContainer)) {
       hideToolbar();
       return;
     }

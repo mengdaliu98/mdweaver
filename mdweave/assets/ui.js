@@ -93,6 +93,8 @@
     if (layer && typeof payload.notes === "string") layer.innerHTML = payload.notes;
 
     if (window.mdweave && window.mdweave.refresh) window.mdweave.refresh();
+    // The new prose arrives with its diagrams as source again.
+    if (window.mdweaveMermaid) window.mdweaveMermaid.render();
   }
 
   /* Swap the navigation panel, leaving the page it sits beside alone.

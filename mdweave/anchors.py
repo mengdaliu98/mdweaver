@@ -17,6 +17,10 @@ from bs4 import BeautifulSoup, NavigableString
 
 # Text inside these elements is never annotatable.
 SKIP_TAGS = {"script", "style", "head", "title"}
+# Nor is a mermaid diagram's source: render.MERMAID, which can't be imported
+# from here without a cycle. The browser draws it, so a <mark> in it would
+# break the diagram rather than highlight anything.
+SKIP_CLASS = "mermaid"
 
 
 @dataclass
@@ -41,6 +45,8 @@ class TextIndex:
 
         for node in soup.find_all(string=True):
             if node.parent is not None and node.parent.name in SKIP_TAGS:
+                continue
+            if node.parent is not None and SKIP_CLASS in node.parent.get_attribute_list("class"):
                 continue
             if isinstance(node, NavigableString) and type(node) is not NavigableString:
                 continue  # Comment, Doctype, CData, ...

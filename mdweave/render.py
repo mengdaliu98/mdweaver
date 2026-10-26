@@ -9,6 +9,7 @@ from pathlib import Path
 from bs4 import BeautifulSoup
 from jinja2 import Environment, FileSystemLoader
 from markdown_it import MarkdownIt
+from markdown_it.common.utils import escapeHtml
 from markdown_it.renderer import RendererHTML
 from mdit_py_plugins.footnote import footnote_plugin
 from mdit_py_plugins.tasklists import tasklists_plugin
@@ -37,6 +38,12 @@ SRC_END = "data-src-end"
 
 _FIRST_TAG = re.compile(r"<(\w+)")
 
+# The fence language that becomes a diagram, and the class its block carries.
+# anchors.TextIndex and annotate.js both skip text under this class: a <mark>
+# spliced into the source would break the diagram, and once it is drawn the
+# text is an SVG the server never sees.
+MERMAID = "mermaid"
+
 
 def _tag_first_tag(html: str, span: list[int]) -> str:
     """Add the source range to the opening tag of an already-rendered block.
@@ -63,8 +70,14 @@ class SourceMappedRenderer(RendererHTML):
         return super().renderToken(tokens, idx, options, env)
 
     def fence(self, tokens, idx, options, env):
-        html = super().fence(tokens, idx, options, env)
         token = tokens[idx]
+        if token.info.split(maxsplit=1)[:1] == [MERMAID]:
+            # Left as source for mermaid.js to draw in the browser. Pygments
+            # would wrap every token in a span, and mermaid reads the element's
+            # markup, not its text -- so the source goes in bare, escaped once.
+            html = f'<pre class="{MERMAID}">{escapeHtml(token.content)}</pre>\n'
+        else:
+            html = super().fence(tokens, idx, options, env)
         return _tag_first_tag(html, token.map) if token.level == 0 and token.map else html
 
     def code_block(self, tokens, idx, options, env):
@@ -201,6 +214,7 @@ def render_document(
         "assets/checkpoint.js",
         "assets/agent.js",
         "assets/settings.js",
+        "assets/mermaid.js",
     ),
 ) -> RenderResult:
     """Render markdown to a full HTML page with highlights and note cards."""
@@ -361,7 +375,7 @@ def write_assets(outdir: Path, scheme) -> None:
     scripts = (
         "ui.js", "sidebar.js", "filetree.js", "notes.js", "annotate.js",
         "edit.js", "copy.js", "refresh.js", "checkpoint.js", "agent.js",
-        "settings.js",
+        "settings.js", "mermaid.js",
     )
     for script in scripts:
         (assets / script).write_text(

@@ -430,6 +430,18 @@ shown, not an address being offered. `javascript:` and friends are refused by
 markdown-it before they can reach an `href`, and a test pins that so a future
 change to the parser options cannot quietly undo it.
 
+## Diagrams
+
+A ` ```mermaid ` fence is drawn as a diagram. The server leaves the source in
+a `<pre class="mermaid">` and `assets/mermaid.js` draws it in the browser,
+fetching Mermaid (pinned, from jsDelivr) only on a page that has a diagram.
+Offline, the source stays on the page as a code block.
+
+A diagram is drawn to the width of the column, so a wide one shrinks; hover it
+and press ⤢ for full size. Double-click still opens its source for editing.
+Its text cannot be highlighted or commented on — a `<mark>` inside the source
+would break the diagram — so comment on the prose around it.
+
 ## Editing the prose in the browser
 
 **Double click** a paragraph, or press and hold it, and it becomes a small

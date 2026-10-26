@@ -201,6 +201,68 @@ body {
   font-size: 0.855em;
 }
 
+/* A mermaid fence: source until mermaid.js draws it (or for good, offline),
+ * then a diagram, which sits on the page rather than in a code box. */
+.doc pre.mermaid {
+  font-size: 0.855em;
+}
+
+.doc pre.mermaid[data-processed] {
+  position: relative;
+  background: none;
+  border-color: transparent;
+  padding: 0;
+  text-align: center;
+  line-height: normal;
+}
+
+.doc pre.mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Added by mermaid.js. Shown on hover, so it does not sit on every diagram. */
+.diagram-expand {
+  position: absolute;
+  top: 0.3rem;
+  right: 0.3rem;
+  width: 1.9rem;
+  height: 1.9rem;
+  padding: 0;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  font: 1rem/1 var(--font-body);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.diagram-expand::before { content: "\2922"; }
+
+.doc pre.mermaid:hover .diagram-expand,
+.diagram-expand:focus-visible { opacity: 1; }
+
+.diagram-dialog {
+  max-width: calc(100vw - 2rem);
+  max-height: calc(100vh - 2rem);
+  padding: 1rem;
+  overflow: auto;
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  background: var(--paper);
+  box-shadow: var(--shadow-md);
+}
+
+.diagram-dialog::backdrop { background: rgb(0 0 0 / 0.32); }
+
+.diagram-dialog svg { display: block; }
+
+@media print {
+  .diagram-expand { display: none; }
+}
+
 /* --- tables ------------------------------------------------------------- */
 
 /* Wrapper added by notes.js so wide tables scroll instead of breaking layout. */

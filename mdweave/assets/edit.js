@@ -243,6 +243,8 @@
     if (event.target.closest && event.target.closest("mark.hl")) return null;
     // Links should navigate.
     if (event.target.closest && event.target.closest("a")) return null;
+    // Opens the diagram full size (mermaid.js); pressed twice, still that.
+    if (event.target.closest && event.target.closest(".diagram-expand")) return null;
     return ui.blockFor(event.target);
   }
 

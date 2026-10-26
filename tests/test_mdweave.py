@@ -269,6 +269,49 @@ def test_markdown_extensions_are_enabled(markdown, expected):
     assert expected in render_markdown(markdown)
 
 
+MERMAID_DOC = """\
+Before the diagram.
+
+```mermaid
+graph LR
+    A[Intake] --> B["<b>Normalize</b>"]
+```
+
+After the diagram, Intake again.
+"""
+
+
+def test_a_mermaid_fence_is_left_as_source_for_the_browser():
+    soup = soup_of(MERMAID_DOC)
+    (pre,) = soup.select("pre.mermaid")
+
+    # No Pygments spans: mermaid reads the element's markup, so the source
+    # has to be there escaped once and otherwise exactly as written.
+    assert pre.find(True) is None
+    assert pre.get_text() == 'graph LR\n    A[Intake] --> B["<b>Normalize</b>"]\n'
+    assert "--&gt;" in str(pre)
+    # Still a block the editor can open: it carries its source lines.
+    assert (pre["data-src-start"], pre["data-src-end"]) == ("2", "6")
+
+
+def test_a_mermaid_fence_with_attributes_is_still_a_diagram():
+    assert soup_of("```mermaid {.wide}\ngraph LR\n  A --> B\n```").select("pre.mermaid")
+
+
+def test_text_in_a_diagram_is_never_annotated():
+    soup = soup_of(MERMAID_DOC)
+    placements = inject(soup, [ann("Normalize", id="in"), ann("Intake", id="out")])
+
+    # A <mark> inside the source would break the diagram it is drawn from.
+    assert [p.resolved for p in placements] == [False, True]
+    (mark,) = soup.find_all("mark")
+    assert mark.parent.name == "p"
+
+
+def test_the_page_loads_the_diagram_script():
+    assert "assets/mermaid.js" in render_document(MERMAID_DOC, []).html
+
+
 def test_headings_get_stable_ids():
     result = render_document("## Storage & Access\n\n## Storage & Access\n", [])
 
